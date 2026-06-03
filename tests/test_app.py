@@ -30,6 +30,7 @@ class PortalAppTestCase(unittest.TestCase):
             "LIMITER_STORAGE_URI": app_module.LIMITER_STORAGE_URI,
             "ENABLE_PROXY_FIX": app_module.ENABLE_PROXY_FIX,
             "DEFAULT_APP_PORT": app_module.DEFAULT_APP_PORT,
+            "UPGRADE_SERVICE_NAME": app_module.UPGRADE_SERVICE_NAME,
         }
 
         app_module.DATA_DIR = self.data_dir
@@ -220,6 +221,7 @@ class PortalAppTestCase(unittest.TestCase):
         self.assertIn("version", payload["system"])
 
     def test_system_upgrade_endpoint_reports_unsupported_local_environment(self) -> None:
+        app_module.UPGRADE_SERVICE_NAME = "noaff-monitor-missing-test-upgrade.service"
         _, headers = self.login()
         response = self.client.post(
             f"{app_module.PORTAL_PATH}/api/system/upgrade",
