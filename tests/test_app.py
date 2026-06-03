@@ -206,6 +206,59 @@ class PortalAppTestCase(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertTrue(response.get_json()["ok"])
 
+    def test_login_accepts_https_origin_with_loopback_upstream_host(self) -> None:
+        bootstrap = self.read_bootstrap_credentials()
+        root_response = self.client.get(
+            "/",
+            headers={"User-Agent": BROWSER_UA},
+            base_url="http://127.0.0.1:7788",
+        )
+        self.assertEqual(root_response.status_code, 200)
+        match = re.search(r'<meta name="csrf-token" content="([^"]+)"', root_response.get_data(as_text=True))
+        self.assertIsNotNone(match)
+        csrf_token = match.group(1)
+        headers = self.ajax_headers(csrf_token)
+        headers.update(
+            {
+                "Origin": "https://monitor.example.com",
+                "Host": "127.0.0.1:7788",
+            }
+        )
+        response = self.client.post(
+            f"{app_module.PORTAL_PATH}/gate",
+            headers=headers,
+            base_url="http://127.0.0.1:7788",
+            json={"username": bootstrap["username"], "password": bootstrap["password"]},
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.get_json()["ok"])
+
+    def test_login_rejects_external_origin_when_public_host_is_known(self) -> None:
+        bootstrap = self.read_bootstrap_credentials()
+        root_response = self.client.get(
+            "/",
+            headers={"User-Agent": BROWSER_UA, "Host": "monitor.example.com"},
+            base_url="http://monitor.example.com",
+        )
+        self.assertEqual(root_response.status_code, 200)
+        match = re.search(r'<meta name="csrf-token" content="([^"]+)"', root_response.get_data(as_text=True))
+        self.assertIsNotNone(match)
+        csrf_token = match.group(1)
+        headers = self.ajax_headers(csrf_token)
+        headers.update(
+            {
+                "Origin": "https://evil.example.net",
+                "Host": "monitor.example.com",
+            }
+        )
+        response = self.client.post(
+            f"{app_module.PORTAL_PATH}/gate",
+            headers=headers,
+            base_url="http://monitor.example.com",
+            json={"username": bootstrap["username"], "password": bootstrap["password"]},
+        )
+        self.assertEqual(response.status_code, 404)
+
     def test_login_rate_limit_blocks_sixth_failed_attempt(self) -> None:
         bootstrap = self.read_bootstrap_credentials()
         csrf_token = self.get_portal_csrf()

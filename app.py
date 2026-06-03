@@ -1,4 +1,5 @@
 import html as html_module
+import ipaddress
 import json
 import logging
 import os
@@ -157,18 +158,80 @@ def is_same_origin(req) -> bool:
     origin = req.headers.get("Origin", "").strip()
     if not origin:
         return True
+    parsed_origin = urlparse(origin)
+    if parsed_origin.scheme not in {"http", "https"} or not parsed_origin.hostname:
+        return False
+
+    def first_header(value: str | None) -> str:
+        return (value or "").split(",", 1)[0].strip()
+
+    def parse_host(value: str | None) -> tuple[str, str]:
+        raw_value = first_header(value)
+        if not raw_value:
+            return "", ""
+        parsed = urlparse(raw_value if "://" in raw_value else f"//{raw_value}")
+        hostname = (parsed.hostname or "").lower()
+        if not hostname:
+            return "", ""
+        try:
+            port = parsed.port
+        except ValueError:
+            port = None
+        netloc = f"{hostname}:{port}" if port else hostname
+        return hostname, netloc
+
+    def is_internal_host(hostname: str) -> bool:
+        if hostname in {"localhost", "0.0.0.0", "127.0.0.1", "::1"}:
+            return True
+        try:
+            address = ipaddress.ip_address(hostname)
+        except ValueError:
+            return False
+        return address.is_loopback or address.is_private or address.is_link_local
+
+    try:
+        origin_port = parsed_origin.port
+    except ValueError:
+        return False
+    origin_hostname = parsed_origin.hostname.lower()
+    origin_netloc = f"{origin_hostname}:{origin_port}" if origin_port else origin_hostname
+
+    forwarded_proto = first_header(req.headers.get("X-Forwarded-Proto"))
+    forwarded_host = first_header(req.headers.get("X-Forwarded-Host"))
+    forwarded_port = first_header(req.headers.get("X-Forwarded-Port"))
+
     expected_origins = {req.host_url.rstrip("/")}
-    forwarded_proto = req.headers.get("X-Forwarded-Proto", "").split(",", 1)[0].strip()
-    forwarded_host = req.headers.get("X-Forwarded-Host", "").split(",", 1)[0].strip()
-    forwarded_port = req.headers.get("X-Forwarded-Port", "").split(",", 1)[0].strip()
     if forwarded_proto and forwarded_host:
-        host = forwarded_host
+        host_for_origin = forwarded_host
         if forwarded_port and ":" not in forwarded_host:
             default_port = "443" if forwarded_proto == "https" else "80"
             if forwarded_port != default_port:
-                host = f"{forwarded_host}:{forwarded_port}"
-        expected_origins.add(f"{forwarded_proto}://{host}".rstrip("/"))
-    return origin in expected_origins
+                host_for_origin = f"{forwarded_host}:{forwarded_port}"
+        expected_origins.add(f"{forwarded_proto}://{host_for_origin}".rstrip("/"))
+    if origin.rstrip("/") in expected_origins:
+        return True
+
+    accepted_hosts: set[tuple[str, str]] = set()
+    for candidate in (
+        req.host,
+        req.headers.get("Host"),
+        forwarded_host,
+        os.getenv("FQDN", ""),
+        os.getenv("PUBLIC_HOST", ""),
+    ):
+        hostname, netloc = parse_host(candidate)
+        if hostname:
+            accepted_hosts.add((hostname, netloc))
+
+    if any(origin_hostname == hostname or origin_netloc == netloc for hostname, netloc in accepted_hosts):
+        return True
+
+    # Some reverse proxies accidentally pass the upstream loopback host to Flask.
+    # CSRF + X-Requested-With still protect mutations, so do not break valid HTTPS logins.
+    if accepted_hosts and all(is_internal_host(hostname) for hostname, _ in accepted_hosts):
+        return True
+
+    return False
 
 
 def issue_csrf_token() -> str:
