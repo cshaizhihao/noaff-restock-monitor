@@ -1,7 +1,6 @@
 (() => {
     const context = window.APP_CONTEXT || {};
     const root = document.getElementById("app-root");
-    const portalPath = root?.dataset.portalPath || context.portalPath || "";
     let csrfToken = context.csrfToken || document.querySelector('meta[name="csrf-token"]')?.content || "";
     let snapshotTimer = null;
     let currentTasks = new Map();
@@ -38,7 +37,6 @@
         toastStack: document.getElementById("toast-stack"),
         logStream: document.getElementById("log-stream"),
         adminIdentity: document.getElementById("admin-identity"),
-        portalChip: document.getElementById("portal-chip"),
         settingsForm: document.getElementById("settings-form"),
         settingsBotToken: document.getElementById("settings-bot-token"),
         settingsBotTokenMask: document.getElementById("settings-bot-token-mask"),
@@ -159,7 +157,7 @@
             headers["Content-Type"] = "application/json";
             headers["X-CSRF-Token"] = csrfToken;
         }
-        const response = await fetch(`${portalPath}${path}`, {
+        const response = await fetch(path, {
             cache: "no-store",
             credentials: "same-origin",
             ...options,
@@ -313,7 +311,6 @@
 
     function renderAdmin(admin) {
         els.adminIdentity.textContent = admin.username ? `管理员：${admin.username}` : "管理员";
-        els.portalChip.textContent = admin.portal_path || portalPath;
         syncInputValue(els.profileUsername, admin.username || "");
     }
 

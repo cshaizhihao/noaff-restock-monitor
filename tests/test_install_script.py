@@ -70,6 +70,7 @@ class InstallScriptTestCase(unittest.TestCase):
         output = self.assert_shell_ok("bash install.sh --help")
         self.assertIn("NOAFF Restock Monitor installer", output)
         self.assertIn("--validate-only", output)
+        self.assertIn("--reset-password", output)
 
     def test_validate_only_accepts_complete_configuration(self) -> None:
         output = self.assert_shell_ok(
@@ -297,7 +298,6 @@ class InstallScriptTestCase(unittest.TestCase):
                 set -Eeuo pipefail
                 export NOAFF_INSTALL_LIBRARY_MODE=true
                 export DEPLOY_MODE=docker
-                export PORTAL_PATH=/portal_test
                 export PUBLIC_APP_PORT=7788
                 export APP_STARTUP_TIMEOUT_SECONDS=1
                 source ./install.sh
@@ -312,17 +312,16 @@ class InstallScriptTestCase(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("Docker app failed health check", result.stderr)
 
-    def test_docker_summary_prefers_domain_and_public_port(self) -> None:
+    def test_docker_summary_prefers_domain_without_port_or_entry_path(self) -> None:
         output = self.assert_shell_ok(
             textwrap.dedent(
                 r"""
                 set -Eeuo pipefail
                 export NOAFF_INSTALL_LIBRARY_MODE=true
                 export DEPLOY_MODE=docker
-                export FQDN=monitor.example.com
+                export FQDN=https://monitor.example.com:8787/portal_test
                 export APP_PORT=7777
                 export PUBLIC_APP_PORT=8787
-                export PORTAL_PATH=/portal_test
                 source ./install.sh
                 detect_origin_ips() {
                   printf 'should-not-detect\n'
@@ -334,9 +333,10 @@ class InstallScriptTestCase(unittest.TestCase):
                 """
             )
         )
-        self.assertIn("http://monitor.example.com:8787/portal_test", output)
+        self.assertIn("http://monitor.example.com", output)
         self.assertNotIn("should-not-detect", output)
-        self.assertNotIn("http://monitor.example.com:7777", output)
+        self.assertNotIn("monitor.example.com:8787", output)
+        self.assertNotIn("/portal_test", output)
 
     def test_docker_summary_without_domain_uses_ip_and_public_port(self) -> None:
         output = self.assert_shell_ok(
@@ -347,7 +347,6 @@ class InstallScriptTestCase(unittest.TestCase):
                 export DEPLOY_MODE=docker
                 export APP_PORT=7777
                 export PUBLIC_APP_PORT=8787
-                export PORTAL_PATH=/portal_test
                 source ./install.sh
                 detect_origin_ips() {
                   ORIGIN_IPV4=203.0.113.20
@@ -358,7 +357,7 @@ class InstallScriptTestCase(unittest.TestCase):
                 """
             )
         )
-        self.assertIn("http://203.0.113.20:8787/portal_test", output)
+        self.assertIn("http://203.0.113.20:8787", output)
         self.assertNotIn("http://203.0.113.20:7777", output)
 
     def test_existing_env_defaults_are_loaded_before_repeat_install(self) -> None:
@@ -376,7 +375,6 @@ ACCESS_MODE=ip
 APP_PORT=7788
 PUBLIC_APP_PORT=8787
 DOCKER_BIND_HOST=127.0.0.1
-PORTAL_PATH=/portal_keep
 TELEGRAM_CHAT_ID=keep-chat
 EOF
                 source ./install.sh
@@ -401,16 +399,15 @@ EOF
 DEPLOY_MODE=docker
 APP_PORT=7788
 PUBLIC_APP_PORT=8787
-PORTAL_PATH=/portal_keep
 EOF
                 source ./install.sh
                 has_tty() { return 1; }
                 choose_existing_install_action
-                printf 'skip=%s mode=%s port=%s portal=%s\n' "$SKIP_INTERACTIVE_WIZARD" "$DEPLOY_MODE" "$PUBLIC_APP_PORT" "$PORTAL_PATH"
+                printf 'skip=%s mode=%s port=%s\n' "$SKIP_INTERACTIVE_WIZARD" "$DEPLOY_MODE" "$PUBLIC_APP_PORT"
                 """
             )
         )
-        self.assertIn("skip=true mode=docker port=8787 portal=/portal_keep", output)
+        self.assertIn("skip=true mode=docker port=8787", output)
 
     def test_write_env_file_persists_install_context_for_idempotency(self) -> None:
         output = self.assert_shell_ok(
@@ -452,7 +449,7 @@ EOF
                 export NOAFF_INSTALL_LIBRARY_MODE=true
                 export APP_DIR="${temp_dir}/app"
                 mkdir -p "$APP_DIR/data"
-                printf 'PORTAL_PATH=/old\n' > "$APP_DIR/.env"
+                printf 'APP_PORT=7788\n' > "$APP_DIR/.env"
                 printf 'db' > "$APP_DIR/data/monitor.db"
                 printf 'stale' > "$APP_DIR/stale.txt"
                 source ./install.sh
@@ -475,8 +472,63 @@ EOF
             )
         )
         self.assertIn("backup=1", output)
-        self.assertIn("PORTAL_PATH=/old", output)
+        self.assertIn("APP_PORT=7788", output)
         self.assertIn("data=db", output)
+
+    def test_reset_password_updates_sqlite_admin(self) -> None:
+        output = self.assert_shell_ok(
+            textwrap.dedent(
+                r"""
+                set -Eeuo pipefail
+                temp_dir="$(mktemp -d)"
+                export NOAFF_INSTALL_LIBRARY_MODE=true
+                export APP_DIR="${temp_dir}/app"
+                export RESET_ADMIN_USERNAME=operator
+                export RESET_ADMIN_PASSWORD=NewStrongPass123
+                mkdir -p "$APP_DIR/data"
+                python3 - "$APP_DIR/data/monitor.db" <<'PY'
+import sqlite3
+import sys
+
+db_path = sys.argv[1]
+with sqlite3.connect(db_path) as connection:
+    connection.execute(
+        "CREATE TABLE admins ("
+        "id INTEGER PRIMARY KEY AUTOINCREMENT, "
+        "username TEXT NOT NULL UNIQUE, "
+        "password_hash TEXT NOT NULL, "
+        "created_at TEXT NOT NULL, "
+        "updated_at TEXT NOT NULL"
+        ")"
+    )
+    connection.execute(
+        "INSERT INTO admins (username, password_hash, created_at, updated_at) VALUES (?, ?, ?, ?)",
+        ("operator", "old-hash", "old", "old"),
+    )
+    connection.commit()
+PY
+                source ./install.sh
+                reset_admin_password
+                python3 - "$APP_DIR/data/monitor.db" <<'PY'
+import sqlite3
+import sys
+from werkzeug.security import check_password_hash
+
+db_path = sys.argv[1]
+with sqlite3.connect(db_path) as connection:
+    username, password_hash = connection.execute(
+        "SELECT username, password_hash FROM admins LIMIT 1"
+    ).fetchone()
+print(username, check_password_hash(password_hash, "NewStrongPass123"))
+PY
+                cat "$APP_DIR/data/bootstrap_admin.txt"
+                """
+            )
+        )
+        self.assertIn("operator True", output)
+        self.assertIn("username=operator", output)
+        self.assertIn("password=NewStrongPass123", output)
+        self.assertIn("panel_path=/", output)
 
 
 if __name__ == "__main__":

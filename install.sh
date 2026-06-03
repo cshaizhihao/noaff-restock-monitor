@@ -29,7 +29,6 @@ REQUEST_TIMEOUT_SECONDS="${REQUEST_TIMEOUT_SECONDS:-25}"
 ADMIN_USERNAME="${ADMIN_USERNAME:-operator}"
 ADMIN_PASSWORD="${ADMIN_PASSWORD:-}"
 SECRET_KEY="${SECRET_KEY:-}"
-PORTAL_PATH="${PORTAL_PATH:-}"
 TELEGRAM_BOT_TOKEN="${TELEGRAM_BOT_TOKEN:-}"
 TELEGRAM_CHAT_ID="${TELEGRAM_CHAT_ID:-}"
 
@@ -60,6 +59,7 @@ PROXY_FIX_X_HOST="${PROXY_FIX_X_HOST:-1}"
 PROXY_FIX_X_PORT="${PROXY_FIX_X_PORT:-1}"
 INSTALL_VALIDATE_ONLY=false
 DOCKER_UPGRADE_ONLY=false
+PASSWORD_RESET_ONLY=false
 SKIP_INTERACTIVE_WIZARD=false
 RECONFIGURE_EXISTING_INSTALL=false
 
@@ -159,6 +159,7 @@ Usage:
   bash install.sh
   bash install.sh [--validate-only]
   bash install.sh --docker-upgrade
+  bash install.sh --reset-password
   bash install.sh --help
 
 Interactive mode:
@@ -195,6 +196,7 @@ Common optional environment:
 Modes:
   --validate-only  Validate required variables and Cloudflare-compatible ports without installing.
   --docker-upgrade Pull latest code, refresh Docker env, rebuild containers, and verify health.
+  --reset-password Reset the panel administrator password in the local SQLite database.
   --help           Show this help.
 EOF
 }
@@ -209,6 +211,11 @@ parse_args() {
       --docker-upgrade)
         DOCKER_UPGRADE_ONLY=true
         DEPLOY_MODE=docker
+        INTERACTIVE_INSTALL=false
+        shift
+        ;;
+      --reset-password)
+        PASSWORD_RESET_ONLY=true
         INTERACTIVE_INSTALL=false
         shift
         ;;
@@ -303,17 +310,26 @@ print(quote(sys.argv[1], safe=''))
 PY
 }
 
+normalize_domain_input() {
+  python3 - "$1" <<'PY'
+import sys
+from urllib.parse import urlsplit
+
+raw = sys.argv[1].strip()
+if not raw:
+    print("")
+    raise SystemExit
+candidate = raw if "://" in raw else f"http://{raw}"
+parsed = urlsplit(candidate)
+host = parsed.hostname or raw.split("/", 1)[0].split(":", 1)[0]
+print((host or "").strip().strip("."))
+PY
+}
+
 random_token() {
   python3 - <<'PY'
 import secrets
 print(secrets.token_urlsafe(48))
-PY
-}
-
-random_portal_path() {
-  python3 - <<'PY'
-import secrets
-print('/portal_' + secrets.token_urlsafe(18).replace('-', '').replace('_', '')[:24])
 PY
 }
 
@@ -383,7 +399,6 @@ load_existing_env_defaults() {
   prefer_existing_value "ORIGIN_LOCKDOWN_TO_CLOUDFLARE" "true"
 
   [[ -n "$SECRET_KEY" ]] || SECRET_KEY="$(read_env_value "SECRET_KEY")"
-  [[ -n "$PORTAL_PATH" ]] || PORTAL_PATH="$(read_env_value "PORTAL_PATH")"
   [[ -n "$ADMIN_PASSWORD" ]] || ADMIN_PASSWORD="$(read_env_value "ADMIN_PASSWORD")"
   [[ -n "$TELEGRAM_BOT_TOKEN" ]] || TELEGRAM_BOT_TOKEN="$(read_env_value "TELEGRAM_BOT_TOKEN")"
   [[ -n "$TELEGRAM_CHAT_ID" ]] || TELEGRAM_CHAT_ID="$(read_env_value "TELEGRAM_CHAT_ID")"
@@ -590,7 +605,9 @@ build_public_url() {
   local public_url public_host
   if [[ "$DEPLOY_MODE" == "docker" ]]; then
     if [[ -n "$FQDN" ]]; then
-      public_host="$FQDN"
+      public_host="$(normalize_domain_input "$FQDN")"
+      printf 'http://%s' "$public_host"
+      return
     else
       detect_origin_ips
       public_host="${ORIGIN_IPV4:-服务器IP}"
@@ -653,7 +670,8 @@ choose_existing_install_action() {
   echo "${C_BOLD}[已检测到已有安装]${C_RESET}"
   echo "  1) 覆盖更新，保留现有数据和配置（推荐）"
   echo "  2) 重新配置，保留数据但重新走安装向导"
-  echo "  3) 退出"
+  echo "  3) 重置管理员密码"
+  echo "  4) 退出"
   local action
   action="$(prompt_default "请选择" "1")"
   case "$action" in
@@ -665,10 +683,14 @@ choose_existing_install_action() {
       RECONFIGURE_EXISTING_INSTALL=true
       ;;
     3)
+      reset_admin_password
+      exit 0
+      ;;
+    4)
       exit 0
       ;;
     *)
-      die "已有安装处理方式只能选择 1、2 或 3。"
+      die "已有安装处理方式只能选择 1、2、3 或 4。"
       ;;
   esac
 }
@@ -678,7 +700,8 @@ prompt_domain() {
   while true; do
     answer="$(prompt_read "请输入域名，例如 monitor.example.com：")"
     if [[ -n "$answer" ]]; then
-      FQDN="$answer"
+      FQDN="$(normalize_domain_input "$answer")"
+      [[ -n "$FQDN" ]] || die "域名格式无效。"
       TLS_DOMAINS="${TLS_DOMAINS:-$FQDN}"
       return
     fi
@@ -719,7 +742,7 @@ interactive_wizard() {
     local docker_domain_default="n"
     [[ -n "$FQDN" ]] && docker_domain_default="Y"
     if prompt_yes_no "[4/9] 是否使用已解析域名生成面板地址？（Docker 不会配置 Nginx/证书）" "$docker_domain_default"; then
-      FQDN="$(prompt_default "请输入已解析到本机的域名，例如 monitor.example.com" "$FQDN")"
+      FQDN="$(normalize_domain_input "$(prompt_default "请输入已解析到本机的域名，例如 monitor.example.com" "$FQDN")")"
       [[ -n "$FQDN" ]] || die "域名不能为空；如不使用域名，请选择否。"
       TLS_DOMAINS="${TLS_DOMAINS:-$FQDN}"
     else
@@ -820,7 +843,7 @@ print_install_summary() {
   local access_label public_url
   if [[ "$DEPLOY_MODE" == "docker" ]]; then
     if [[ -n "$FQDN" ]]; then
-      access_label="域名 + 高位端口（Docker）"
+      access_label="域名访问（Docker）"
     else
       access_label="IP + 高位端口（Docker）"
     fi
@@ -842,7 +865,7 @@ print_install_summary() {
   echo
   echo "${C_BOLD}${C_GREEN}安装摘要${C_RESET}"
   echo "访问方式：      ${access_label}"
-  echo "面板地址：      ${public_url}${PORTAL_PATH:-/portal_自动生成}"
+  echo "面板地址：      ${public_url}"
   echo "应用监听：      ${APP_HOST}:${APP_PORT}"
   echo "Nginx：         ${ENABLE_NGINX}"
   echo "HTTPS：         ${ENABLE_TLS}"
@@ -1020,9 +1043,9 @@ deploy_docker_stack() {
 probe_local_panel() {
   local url
   if [[ "$DEPLOY_MODE" == "docker" ]]; then
-    url="http://127.0.0.1:${PUBLIC_APP_PORT}${PORTAL_PATH}"
+    url="http://127.0.0.1:${PUBLIC_APP_PORT}/"
   else
-    url="http://127.0.0.1:${APP_PORT}${PORTAL_PATH}"
+    url="http://127.0.0.1:${APP_PORT}/"
   fi
   curl -fsS -o /dev/null \
     -A "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/137 Safari/537.36" \
@@ -1543,9 +1566,106 @@ EOF
   restart_nginx_safely
 }
 
+reset_admin_password() {
+  load_existing_env_defaults
+  local db_path="${APP_DIR}/data/monitor.db"
+  local bootstrap_path="${APP_DIR}/data/bootstrap_admin.txt"
+  [[ -f "$db_path" ]] || die "未找到数据库：${db_path}。请确认已经安装 NOAFF，或设置正确的 APP_DIR。"
+
+  local username new_password confirm_password
+  username="${RESET_ADMIN_USERNAME:-}"
+  if [[ -z "$username" ]]; then
+    username="$(prompt_default "请输入要设置的管理员用户名" "${ADMIN_USERNAME:-operator}")"
+  fi
+  [[ -n "$username" ]] || die "管理员用户名不能为空。"
+
+  new_password="${RESET_ADMIN_PASSWORD:-}"
+  if [[ -n "$new_password" ]]; then
+    [[ "${#new_password}" -ge 10 ]] || die "RESET_ADMIN_PASSWORD 至少需要 10 位。"
+  else
+    if ! has_tty; then
+      die "未检测到交互终端。请使用 RESET_ADMIN_USERNAME 和 RESET_ADMIN_PASSWORD，或在 SSH 终端运行。"
+    fi
+    while true; do
+      new_password="$(prompt_secret_optional "请输入新密码（至少 10 位）：")"
+      if [[ "${#new_password}" -lt 10 ]]; then
+        warn "新密码至少需要 10 位。"
+        continue
+      fi
+      confirm_password="$(prompt_secret_optional "请再次输入新密码：")"
+      if [[ "$new_password" != "$confirm_password" ]]; then
+        warn "两次输入的新密码不一致。"
+        continue
+      fi
+      break
+    done
+  fi
+
+  python3 - "$db_path" "$username" "$new_password" "$bootstrap_path" <<'PY'
+import datetime as _dt
+import hashlib
+import pathlib
+import secrets
+import sqlite3
+import sys
+
+db_path, username, password, bootstrap_path = sys.argv[1:]
+timestamp = _dt.datetime.now(_dt.timezone.utc).isoformat(timespec="seconds")
+salt = secrets.token_urlsafe(12)
+digest = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt.encode("utf-8"), 1_000_000).hex()
+password_hash = f"pbkdf2:sha256:1000000${salt}${digest}"
+
+with sqlite3.connect(db_path) as connection:
+    connection.execute(
+        """
+        CREATE TABLE IF NOT EXISTS admins (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            username TEXT NOT NULL UNIQUE,
+            password_hash TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+        """
+    )
+    row = connection.execute("SELECT id FROM admins WHERE username = ?", (username,)).fetchone()
+    if row:
+        connection.execute(
+            "UPDATE admins SET password_hash = ?, updated_at = ? WHERE id = ?",
+            (password_hash, timestamp, row[0]),
+        )
+    else:
+        first = connection.execute("SELECT id FROM admins ORDER BY id LIMIT 1").fetchone()
+        if first:
+            connection.execute(
+                "UPDATE admins SET username = ?, password_hash = ?, updated_at = ? WHERE id = ?",
+                (username, password_hash, timestamp, first[0]),
+            )
+        else:
+            connection.execute(
+                "INSERT INTO admins (username, password_hash, created_at, updated_at) VALUES (?, ?, ?, ?)",
+                (username, password_hash, timestamp, timestamp),
+            )
+    connection.commit()
+
+path = pathlib.Path(bootstrap_path)
+path.parent.mkdir(parents=True, exist_ok=True)
+path.write_text(f"username={username}\npassword={password}\npanel_path=/\n", encoding="utf-8")
+PY
+
+  chmod 600 "$bootstrap_path" || true
+  if id "$SERVICE_USER" >/dev/null 2>&1; then
+    chown "${SERVICE_USER}:${SERVICE_USER}" "$bootstrap_path" || true
+  fi
+
+  log "管理员密码已重置。"
+  echo "用户名:    ${username}"
+  echo "临时凭据:  ${bootstrap_path}"
+  echo "面板地址:  /"
+  warn "请登录后立即在后台修改密码，并删除 ${bootstrap_path}。"
+}
+
 write_env_file() {
   [[ -n "$SECRET_KEY" ]] || SECRET_KEY="$(random_token)"
-  [[ -n "$PORTAL_PATH" ]] || PORTAL_PATH="$(random_portal_path)"
   [[ -n "$ADMIN_PASSWORD" ]] || ADMIN_PASSWORD="$(python3 - <<'PY'
 import secrets
 print(secrets.token_urlsafe(18))
@@ -1582,7 +1702,6 @@ CF_API_TOKEN=${CF_API_TOKEN}
 CF_RECORD_PROXIED=${CF_RECORD_PROXIED}
 CF_SSL_MODE=${CF_SSL_MODE}
 ORIGIN_LOCKDOWN_TO_CLOUDFLARE=${ORIGIN_LOCKDOWN_TO_CLOUDFLARE}
-PORTAL_PATH=${PORTAL_PATH}
 SECRET_KEY=${SECRET_KEY}
 ADMIN_USERNAME=${ADMIN_USERNAME}
 ADMIN_PASSWORD=${ADMIN_PASSWORD}
@@ -1754,14 +1873,13 @@ final_summary() {
   else
     echo "升级命令:  systemctl start ${APP_NAME}-upgrade.service"
   fi
-  echo "面板地址:  ${public_url}${PORTAL_PATH}"
+  echo "面板地址:  ${public_url}"
   echo "管理员:    ${ADMIN_USERNAME}"
   if [[ -f "${APP_DIR}/data/bootstrap_admin.txt" ]]; then
     echo "初始密码:  ${ADMIN_PASSWORD}"
   else
     echo "初始密码:  保持不变（沿用当前面板密码）"
   fi
-  echo "隐藏入口:  ${PORTAL_PATH}"
   echo
   if [[ "$ACCESS_MODE" == "domain-cf" ]]; then
     echo "提示:      如果 Cloudflare SSL 模式未自动切换，请手动设为 Full (strict)。"
@@ -1786,6 +1904,10 @@ main() {
     exec > >(tee -a "$INSTALL_LOG") 2>&1
   fi
   load_existing_env_defaults
+  if bool_is_true "$PASSWORD_RESET_ONLY"; then
+    reset_admin_password
+    return
+  fi
   if bool_is_true "$DOCKER_UPGRADE_ONLY"; then
     normalize_access_mode
     run_docker_deploy_flow

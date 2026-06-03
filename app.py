@@ -1,4 +1,3 @@
-import hashlib
 import html as html_module
 import json
 import logging
@@ -23,7 +22,7 @@ from urllib.parse import urlparse
 import psutil
 import requests
 from dotenv import load_dotenv
-from flask import Flask, abort, jsonify, redirect, render_template, request, session, url_for
+from flask import Flask, jsonify, redirect, render_template, request, session, url_for
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
 from requests import Response
@@ -75,9 +74,7 @@ def load_or_create_secret_key() -> str:
 
 
 SECRET_KEY = os.getenv("SECRET_KEY") or load_or_create_secret_key()
-PORTAL_PATH = os.getenv("PORTAL_PATH") or f"/portal_{hashlib.sha256(SECRET_KEY.encode('utf-8')).hexdigest()[:28]}"
-if not PORTAL_PATH.startswith("/"):
-    PORTAL_PATH = f"/{PORTAL_PATH}"
+PORTAL_PATH = ""
 
 DEFAULT_APP_PORT = int(os.getenv("APP_PORT", "7777"))
 DEFAULT_APP_HOST = os.getenv("APP_HOST", "0.0.0.0").strip() or "0.0.0.0"
@@ -445,7 +442,7 @@ def initialize_database() -> None:
             )
             connection.commit()
             BOOTSTRAP_CREDENTIALS_PATH.write_text(
-                f"username={username}\npassword={password}\nportal_path={PORTAL_PATH}\n",
+                f"username={username}\npassword={password}\npanel_path=/\n",
                 encoding="utf-8",
             )
             log_activity("warning", "auth", "首次启动已创建管理员账号，请尽快修改密码并删除 bootstrap_admin.txt。")
@@ -460,9 +457,9 @@ def login_required(view):
     @wraps(view)
     def wrapped(*args, **kwargs):
         if not session.get("admin_id"):
-            if request.accept_mimetypes.accept_json or request.path.startswith(f"{PORTAL_PATH}/api"):
+            if request.accept_mimetypes.accept_json or request.path.startswith("/api"):
                 return jsonify({"ok": False, "message": "未登录或会话已过期。"}), 401
-            return redirect(PORTAL_PATH)
+            return redirect("/")
         return view(*args, **kwargs)
 
     return wrapped
@@ -1011,9 +1008,6 @@ def make_app() -> Flask:
     def harden_requests():
         if request.path == "/favicon.ico":
             return "", 204
-        if not request.path.startswith(PORTAL_PATH) and request.path != "/static":
-            if request.path == "/":
-                abort(404)
         if request.endpoint == "static":
             return None
         if not is_browser_user_agent(request.headers.get("User-Agent")):
@@ -1050,33 +1044,28 @@ def make_app() -> Flask:
 
     @app.errorhandler(429)
     def rate_limited(error):
-        if request.accept_mimetypes.accept_json or request.path.startswith(f"{PORTAL_PATH}/api"):
+        if request.accept_mimetypes.accept_json or request.path.startswith("/api"):
             return jsonify({"ok": False, "message": "请求过于频繁，请稍后再试。"}), 429
         return "Too Many Requests", 429
 
     @app.errorhandler(400)
     def bad_request(error):
-        if request.accept_mimetypes.accept_json or request.path.startswith(f"{PORTAL_PATH}/api"):
+        if request.accept_mimetypes.accept_json or request.path.startswith("/api"):
             return jsonify({"ok": False, "message": getattr(error, "description", "请求格式错误。")}), 400
         return "Bad Request", 400
 
-    @app.route("/")
-    def index():
-        abort(404)
-
-    @app.route(PORTAL_PATH, methods=["GET"])
+    @app.route("/", methods=["GET"])
     def portal():
         csrf_token = ensure_csrf_token()
         authenticated = bool(session.get("admin_id"))
         return render_template(
             "portal.html",
             csrf_token=csrf_token,
-            portal_path=PORTAL_PATH,
             logged_in=authenticated,
             masked_bot_token="",
         )
 
-    @app.route(f"{PORTAL_PATH}/gate", methods=["POST"])
+    @app.route("/gate", methods=["POST"])
     @limiter.limit(LOGIN_RATE_LIMIT)
     def login_gate():
         payload = read_json()
@@ -1099,7 +1088,7 @@ def make_app() -> Flask:
         log_activity("info", "auth", f"管理员 {admin['username']} 已登录。")
         return jsonify({"ok": True, "message": "登录成功。", "csrf_token": csrf_token})
 
-    @app.route(f"{PORTAL_PATH}/logout", methods=["POST"])
+    @app.route("/logout", methods=["POST"])
     @login_required
     @limiter.limit(GENERAL_MUTATION_LIMIT)
     def logout_gate():
@@ -1108,7 +1097,7 @@ def make_app() -> Flask:
         log_activity("info", "auth", f"管理员 {username} 已退出。")
         return jsonify({"ok": True, "message": "已安全退出。"})
 
-    @app.route(f"{PORTAL_PATH}/api/snapshot", methods=["GET"])
+    @app.route("/api/snapshot", methods=["GET"])
     @login_required
     def dashboard_snapshot():
         with open_connection() as connection:
@@ -1145,7 +1134,6 @@ def make_app() -> Flask:
                 },
                 "admin": {
                     "username": admin["username"] if admin else "",
-                    "portal_path": PORTAL_PATH,
                 },
                 "metrics": {
                     "total": len(tasks),
@@ -1161,7 +1149,7 @@ def make_app() -> Flask:
             }
         )
 
-    @app.route(f"{PORTAL_PATH}/api/tasks", methods=["POST"])
+    @app.route("/api/tasks", methods=["POST"])
     @login_required
     @limiter.limit(GENERAL_MUTATION_LIMIT)
     def create_task():
@@ -1201,7 +1189,7 @@ def make_app() -> Flask:
         log_activity("info", "tasks", f"已创建任务 #{task_id}。")
         return jsonify({"ok": True, "message": "任务已创建。", "task_id": task_id})
 
-    @app.route(f"{PORTAL_PATH}/api/tasks/<int:task_id>", methods=["PUT"])
+    @app.route("/api/tasks/<int:task_id>", methods=["PUT"])
     @login_required
     @limiter.limit(GENERAL_MUTATION_LIMIT)
     def update_task(task_id: int):
@@ -1242,7 +1230,7 @@ def make_app() -> Flask:
         log_activity("info", "tasks", f"已更新任务 #{task_id}。")
         return jsonify({"ok": True, "message": "任务已更新。"})
 
-    @app.route(f"{PORTAL_PATH}/api/tasks/<int:task_id>", methods=["DELETE"])
+    @app.route("/api/tasks/<int:task_id>", methods=["DELETE"])
     @login_required
     @limiter.limit(GENERAL_MUTATION_LIMIT)
     def delete_task(task_id: int):
@@ -1255,7 +1243,7 @@ def make_app() -> Flask:
         log_activity("warning", "tasks", f"已删除任务 #{task_id} ({task['name']})。")
         return jsonify({"ok": True, "message": "任务已删除。"})
 
-    @app.route(f"{PORTAL_PATH}/api/tasks/<int:task_id>/toggle", methods=["POST"])
+    @app.route("/api/tasks/<int:task_id>/toggle", methods=["POST"])
     @login_required
     @limiter.limit(GENERAL_MUTATION_LIMIT)
     def toggle_task(task_id: int):
@@ -1273,7 +1261,7 @@ def make_app() -> Flask:
         log_activity("info", "tasks", f"任务 #{task_id} 已{'启用' if enabled else '停用'}。")
         return jsonify({"ok": True, "message": "任务状态已切换。"})
 
-    @app.route(f"{PORTAL_PATH}/api/test-push/<int:task_id>", methods=["POST"])
+    @app.route("/api/test-push/<int:task_id>", methods=["POST"])
     @login_required
     @limiter.limit("8 per minute")
     def test_push(task_id: int):
@@ -1283,7 +1271,7 @@ def make_app() -> Flask:
             return jsonify({"ok": False, "message": str(exc)}), 400
         return jsonify({"ok": True, "message": "测试消息已发送。", "result": result})
 
-    @app.route(f"{PORTAL_PATH}/api/settings/telegram", methods=["POST"])
+    @app.route("/api/settings/telegram", methods=["POST"])
     @login_required
     @limiter.limit(GENERAL_MUTATION_LIMIT)
     def update_settings():
@@ -1339,7 +1327,7 @@ def make_app() -> Flask:
         log_activity("info", "settings", "Telegram / 引擎配置已更新。")
         return jsonify({"ok": True, "message": "设置已保存。"})
 
-    @app.route(f"{PORTAL_PATH}/api/settings/profile", methods=["POST"])
+    @app.route("/api/settings/profile", methods=["POST"])
     @login_required
     @limiter.limit("10 per minute")
     def update_profile():
@@ -1383,14 +1371,14 @@ def make_app() -> Flask:
         log_activity("info", "auth", "管理员凭据已更新。")
         return jsonify({"ok": True, "message": "管理员凭据已更新。", "csrf_token": session["csrf_token"]})
 
-    @app.route(f"{PORTAL_PATH}/api/engine/restart", methods=["POST"])
+    @app.route("/api/engine/restart", methods=["POST"])
     @login_required
     @limiter.limit("10 per minute")
     def restart_engine():
         app.extensions["monitor_engine"].restart("panel action")
         return jsonify({"ok": True, "message": "浏览器引擎已重启。"})
 
-    @app.route(f"{PORTAL_PATH}/api/system/upgrade", methods=["POST"])
+    @app.route("/api/system/upgrade", methods=["POST"])
     @login_required
     @limiter.limit("3 per hour")
     def start_system_upgrade():

@@ -80,7 +80,7 @@ ACCESS_MODE=domain-direct FQDN=monitor.example.com CERTBOT_EMAIL=ops@example.com
 - 🧭 **精准切片**：命中商品关键词后只截取前 50 字符和后 1200 字符，隔离同页其他商品干扰。
 - 🔎 **库存嗅探**：正则允许库存词与数字之间夹杂最多 40 个 HTML 标签或不可见片段。
 - 📣 **Telegram 状态机**：刚补货发新消息，库存变化静默编辑，售罄覆盖原消息并清空 `message_id`。
-- 🛡️ **后台防护**：隐藏入口、浏览器 UA 校验、同源校验、CSRF、AJAX 头校验和登录限流。
+- 🛡️ **后台防护**：浏览器 UA 校验、同源校验、CSRF、AJAX 头校验和登录限流。
 - 🧯 **浏览器自愈**：捕获 disconnected / timeout 后自动重建 Chromium。
 - 🧪 **测试推送隔离**：主监控浏览器和测试推送浏览器使用不同调试端口。
 - 🧰 **面板升级**：后台内置“系统升级”入口，原生安装会注册升级 service。
@@ -115,7 +115,6 @@ ACCESS_MODE=domain-direct FQDN=monitor.example.com CERTBOT_EMAIL=ops@example.com
 
 ## 🔐 安全设计
 
-- 隐藏控制台路径：默认生成高熵 `PORTAL_PATH`
 - 禁止暴露 `/login`、`/admin`
 - 登录接口默认 `5 per minute`
 - 写操作必须携带浏览器 UA、同源 `Origin`、`X-Requested-With` 和 CSRF Token
@@ -178,6 +177,20 @@ docker compose logs -f noaff
 bash install.sh --docker-upgrade
 ```
 
+忘记后台密码时：
+
+```bash
+cd /opt/noaff-monitor
+bash install.sh --reset-password
+```
+
+也可以静默重置：
+
+```bash
+cd /opt/noaff-monitor
+RESET_ADMIN_USERNAME=operator RESET_ADMIN_PASSWORD='NewStrongPass123' bash install.sh --reset-password
+```
+
 首次引导凭据：
 
 ```bash
@@ -198,7 +211,7 @@ python -m py_compile app.py tests/test_app.py tests/test_install_script.py
 bash -n install.sh
 ```
 
-当前测试覆盖：隐藏入口、UA/CSRF/AJAX 校验、登录限流、任务创建、端口隔离、精准切片、库存解析、Telegram 状态机、Docker 预检和非破坏式 Nginx 处理。
+当前测试覆盖：根路径面板、UA/CSRF/AJAX 校验、登录限流、任务创建、端口隔离、精准切片、库存解析、Telegram 状态机、Docker 预检和非破坏式 Nginx 处理。
 
 ## 📦 项目结构
 

@@ -10,7 +10,6 @@
 </head>
 <body class="h-full selection:bg-indigo-500/30">
     <div id="app-root"
-         data-portal-path="{{ portal_path }}"
          data-logged-in="{{ 'true' if logged_in else 'false' }}"
          class="min-h-full">
 
@@ -313,7 +312,6 @@
                                 </div>
                                 <div class="mt-5 space-y-2 font-mono text-xs text-slate-500">
                                     <p id="admin-identity">管理员</p>
-                                    <p id="portal-chip"></p>
                                 </div>
                             </section>
                         </section>
@@ -395,7 +393,6 @@
 
     <script>
         window.APP_CONTEXT = {
-            portalPath: {{ portal_path | tojson }},
             loggedIn: {{ logged_in | tojson }},
             csrfToken: {{ csrf_token | tojson }}
         };

@@ -43,7 +43,7 @@ class PortalAppTestCase(unittest.TestCase):
         app_module.BOOTSTRAP_CREDENTIALS_PATH = self.data_dir / "bootstrap_admin.txt"
         app_module.SECRET_KEY_PATH = self.data_dir / ".secret_key"
         app_module.SECRET_KEY = "test-secret-key"
-        app_module.PORTAL_PATH = "/portal_test"
+        app_module.PORTAL_PATH = ""
         app_module.LOGIN_RATE_LIMIT = "5 per minute"
         app_module.GENERAL_MUTATION_LIMIT = "100 per minute"
         app_module.LIMITER_STORAGE_URI = "memory://"
@@ -74,7 +74,7 @@ class PortalAppTestCase(unittest.TestCase):
         return dict(line.split("=", 1) for line in text.strip().splitlines())
 
     def get_portal_csrf(self) -> str:
-        response = self.client.get(app_module.PORTAL_PATH, headers={"User-Agent": BROWSER_UA}, base_url=BASE_URL)
+        response = self.client.get("/", headers={"User-Agent": BROWSER_UA}, base_url=BASE_URL)
         self.assertEqual(response.status_code, 200)
         match = re.search(r'<meta name="csrf-token" content="([^"]+)"', response.get_data(as_text=True))
         self.assertIsNotNone(match)
@@ -122,14 +122,17 @@ class PortalAppTestCase(unittest.TestCase):
             )
             connection.commit()
 
-    def test_hidden_portal_and_browser_header_gate(self) -> None:
+    def test_root_panel_and_browser_header_gate(self) -> None:
         root_response = self.client.get("/", headers={"User-Agent": BROWSER_UA}, base_url=BASE_URL)
-        self.assertEqual(root_response.status_code, 404)
+        self.assertEqual(root_response.status_code, 200)
 
-        blocked_response = self.client.get(app_module.PORTAL_PATH, base_url=BASE_URL)
+        blocked_response = self.client.get("/", base_url=BASE_URL)
         self.assertEqual(blocked_response.status_code, 404)
 
-        allowed_response = self.client.get(app_module.PORTAL_PATH, headers={"User-Agent": BROWSER_UA}, base_url=BASE_URL)
+        old_portal_response = self.client.get("/portal_test", headers={"User-Agent": BROWSER_UA}, base_url=BASE_URL)
+        self.assertEqual(old_portal_response.status_code, 404)
+
+        allowed_response = self.client.get("/", headers={"User-Agent": BROWSER_UA}, base_url=BASE_URL)
         self.assertEqual(allowed_response.status_code, 200)
         html = allowed_response.get_data(as_text=True)
         self.assertIn('id="dashboard-shell" class="hidden flex h-screen flex-col overflow-hidden md:flex-row"', html)
