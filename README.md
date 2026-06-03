@@ -122,7 +122,7 @@ bash install.sh --help
 交互安装版，推荐普通用户使用：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/cshaizhihao/noaff-restock-monitor/master/install.sh | bash
+curl -fsSL "https://raw.githubusercontent.com/cshaizhihao/noaff-restock-monitor/master/install.sh?$(date +%s)" | bash
 ```
 
 脚本会进入全中文向导，依次选择：
@@ -136,19 +136,19 @@ curl -fsSL https://raw.githubusercontent.com/cshaizhihao/noaff-restock-monitor/m
 静默安装版，适合已经准备好域名和参数的用户：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/cshaizhihao/noaff-restock-monitor/master/install.sh | ACCESS_MODE=domain-direct FQDN=monitor.example.com CERTBOT_EMAIL=ops@example.com bash
+curl -fsSL "https://raw.githubusercontent.com/cshaizhihao/noaff-restock-monitor/master/install.sh?$(date +%s)" | ACCESS_MODE=domain-direct FQDN=monitor.example.com CERTBOT_EMAIL=ops@example.com bash
 ```
 
 Cloudflare 小黄云 + Token 全自动版：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/cshaizhihao/noaff-restock-monitor/master/install.sh | ACCESS_MODE=domain-cf FQDN=monitor.example.com CF_ZONE_NAME=example.com CF_API_TOKEN=cf_xxx CERTBOT_EMAIL=ops@example.com bash
+curl -fsSL "https://raw.githubusercontent.com/cshaizhihao/noaff-restock-monitor/master/install.sh?$(date +%s)" | ACCESS_MODE=domain-cf FQDN=monitor.example.com CF_ZONE_NAME=example.com CF_API_TOKEN=cf_xxx CERTBOT_EMAIL=ops@example.com bash
 ```
 
 一行预检版，不会安装依赖或写系统服务：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/cshaizhihao/noaff-restock-monitor/master/install.sh | ACCESS_MODE=domain-direct FQDN=monitor.example.com CERTBOT_EMAIL=ops@example.com bash -s -- --validate-only
+curl -fsSL "https://raw.githubusercontent.com/cshaizhihao/noaff-restock-monitor/master/install.sh?$(date +%s)" | ACCESS_MODE=domain-direct FQDN=monitor.example.com CERTBOT_EMAIL=ops@example.com bash -s -- --validate-only
 ```
 
 如果你想先保存脚本再运行：

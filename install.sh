@@ -515,6 +515,12 @@ should_run_interactive_wizard() {
   has_tty
 }
 
+needs_interactive_inputs() {
+  [[ "$INTERACTIVE_INSTALL" != "false" ]] || return 1
+  [[ "$INSTALL_VALIDATE_ONLY" != "true" ]] || return 1
+  [[ -z "$ACCESS_MODE" && -z "$FQDN" ]]
+}
+
 prompt_domain() {
   local answer
   while true; do
@@ -1354,6 +1360,8 @@ main() {
   fi
   if should_run_interactive_wizard; then
     interactive_wizard
+  elif needs_interactive_inputs; then
+    die "未检测到可交互终端。请直接在 SSH 终端运行 curl 安装命令，或显式传入 ACCESS_MODE=ip/domain-direct/domain-cf。"
   fi
   normalize_access_mode
 
