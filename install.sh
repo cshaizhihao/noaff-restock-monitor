@@ -60,6 +60,8 @@ PROXY_FIX_X_HOST="${PROXY_FIX_X_HOST:-1}"
 PROXY_FIX_X_PORT="${PROXY_FIX_X_PORT:-1}"
 INSTALL_VALIDATE_ONLY=false
 DOCKER_UPGRADE_ONLY=false
+SKIP_INTERACTIVE_WIZARD=false
+RECONFIGURE_EXISTING_INSTALL=false
 
 CF_CREDENTIALS_PATH="/root/.secrets/certbot/cloudflare.ini"
 CF_REALIP_SNIPPET="/etc/nginx/snippets/noaff-cloudflare-realip.conf"
@@ -355,6 +357,12 @@ load_existing_env_defaults() {
   prefer_existing_value "PUBLIC_APP_PORT" "7777"
   prefer_existing_value "DOCKER_BIND_HOST" "0.0.0.0"
   prefer_existing_value "DEPLOY_MODE" "native"
+  prefer_existing_value "ACCESS_MODE" ""
+  prefer_existing_value "ENABLE_NGINX" "true"
+  prefer_existing_value "ENABLE_TLS" "true"
+  prefer_existing_value "CERT_MODE" "auto"
+  prefer_existing_value "PUBLIC_HTTP_PORT" "80"
+  prefer_existing_value "PUBLIC_HTTPS_PORT" "443"
   prefer_existing_value "ADMIN_USERNAME" "operator"
   prefer_existing_value "REPO_REF" "master"
   prefer_existing_value "MONITOR_DEBUG_PORT" "9223"
@@ -370,12 +378,21 @@ load_existing_env_defaults() {
   prefer_existing_value "PROXY_FIX_X_HOST" "1"
   prefer_existing_value "PROXY_FIX_X_PORT" "1"
   prefer_existing_value "LIMITER_STORAGE_URI" "redis://127.0.0.1:6379/0"
+  prefer_existing_value "CF_RECORD_PROXIED" "true"
+  prefer_existing_value "CF_SSL_MODE" "strict"
+  prefer_existing_value "ORIGIN_LOCKDOWN_TO_CLOUDFLARE" "true"
 
   [[ -n "$SECRET_KEY" ]] || SECRET_KEY="$(read_env_value "SECRET_KEY")"
   [[ -n "$PORTAL_PATH" ]] || PORTAL_PATH="$(read_env_value "PORTAL_PATH")"
   [[ -n "$ADMIN_PASSWORD" ]] || ADMIN_PASSWORD="$(read_env_value "ADMIN_PASSWORD")"
   [[ -n "$TELEGRAM_BOT_TOKEN" ]] || TELEGRAM_BOT_TOKEN="$(read_env_value "TELEGRAM_BOT_TOKEN")"
   [[ -n "$TELEGRAM_CHAT_ID" ]] || TELEGRAM_CHAT_ID="$(read_env_value "TELEGRAM_CHAT_ID")"
+  [[ -n "$FQDN" ]] || FQDN="$(read_env_value "FQDN")"
+  [[ -n "$TLS_DOMAINS" ]] || TLS_DOMAINS="$(read_env_value "TLS_DOMAINS")"
+  [[ -n "$CERTBOT_EMAIL" ]] || CERTBOT_EMAIL="$(read_env_value "CERTBOT_EMAIL")"
+  [[ -n "$CF_ZONE_NAME" ]] || CF_ZONE_NAME="$(read_env_value "CF_ZONE_NAME")"
+  [[ -n "$CF_ZONE_ID" ]] || CF_ZONE_ID="$(read_env_value "CF_ZONE_ID")"
+  [[ -n "$CF_API_TOKEN" ]] || CF_API_TOKEN="$(read_env_value "CF_API_TOKEN")"
 }
 
 clone_url_with_token() {
@@ -570,16 +587,61 @@ validate_only() {
 }
 
 should_run_interactive_wizard() {
+  [[ "$SKIP_INTERACTIVE_WIZARD" != "true" ]] || return 1
   [[ "$INTERACTIVE_INSTALL" != "false" ]] || return 1
   [[ "$INSTALL_VALIDATE_ONLY" != "true" ]] || return 1
+  if bool_is_true "$RECONFIGURE_EXISTING_INSTALL"; then
+    has_tty
+    return
+  fi
   [[ -z "$ACCESS_MODE" && -z "$FQDN" ]] || return 1
   has_tty
 }
 
 needs_interactive_inputs() {
+  [[ "$SKIP_INTERACTIVE_WIZARD" != "true" ]] || return 1
   [[ "$INTERACTIVE_INSTALL" != "false" ]] || return 1
   [[ "$INSTALL_VALIDATE_ONLY" != "true" ]] || return 1
   [[ -z "$ACCESS_MODE" && -z "$FQDN" ]]
+}
+
+existing_install_detected() {
+  [[ -f "$APP_DIR/.env" || -d "$APP_DIR/.git" || -f "$APP_DIR/app.py" || -d "$APP_DIR/data" ]]
+}
+
+choose_existing_install_action() {
+  existing_install_detected || return 0
+  load_existing_env_defaults
+  normalize_access_mode
+
+  if [[ "$INTERACTIVE_INSTALL" == "false" ]] || ! has_tty; then
+    SKIP_INTERACTIVE_WIZARD=true
+    log "Detected existing NOAFF install at ${APP_DIR}; running overwrite update with saved config."
+    return 0
+  fi
+
+  banner
+  echo "${C_BOLD}[已检测到已有安装]${C_RESET}"
+  echo "  1) 覆盖更新，保留现有数据和配置（推荐）"
+  echo "  2) 重新配置，保留数据但重新走安装向导"
+  echo "  3) 退出"
+  local action
+  action="$(prompt_default "请选择" "1")"
+  case "$action" in
+    1)
+      SKIP_INTERACTIVE_WIZARD=true
+      log "将使用 ${APP_DIR}/.env 中的现有配置执行覆盖更新。"
+      ;;
+    2)
+      RECONFIGURE_EXISTING_INSTALL=true
+      ;;
+    3)
+      exit 0
+      ;;
+    *)
+      die "已有安装处理方式只能选择 1、2 或 3。"
+      ;;
+  esac
 }
 
 prompt_domain() {
@@ -871,7 +933,21 @@ clone_or_update_repo() {
     fi
   elif [[ -n "$REPO_URL" ]]; then
     if [[ -e "$APP_DIR" && "$(find "$APP_DIR" -mindepth 1 -maxdepth 1 2>/dev/null | wc -l)" -gt 0 ]]; then
-      die "$APP_DIR exists and is not an empty git checkout. Move it away or set APP_DIR."
+      local backup_dir failed_dir
+      backup_dir="${APP_DIR}.backup.$(date '+%Y%m%d%H%M%S')"
+      warn "$APP_DIR exists but is not a git checkout. Moving it to ${backup_dir} before reinstall."
+      mv "$APP_DIR" "$backup_dir"
+      mkdir -p "$(dirname "$APP_DIR")"
+      log "Cloning repository into $APP_DIR"
+      if ! git clone --branch "$REPO_REF" "$clone_url" "$APP_DIR"; then
+        failed_dir="${APP_DIR}.failed.$(date '+%Y%m%d%H%M%S')"
+        [[ ! -e "$APP_DIR" ]] || mv "$APP_DIR" "$failed_dir"
+        mv "$backup_dir" "$APP_DIR"
+        die "Git clone failed. The previous directory has been restored to $APP_DIR."
+      fi
+      [[ ! -f "$backup_dir/.env" || -f "$APP_DIR/.env" ]] || cp -a "$backup_dir/.env" "$APP_DIR/.env"
+      [[ ! -d "$backup_dir/data" || -d "$APP_DIR/data" ]] || cp -a "$backup_dir/data" "$APP_DIR/data"
+      return
     fi
     mkdir -p "$(dirname "$APP_DIR")"
     log "Cloning repository into $APP_DIR"
@@ -1446,12 +1522,27 @@ APP_PORT=${APP_PORT}
 PUBLIC_APP_PORT=${PUBLIC_APP_PORT}
 DOCKER_BIND_HOST=${DOCKER_BIND_HOST}
 DEPLOY_MODE=${DEPLOY_MODE}
+ACCESS_MODE=${ACCESS_MODE}
+ENABLE_NGINX=${ENABLE_NGINX}
+ENABLE_TLS=${ENABLE_TLS}
+CERT_MODE=${CERT_MODE}
+PUBLIC_HTTP_PORT=${PUBLIC_HTTP_PORT}
+PUBLIC_HTTPS_PORT=${PUBLIC_HTTPS_PORT}
 INSTALL_APP_DIR=${APP_DIR}
 REPO_REF=${REPO_REF}
 APP_VERSION=${app_version}
 APP_BRANCH=${app_branch}
 UPGRADE_SERVICE_NAME=${APP_NAME}-upgrade.service
 UPGRADE_LOG_PATH=${UPGRADE_LOG}
+FQDN=${FQDN}
+TLS_DOMAINS=${TLS_DOMAINS}
+CERTBOT_EMAIL=${CERTBOT_EMAIL}
+CF_ZONE_NAME=${CF_ZONE_NAME}
+CF_ZONE_ID=${CF_ZONE_ID}
+CF_API_TOKEN=${CF_API_TOKEN}
+CF_RECORD_PROXIED=${CF_RECORD_PROXIED}
+CF_SSL_MODE=${CF_SSL_MODE}
+ORIGIN_LOCKDOWN_TO_CLOUDFLARE=${ORIGIN_LOCKDOWN_TO_CLOUDFLARE}
 PORTAL_PATH=${PORTAL_PATH}
 SECRET_KEY=${SECRET_KEY}
 ADMIN_USERNAME=${ADMIN_USERNAME}
@@ -1667,10 +1758,14 @@ main() {
     chmod 644 "$INSTALL_LOG"
     exec > >(tee -a "$INSTALL_LOG") 2>&1
   fi
+  load_existing_env_defaults
   if bool_is_true "$DOCKER_UPGRADE_ONLY"; then
     normalize_access_mode
     run_docker_deploy_flow
     return
+  fi
+  if ! bool_is_true "$INSTALL_VALIDATE_ONLY"; then
+    choose_existing_install_action
   fi
   if should_run_interactive_wizard; then
     interactive_wizard

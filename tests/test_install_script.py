@@ -312,6 +312,123 @@ class InstallScriptTestCase(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("Docker app failed health check", result.stderr)
 
+    def test_existing_env_defaults_are_loaded_before_repeat_install(self) -> None:
+        output = self.assert_shell_ok(
+            textwrap.dedent(
+                r"""
+                set -Eeuo pipefail
+                temp_dir="$(mktemp -d)"
+                export NOAFF_INSTALL_LIBRARY_MODE=true
+                export APP_DIR="${temp_dir}/app"
+                mkdir -p "$APP_DIR"
+                cat > "$APP_DIR/.env" <<'EOF'
+DEPLOY_MODE=docker
+ACCESS_MODE=ip
+APP_PORT=7788
+PUBLIC_APP_PORT=8787
+DOCKER_BIND_HOST=127.0.0.1
+PORTAL_PATH=/portal_keep
+TELEGRAM_CHAT_ID=keep-chat
+EOF
+                source ./install.sh
+                load_existing_env_defaults
+                normalize_access_mode
+                printf '%s %s %s %s %s %s\n' "$DEPLOY_MODE" "$ACCESS_MODE" "$APP_PORT" "$PUBLIC_APP_PORT" "$DOCKER_BIND_HOST" "$TELEGRAM_CHAT_ID"
+                """
+            )
+        )
+        self.assertIn("docker ip 7788 8787 127.0.0.1 keep-chat", output)
+
+    def test_repeat_install_defaults_to_overwrite_update_without_tty(self) -> None:
+        output = self.assert_shell_ok(
+            textwrap.dedent(
+                r"""
+                set -Eeuo pipefail
+                temp_dir="$(mktemp -d)"
+                export NOAFF_INSTALL_LIBRARY_MODE=true
+                export APP_DIR="${temp_dir}/app"
+                mkdir -p "$APP_DIR"
+                cat > "$APP_DIR/.env" <<'EOF'
+DEPLOY_MODE=docker
+APP_PORT=7788
+PUBLIC_APP_PORT=8787
+PORTAL_PATH=/portal_keep
+EOF
+                source ./install.sh
+                has_tty() { return 1; }
+                choose_existing_install_action
+                printf 'skip=%s mode=%s port=%s portal=%s\n' "$SKIP_INTERACTIVE_WIZARD" "$DEPLOY_MODE" "$PUBLIC_APP_PORT" "$PORTAL_PATH"
+                """
+            )
+        )
+        self.assertIn("skip=true mode=docker port=8787 portal=/portal_keep", output)
+
+    def test_write_env_file_persists_install_context_for_idempotency(self) -> None:
+        output = self.assert_shell_ok(
+            textwrap.dedent(
+                r"""
+                set -Eeuo pipefail
+                temp_dir="$(mktemp -d)"
+                export NOAFF_INSTALL_LIBRARY_MODE=true
+                export APP_DIR="${temp_dir}/app"
+                mkdir -p "$APP_DIR"
+                source ./install.sh
+                DEPLOY_MODE=docker
+                ACCESS_MODE=ip
+                ENABLE_NGINX=false
+                ENABLE_TLS=false
+                CERT_MODE=none
+                APP_PORT=7788
+                PUBLIC_APP_PORT=8787
+                FQDN=monitor.example.com
+                CERTBOT_EMAIL=ops@example.com
+                CF_RECORD_PROXIED=false
+                write_env_file
+                grep -E '^(DEPLOY_MODE|ACCESS_MODE|ENABLE_NGINX|ENABLE_TLS|CERT_MODE|APP_PORT|PUBLIC_APP_PORT|FQDN|CERTBOT_EMAIL|CF_RECORD_PROXIED)=' "$APP_DIR/.env"
+                """
+            )
+        )
+        self.assertIn("DEPLOY_MODE=docker", output)
+        self.assertIn("ACCESS_MODE=ip", output)
+        self.assertIn("PUBLIC_APP_PORT=8787", output)
+        self.assertIn("FQDN=monitor.example.com", output)
+        self.assertIn("CERTBOT_EMAIL=ops@example.com", output)
+
+    def test_non_git_existing_app_dir_is_backed_up_and_data_restored(self) -> None:
+        output = self.assert_shell_ok(
+            textwrap.dedent(
+                r"""
+                set -Eeuo pipefail
+                temp_dir="$(mktemp -d)"
+                export NOAFF_INSTALL_LIBRARY_MODE=true
+                export APP_DIR="${temp_dir}/app"
+                mkdir -p "$APP_DIR/data"
+                printf 'PORTAL_PATH=/old\n' > "$APP_DIR/.env"
+                printf 'db' > "$APP_DIR/data/monitor.db"
+                printf 'stale' > "$APP_DIR/stale.txt"
+                source ./install.sh
+                git() {
+                  if [[ "$1" == "clone" ]]; then
+                    local target="${@: -1}"
+                    mkdir -p "$target"
+                    printf 'new' > "$target/app.py"
+                    return 0
+                  fi
+                  return 0
+                }
+                clone_or_update_repo
+                test -f "$APP_DIR/app.py"
+                test -f "$APP_DIR/.env"
+                test -f "$APP_DIR/data/monitor.db"
+                backup_count="$(find "$temp_dir" -maxdepth 1 -type d -name 'app.backup.*' | wc -l)"
+                printf 'backup=%s env=%s data=%s\n' "$backup_count" "$(cat "$APP_DIR/.env")" "$(cat "$APP_DIR/data/monitor.db")"
+                """
+            )
+        )
+        self.assertIn("backup=1", output)
+        self.assertIn("PORTAL_PATH=/old", output)
+        self.assertIn("data=db", output)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
