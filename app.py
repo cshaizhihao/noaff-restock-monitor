@@ -129,6 +129,7 @@ BROWSER_LOCK_FILENAMES = (
     "SingletonLock",
     "SingletonSocket",
 )
+DEFAULT_TASK_GROUP = "默认分组"
 
 SETTINGS_DEFAULTS = {
     "telegram_bot_token": os.getenv("TELEGRAM_BOT_TOKEN", "").strip(),
@@ -170,6 +171,11 @@ def safe_format(template: str, values: dict[str, Any]) -> str:
         replacement = safe_values[field_name]
         buffer.append(replacement)
     return "".join(buffer).strip()
+
+
+def normalize_task_group(value: Any) -> str:
+    group_name = re.sub(r"\s+", " ", str(value or "").strip())
+    return (group_name or DEFAULT_TASK_GROUP)[:48]
 
 
 def is_browser_user_agent(user_agent: str | None) -> bool:
@@ -410,6 +416,12 @@ def get_connection() -> sqlite3.Connection:
     return connection
 
 
+def ensure_column(connection: sqlite3.Connection, table: str, column: str, definition: str) -> None:
+    columns = {row["name"] for row in connection.execute(f"PRAGMA table_info({table})").fetchall()}
+    if column not in columns:
+        connection.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
+
+
 @contextmanager
 def open_connection():
     connection = get_connection()
@@ -498,6 +510,7 @@ def initialize_database() -> None:
             CREATE TABLE IF NOT EXISTS tasks (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 name TEXT NOT NULL,
+                group_name TEXT NOT NULL DEFAULT '默认分组',
                 monitor_url TEXT NOT NULL,
                 target_keyword TEXT NOT NULL,
                 restock_template TEXT NOT NULL,
@@ -525,6 +538,7 @@ def initialize_database() -> None:
             );
             """
         )
+        ensure_column(connection, "tasks", "group_name", "TEXT NOT NULL DEFAULT '默认分组'")
 
         existing_admin = connection.execute("SELECT id FROM admins LIMIT 1").fetchone()
         if not existing_admin:
@@ -567,6 +581,7 @@ def to_task_payload(row: sqlite3.Row) -> dict[str, Any]:
     return {
         "id": row["id"],
         "name": row["name"],
+        "group_name": normalize_task_group(row["group_name"] if "group_name" in row.keys() else ""),
         "monitor_url": row["monitor_url"],
         "target_keyword": row["target_keyword"],
         "restock_template": row["restock_template"],
@@ -1366,6 +1381,7 @@ def make_app() -> Flask:
         timestamp = now_iso()
         values = (
             str(payload["name"]).strip(),
+            normalize_task_group(payload.get("group_name")),
             str(payload["monitor_url"]).strip(),
             str(payload["target_keyword"]).strip(),
             str(payload["restock_template"]).strip(),
@@ -1382,10 +1398,10 @@ def make_app() -> Flask:
             cursor = connection.execute(
                 """
                 INSERT INTO tasks (
-                    name, monitor_url, target_keyword, restock_template, soldout_template,
+                    name, group_name, monitor_url, target_keyword, restock_template, soldout_template,
                     button_1_text, button_1_url, button_2_text, button_2_url,
                     enabled, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 values,
             )
@@ -1411,13 +1427,14 @@ def make_app() -> Flask:
             connection.execute(
                 """
                 UPDATE tasks
-                SET name = ?, monitor_url = ?, target_keyword = ?, restock_template = ?,
+                SET name = ?, group_name = ?, monitor_url = ?, target_keyword = ?, restock_template = ?,
                     soldout_template = ?, button_1_text = ?, button_1_url = ?,
                     button_2_text = ?, button_2_url = ?, enabled = ?, updated_at = ?
                 WHERE id = ?
                 """,
                 (
                     str(payload["name"]).strip(),
+                    normalize_task_group(payload.get("group_name")),
                     str(payload["monitor_url"]).strip(),
                     str(payload["target_keyword"]).strip(),
                     str(payload["restock_template"]).strip(),

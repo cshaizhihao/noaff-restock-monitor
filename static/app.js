@@ -65,6 +65,7 @@
         taskForm: document.getElementById("task-form"),
         taskId: document.getElementById("task-id"),
         taskName: document.getElementById("task-name"),
+        taskGroup: document.getElementById("task-group"),
         taskUrl: document.getElementById("task-url"),
         taskKeyword: document.getElementById("task-keyword"),
         taskRestock: document.getElementById("task-restock"),
@@ -90,6 +91,34 @@
             .replaceAll(">", "&gt;")
             .replaceAll('"', "&quot;")
             .replaceAll("'", "&#39;");
+    }
+
+    const defaultTaskGroup = "默认分组";
+    const taskGroupStoragePrefix = "noaff.taskGroupCollapsed.";
+
+    function normalizeTaskGroup(value) {
+        const group = String(value ?? "").trim().replace(/\s+/g, " ");
+        return group || defaultTaskGroup;
+    }
+
+    function taskGroupStorageKey(groupName) {
+        return `${taskGroupStoragePrefix}${encodeURIComponent(groupName)}`;
+    }
+
+    function isTaskGroupCollapsed(groupName) {
+        try {
+            return window.localStorage.getItem(taskGroupStorageKey(groupName)) === "1";
+        } catch (error) {
+            return false;
+        }
+    }
+
+    function setTaskGroupCollapsed(groupName, collapsed) {
+        try {
+            window.localStorage.setItem(taskGroupStorageKey(groupName), collapsed ? "1" : "0");
+        } catch (error) {
+            // Ignore storage failures; collapsing is a convenience only.
+        }
     }
 
     function formatTime(value) {
@@ -223,6 +252,7 @@
             els.taskModalTitle.textContent = "编辑监控节点";
             els.taskId.value = task.id;
             els.taskName.value = task.name || "";
+            els.taskGroup.value = normalizeTaskGroup(task.group_name);
             els.taskUrl.value = task.monitor_url || "";
             els.taskKeyword.value = task.target_keyword || "";
             els.taskRestock.value = task.restock_template || defaultTemplates.restock;
@@ -251,6 +281,7 @@
     function resetTaskForm() {
         els.taskForm.reset();
         els.taskId.value = "";
+        els.taskGroup.value = "";
         els.taskRestock.value = defaultTemplates.restock;
         els.taskSoldout.value = defaultTemplates.soldout;
         els.taskEnabled.checked = true;
@@ -347,13 +378,20 @@
         return ["status-unknown", "◌ UNKNOWN", "等待首次识别"];
     }
 
-    function renderTasks(tasks, initial = false) {
-        currentTasks = new Map(tasks.map((task) => [String(task.id), task]));
-        const nextTaskIdsSignature = tasks.map((task) => String(task.id)).join("|");
-        const animateCards = initial || !tasksRendered || taskIdsSignature !== nextTaskIdsSignature;
-        tasksRendered = true;
-        taskIdsSignature = nextTaskIdsSignature;
-        const taskCards = tasks.map((task, index) => {
+    function groupTasks(tasks) {
+        const groups = new Map();
+        tasks.forEach((task) => {
+            const groupName = normalizeTaskGroup(task.group_name);
+            if (!groups.has(groupName)) {
+                groups.set(groupName, []);
+            }
+            groups.get(groupName).push(task);
+        });
+        return Array.from(groups.entries()).map(([name, groupTasks]) => ({ name, tasks: groupTasks }));
+    }
+
+    function renderTaskCards(tasks, animateCards, startIndex = 0) {
+        return tasks.map((task, index) => {
             const [statusClass, statusText, logHint] = statusMeta(task);
             const stockText = task.last_stock === null || task.last_stock === undefined ? "Hidden" : String(task.last_stock);
             const logMessage = task.last_error
@@ -362,7 +400,7 @@
             const lastChecked = task.last_checked_at ? escapeHtml(formatTime(task.last_checked_at)) : "尚未检查";
             const actionLabel = task.enabled ? "停用节点" : "启用节点";
             const cardClass = animateCards ? "task-card reveal" : "task-card";
-            const cardStyle = animateCards ? ` style="animation-delay: ${index * 80}ms;"` : "";
+            const cardStyle = animateCards ? ` style="animation-delay: ${(startIndex + index) * 80}ms;"` : "";
             return `
                 <article class="${cardClass}"${cardStyle} data-task-id="${task.id}">
                     <div class="absolute right-6 top-6">
@@ -422,10 +460,12 @@
                 </article>
             `;
         }).join("");
+    }
 
+    function renderAddTaskCard(animateCards, index) {
         const addCardClass = animateCards ? "add-card reveal" : "add-card";
-        const addCardStyle = animateCards ? ` style="animation-delay: ${tasks.length * 80}ms;"` : "";
-        const addCard = `
+        const addCardStyle = animateCards ? ` style="animation-delay: ${index * 80}ms;"` : "";
+        return `
             <button type="button" id="tasks-add-card" class="${addCardClass}"${addCardStyle}>
                 <div class="mb-4 flex h-16 w-16 items-center justify-center rounded-full bg-slate-800/80 transition-transform group-hover:scale-110">
                     <svg class="h-8 w-8 text-slate-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -436,8 +476,67 @@
                 <p class="px-4 text-center text-[13px] text-slate-500">填入商品链接与解析参数，立即开启 24H 自动化嗅探。</p>
             </button>
         `;
+    }
 
-        els.tasksGrid.innerHTML = tasks.length ? `${taskCards}${addCard}` : addCard;
+    function renderTasks(tasks, initial = false, force = false) {
+        currentTasks = new Map(tasks.map((task) => [String(task.id), task]));
+        const nextTaskIdsSignature = tasks
+            .map((task) => [
+                String(task.id),
+                normalizeTaskGroup(task.group_name),
+                task.enabled ? "1" : "0",
+                task.last_state || "",
+                task.last_stock ?? "",
+                task.last_error || "",
+                task.message_id ?? "",
+                task.name || "",
+                task.monitor_url || "",
+                task.target_keyword || "",
+                task.restock_template || "",
+                task.soldout_template || "",
+                task.button_1_text || "",
+                task.button_1_url || "",
+                task.button_2_text || "",
+                task.button_2_url || ""
+            ].join(":"))
+            .join("|");
+        const animateCards = initial || !tasksRendered || taskIdsSignature !== nextTaskIdsSignature;
+        tasksRendered = true;
+        taskIdsSignature = nextTaskIdsSignature;
+        if (!force && !animateCards) {
+            return;
+        }
+
+        let cardIndex = 0;
+        const groupSections = groupTasks(tasks).map((group, groupIndex) => {
+            const collapsed = isTaskGroupCollapsed(group.name);
+            const errorCount = group.tasks.filter((task) => task.last_error).length;
+            const summaryBadge = `<span class="rounded-full border border-slate-700 bg-slate-900/80 px-2.5 py-1 font-mono text-[11px] text-slate-400">${group.tasks.length} 个任务</span>${errorCount ? `<span class="rounded-full border border-rose-900/70 bg-rose-500/10 px-2.5 py-1 font-mono text-[11px] text-rose-300">${errorCount} 错误</span>` : ""}`;
+            const groupCards = collapsed ? "" : `<div class="mt-5 grid grid-cols-1 gap-6 md:grid-cols-2 xl:grid-cols-3">${renderTaskCards(group.tasks, animateCards, cardIndex)}</div>`;
+            const groupDelay = animateCards ? ` style="animation-delay: ${groupIndex * 70}ms;"` : "";
+            const groupClass = animateCards ? "reveal" : "";
+            cardIndex += group.tasks.length;
+
+            return `
+                <section class="${groupClass} rounded-2xl border border-slate-800/90 bg-slate-950/35 p-4 shadow-[0_20px_60px_rgba(0,0,0,0.18)] md:p-5"${groupDelay}>
+                    <button type="button" class="flex w-full items-center justify-between gap-4 text-left" data-group-toggle="true" data-group-name="${escapeHtml(group.name)}">
+                        <div class="min-w-0">
+                            <div class="flex flex-wrap items-center gap-2">
+                                <h3 class="truncate text-lg font-extrabold text-white">${escapeHtml(group.name)}</h3>
+                                ${summaryBadge}
+                            </div>
+                        </div>
+                        <svg class="h-5 w-5 shrink-0 text-slate-400 transition-transform ${collapsed ? "" : "rotate-180"}" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/>
+                        </svg>
+                    </button>
+                    ${groupCards}
+                </section>
+            `;
+        }).join("");
+
+        const addCard = `<div class="grid grid-cols-1 gap-6 md:grid-cols-2 xl:grid-cols-3">${renderAddTaskCard(animateCards, tasks.length)}</div>`;
+        els.tasksGrid.innerHTML = tasks.length ? `${groupSections}${addCard}` : addCard;
     }
 
     function renderSnapshot(data, initial = false) {
@@ -473,6 +572,7 @@
     function collectTaskPayload() {
         return {
             name: els.taskName.value.trim(),
+            group_name: normalizeTaskGroup(els.taskGroup.value),
             monitor_url: els.taskUrl.value.trim(),
             target_keyword: els.taskKeyword.value.trim(),
             restock_template: els.taskRestock.value.trim(),
@@ -626,6 +726,13 @@
     });
 
     els.tasksGrid?.addEventListener("click", (event) => {
+        const groupToggle = event.target.closest("[data-group-toggle]");
+        if (groupToggle) {
+            const groupName = groupToggle.dataset.groupName || defaultTaskGroup;
+            setTaskGroupCollapsed(groupName, !isTaskGroupCollapsed(groupName));
+            renderTasks(Array.from(currentTasks.values()), false, true);
+            return;
+        }
         const addCard = event.target.closest("#tasks-add-card");
         if (addCard) {
             openTaskModal();

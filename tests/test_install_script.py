@@ -466,6 +466,16 @@ class InstallScriptTestCase(unittest.TestCase):
         self.assertIn('const cardClass = animateCards ? "task-card reveal" : "task-card"', app_js)
         self.assertIn("renderSnapshot(data, initial)", app_js)
 
+    def test_dashboard_supports_collapsible_task_groups(self) -> None:
+        app_js = (ROOT_DIR / "static" / "app.js").read_text(encoding="utf-8")
+        portal_html = (ROOT_DIR / "templates" / "portal.html").read_text(encoding="utf-8")
+        self.assertIn('taskGroup: document.getElementById("task-group")', app_js)
+        self.assertIn("function groupTasks", app_js)
+        self.assertIn("data-group-toggle", app_js)
+        self.assertIn("setTaskGroupCollapsed", app_js)
+        self.assertIn("group_name: normalizeTaskGroup", app_js)
+        self.assertIn('id="task-group"', portal_html)
+
     def test_docker_publish_port_conflict_is_reported_cleanly(self) -> None:
         result = self.run_bash(
             textwrap.dedent(

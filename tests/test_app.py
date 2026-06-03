@@ -298,6 +298,7 @@ class PortalAppTestCase(unittest.TestCase):
             base_url=BASE_URL,
             json={
                 "name": "HK VM",
+                "group_name": "Geelinx JP",
                 "monitor_url": "https://example.com/cart.php?gid=1",
                 "target_keyword": "HK-CMI",
                 "restock_template": "<b>{name}</b> {stock}",
@@ -320,6 +321,7 @@ class PortalAppTestCase(unittest.TestCase):
         payload = refreshed.get_json()
         self.assertEqual(payload["metrics"]["total"], 1)
         self.assertEqual(len(payload["tasks"]), 1)
+        self.assertEqual(payload["tasks"][0]["group_name"], "Geelinx JP")
         self.assertIn("system", payload)
         self.assertIn("version", payload["system"])
 
