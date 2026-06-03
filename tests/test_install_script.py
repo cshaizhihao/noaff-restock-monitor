@@ -222,6 +222,12 @@ class InstallScriptTestCase(unittest.TestCase):
         self.assertIn("safe.directory", script)
         self.assertIn("prepare_git_checkout_permissions", script)
 
+    def test_xauth_is_installed_for_xvfb_runtime(self) -> None:
+        script = (ROOT_DIR / "install.sh").read_text(encoding="utf-8")
+        dockerfile = (ROOT_DIR / "Dockerfile").read_text(encoding="utf-8")
+        self.assertIn("xauth", script)
+        self.assertIn("xauth", dockerfile)
+
     def test_docker_publish_port_conflict_is_reported_cleanly(self) -> None:
         result = self.run_bash(
             textwrap.dedent(

@@ -13,6 +13,7 @@ RUN apt-get update \
         fonts-noto-cjk \
         fonts-noto-color-emoji \
         procps \
+        xauth \
         xvfb \
     && rm -rf /var/lib/apt/lists/*
 

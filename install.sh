@@ -740,7 +740,7 @@ print_install_summary() {
 ensure_packages() {
   export DEBIAN_FRONTEND=noninteractive
   apt-get update
-  apt_install git curl ca-certificates nginx redis-server xvfb procps python3 python3-venv python3-pip python3-dev build-essential libssl-dev libffi-dev
+  apt_install git curl ca-certificates nginx redis-server xvfb xauth procps python3 python3-venv python3-pip python3-dev build-essential libssl-dev libffi-dev
   apt_install fonts-noto-cjk fonts-noto-color-emoji || true
 }
 
