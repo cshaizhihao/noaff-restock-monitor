@@ -10,7 +10,6 @@ RUN apt-get update \
         ca-certificates \
         chromium \
         curl \
-        git \
         fonts-noto-cjk \
         fonts-noto-color-emoji \
         procps \

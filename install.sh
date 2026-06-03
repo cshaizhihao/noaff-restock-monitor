@@ -59,6 +59,7 @@ PROXY_FIX_X_PROTO="${PROXY_FIX_X_PROTO:-1}"
 PROXY_FIX_X_HOST="${PROXY_FIX_X_HOST:-1}"
 PROXY_FIX_X_PORT="${PROXY_FIX_X_PORT:-1}"
 INSTALL_VALIDATE_ONLY=false
+DOCKER_UPGRADE_ONLY=false
 
 CF_CREDENTIALS_PATH="/root/.secrets/certbot/cloudflare.ini"
 CF_REALIP_SNIPPET="/etc/nginx/snippets/noaff-cloudflare-realip.conf"
@@ -155,6 +156,7 @@ NOAFF Restock Monitor installer
 Usage:
   bash install.sh
   bash install.sh [--validate-only]
+  bash install.sh --docker-upgrade
   bash install.sh --help
 
 Interactive mode:
@@ -190,6 +192,7 @@ Common optional environment:
 
 Modes:
   --validate-only  Validate required variables and Cloudflare-compatible ports without installing.
+  --docker-upgrade Pull latest code, refresh Docker env, rebuild containers, and verify health.
   --help           Show this help.
 EOF
 }
@@ -199,6 +202,12 @@ parse_args() {
     case "$1" in
       --validate-only)
         INSTALL_VALIDATE_ONLY=true
+        shift
+        ;;
+      --docker-upgrade)
+        DOCKER_UPGRADE_ONLY=true
+        DEPLOY_MODE=docker
+        INTERACTIVE_INSTALL=false
         shift
         ;;
       -h|--help)
@@ -343,7 +352,11 @@ load_existing_env_defaults() {
 
   prefer_existing_value "APP_HOST" "127.0.0.1"
   prefer_existing_value "APP_PORT" "7777"
+  prefer_existing_value "PUBLIC_APP_PORT" "7777"
+  prefer_existing_value "DOCKER_BIND_HOST" "0.0.0.0"
+  prefer_existing_value "DEPLOY_MODE" "native"
   prefer_existing_value "ADMIN_USERNAME" "operator"
+  prefer_existing_value "REPO_REF" "master"
   prefer_existing_value "MONITOR_DEBUG_PORT" "9223"
   prefer_existing_value "TEST_DEBUG_PORT" "9334"
   prefer_existing_value "POLL_INTERVAL_SECONDS" "45"
@@ -765,8 +778,14 @@ ensure_docker() {
   if ! docker compose version >/dev/null 2>&1 && ! command_exists docker-compose; then
     apt_install docker-compose-plugin || apt_install docker-compose
   fi
-  systemctl enable docker
-  systemctl restart docker
+  if command_exists systemctl; then
+    systemctl enable docker
+    if systemctl is-active --quiet docker; then
+      log "Docker service is already running; leaving existing containers untouched."
+    else
+      systemctl start docker
+    fi
+  fi
 }
 
 docker_compose() {
@@ -923,6 +942,19 @@ wait_for_application_ready() {
   systemctl status "${APP_NAME}" --no-pager || true
   journalctl -u "${APP_NAME}" --no-pager -n 120 -l || true
   die "Native app failed health check. The installer stopped before reporting success."
+}
+
+run_docker_deploy_flow() {
+  TOTAL_STEPS=6
+  run_step "安装 Docker 运行环境" ensure_docker
+  run_step "拉取或更新应用源码" clone_or_update_repo
+  load_existing_env_defaults
+  normalize_access_mode
+  run_step "写入 Docker 应用环境配置" write_env_file
+  run_step "构建并启动 Docker Compose 服务" deploy_docker_stack
+  run_step "验证 Docker 面板启动状态" wait_for_application_ready
+  run_step "调整防火墙放行高位端口" adjust_firewall
+  final_summary
 }
 
 setup_certbot_env() {
@@ -1633,6 +1665,11 @@ main() {
     chmod 644 "$INSTALL_LOG"
     exec > >(tee -a "$INSTALL_LOG") 2>&1
   fi
+  if bool_is_true "$DOCKER_UPGRADE_ONLY"; then
+    normalize_access_mode
+    run_docker_deploy_flow
+    return
+  fi
   if should_run_interactive_wizard; then
     interactive_wizard
   elif needs_interactive_inputs; then
@@ -1649,16 +1686,7 @@ main() {
   validate_runtime_config
 
   if [[ "$DEPLOY_MODE" == "docker" ]]; then
-    TOTAL_STEPS=6
-    run_step "安装 Docker 运行环境" ensure_docker
-    run_step "拉取或更新应用源码" clone_or_update_repo
-    load_existing_env_defaults
-    normalize_access_mode
-    run_step "写入 Docker 应用环境配置" write_env_file
-    run_step "构建并启动 Docker Compose 服务" deploy_docker_stack
-    run_step "验证 Docker 面板启动状态" wait_for_application_ready
-    run_step "调整防火墙放行高位端口" adjust_firewall
-    final_summary
+    run_docker_deploy_flow
     return
   fi
 

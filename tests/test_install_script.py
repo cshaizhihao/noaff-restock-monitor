@@ -217,6 +217,10 @@ class InstallScriptTestCase(unittest.TestCase):
         self.assertNotIn("killall", script)
         self.assertNotIn("rm -f /etc/nginx/sites-enabled/default", script)
 
+    def test_installer_does_not_restart_existing_docker_daemon(self) -> None:
+        script = (ROOT_DIR / "install.sh").read_text(encoding="utf-8")
+        self.assertNotIn("systemctl restart docker", script)
+
     def test_installer_marks_existing_checkout_as_safe_directory(self) -> None:
         script = (ROOT_DIR / "install.sh").read_text(encoding="utf-8")
         self.assertIn("safe.directory", script)
@@ -233,14 +237,15 @@ class InstallScriptTestCase(unittest.TestCase):
         self.assertIn("xauth", script)
         self.assertIn("xauth", dockerfile)
 
-    def test_docker_image_keeps_git_metadata_for_version_reporting(self) -> None:
+    def test_docker_version_reporting_uses_env_without_heavy_git_context(self) -> None:
         dockerignore = (ROOT_DIR / ".dockerignore").read_text(encoding="utf-8")
         dockerfile = (ROOT_DIR / "Dockerfile").read_text(encoding="utf-8")
         script = (ROOT_DIR / "install.sh").read_text(encoding="utf-8")
-        self.assertNotIn(".git", dockerignore)
-        self.assertIn("git", dockerfile)
+        self.assertIn(".git", dockerignore)
+        self.assertNotIn("        git \\", dockerfile)
         self.assertIn("APP_VERSION=", script)
         self.assertIn("APP_BRANCH=", script)
+        self.assertIn("--docker-upgrade", script)
 
     def test_docker_publish_port_conflict_is_reported_cleanly(self) -> None:
         result = self.run_bash(

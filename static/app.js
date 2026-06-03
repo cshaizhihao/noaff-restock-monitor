@@ -270,28 +270,28 @@
         const lineBreak = String.fromCharCode(10);
         els.systemVersion.textContent = system.version || "-";
         els.systemBranch.textContent = system.branch || "-";
-        els.upgradeServiceState.textContent = system.upgrade_state || (system.upgrade_supported ? "??" : "???");
+        els.upgradeServiceState.textContent = system.upgrade_state || (system.upgrade_supported ? "\u53ef\u7528" : "\u672a\u5b89\u88c5");
         const mode = system.upgrade_mode || (system.upgrade_supported ? "panel" : "unsupported");
         if (mode === "panel") {
             els.upgradeButton.disabled = false;
-            els.upgradeButtonLabel.textContent = "????";
-            els.upgradeHelp.textContent = system.upgrade_hint || "???????????????????";
+            els.upgradeButtonLabel.textContent = "\u6267\u884c\u5347\u7ea7";
+            els.upgradeHelp.textContent = system.upgrade_hint || "\u70b9\u51fb\u540e\u4f1a\u5728\u540e\u53f0\u62c9\u53d6\u6700\u65b0\u4ee3\u7801\u5e76\u91cd\u542f\u670d\u52a1\u3002";
             const logLines = system.upgrade_log || [];
-            els.upgradeLog.textContent = logLines.length ? logLines.join(lineBreak) : "???????";
+            els.upgradeLog.textContent = logLines.length ? logLines.join(lineBreak) : "\u6682\u65e0\u5347\u7ea7\u65e5\u5fd7\u3002";
             return;
         }
         if (mode === "manual") {
             els.upgradeButton.disabled = false;
-            els.upgradeButtonLabel.textContent = "??????";
-            els.upgradeHelp.textContent = system.upgrade_hint || "??????????????";
-            els.upgradeLog.textContent = system.upgrade_command || "???????";
+            els.upgradeButtonLabel.textContent = "\u590d\u5236\u5347\u7ea7\u547d\u4ee4";
+            els.upgradeHelp.textContent = system.upgrade_hint || "\u8bf7\u590d\u5236\u4e0b\u65b9\u547d\u4ee4\u5728\u670d\u52a1\u5668\u6267\u884c\u3002";
+            els.upgradeLog.textContent = system.upgrade_command || "\u6682\u65e0\u5347\u7ea7\u547d\u4ee4\u3002";
             return;
         }
         els.upgradeButton.disabled = true;
-        els.upgradeButtonLabel.textContent = "???????";
-        els.upgradeHelp.textContent = system.upgrade_hint || "????????????";
+        els.upgradeButtonLabel.textContent = "\u5f53\u524d\u73af\u5883\u4e0d\u652f\u6301";
+        els.upgradeHelp.textContent = system.upgrade_hint || "\u672a\u68c0\u6d4b\u5230\u53ef\u7528\u7684\u5347\u7ea7\u670d\u52a1\u3002";
         const logLines = system.upgrade_log || [];
-        els.upgradeLog.textContent = logLines.length ? logLines.join(lineBreak) : "???????";
+        els.upgradeLog.textContent = logLines.length ? logLines.join(lineBreak) : "\u6682\u65e0\u5347\u7ea7\u65e5\u5fd7\u3002";
     }
 
     function renderAdmin(admin) {
@@ -563,13 +563,13 @@
         if (system.upgrade_mode === "manual") {
             try {
                 const copied = await copyText(system.upgrade_command || "");
-                showToast(copied ? "????????" : "???????????", copied ? "success" : "error");
+                showToast(copied ? "\u5347\u7ea7\u547d\u4ee4\u5df2\u590d\u5236\u3002" : "\u6ca1\u6709\u53ef\u590d\u5236\u7684\u5347\u7ea7\u547d\u4ee4\u3002", copied ? "success" : "error");
             } catch (error) {
                 showToast(error.message, "error");
             }
             return;
         }
-        if (!window.confirm("??????????????????????")) {
+        if (!window.confirm("\u786e\u8ba4\u542f\u52a8\u7cfb\u7edf\u5347\u7ea7\uff1f\u5347\u7ea7\u5b8c\u6210\u540e\u670d\u52a1\u4f1a\u81ea\u52a8\u91cd\u542f\u3002")) {
             return;
         }
         els.upgradeButton.disabled = true;
@@ -578,7 +578,7 @@
                 method: "POST",
                 body: JSON.stringify({})
             });
-            showToast(data.message || "????????", "success");
+            showToast(data.message || "\u5347\u7ea7\u4efb\u52a1\u5df2\u542f\u52a8\u3002", "success");
             await loadSnapshot(false);
         } catch (error) {
             showToast(error.message, "error");

@@ -228,7 +228,7 @@ def upgrade_service_exists() -> bool:
 
 
 def docker_upgrade_command() -> str:
-    return f"cd {INSTALL_APP_DIR} && git pull --ff-only origin {REPO_REF} && docker compose up -d --build"
+    return f"cd {INSTALL_APP_DIR} && bash install.sh --docker-upgrade"
 
 
 def upgrade_mode_payload() -> dict[str, str | bool]:

@@ -258,7 +258,7 @@ class PortalAppTestCase(unittest.TestCase):
         self.assertFalse(payload["upgrade_supported"])
         self.assertEqual(payload["version"], "v1.2.3")
         self.assertEqual(payload["branch"], "main")
-        self.assertIn("docker compose up -d --build", payload["upgrade_command"])
+        self.assertIn("bash install.sh --docker-upgrade", payload["upgrade_command"])
 
     def test_system_upgrade_endpoint_reports_docker_manual_command(self) -> None:
         app_module.DEPLOY_MODE = "docker"
@@ -273,7 +273,7 @@ class PortalAppTestCase(unittest.TestCase):
         payload = response.get_json()
         self.assertIn("Docker", payload["message"])
         self.assertEqual(payload["system"]["upgrade_mode"], "manual")
-        self.assertIn("docker compose up -d --build", payload["system"]["upgrade_command"])
+        self.assertIn("bash install.sh --docker-upgrade", payload["system"]["upgrade_command"])
 
     def test_telegram_state_machine_sends_edits_and_clears_message_id(self) -> None:
         _, headers = self.login()
