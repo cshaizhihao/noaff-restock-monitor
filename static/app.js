@@ -16,11 +16,14 @@
         loginUsername: document.getElementById("login-username"),
         loginPassword: document.getElementById("login-password"),
         logoutButton: document.getElementById("logout-button"),
+        mobileLogoutButton: document.getElementById("mobile-logout-button"),
         refreshButton: document.getElementById("refresh-button"),
         restartEngineButton: document.getElementById("restart-engine-button"),
         taskResetButton: document.getElementById("task-reset-button"),
         navTasks: document.getElementById("nav-tasks"),
         navSettings: document.getElementById("nav-settings"),
+        mobileNavTasks: document.getElementById("mobile-nav-tasks"),
+        mobileNavSettings: document.getElementById("mobile-nav-settings"),
         viewTitle: document.getElementById("view-title"),
         lastCycle: document.getElementById("last-cycle"),
         engineChip: document.getElementById("engine-chip"),
@@ -164,6 +167,8 @@
         els.settingsView.classList.toggle("hidden", tasks);
         els.navTasks.classList.toggle("nav-item-active", tasks);
         els.navSettings.classList.toggle("nav-item-active", !tasks);
+        els.mobileNavTasks?.classList.toggle("nav-item-active", tasks);
+        els.mobileNavSettings?.classList.toggle("nav-item-active", !tasks);
         els.viewTitle.textContent = tasks ? "监控任务池" : "全局配置";
     }
 
@@ -441,6 +446,16 @@
         }
     }
 
+    async function logout() {
+        try {
+            await apiFetch("/logout", { method: "POST", body: JSON.stringify({}) });
+        } catch (error) {
+            showToast(error.message, "error");
+        } finally {
+            setView(false);
+        }
+    }
+
     els.loginForm?.addEventListener("submit", async (event) => {
         event.preventDefault();
         const submit = event.submitter;
@@ -464,15 +479,8 @@
         }
     });
 
-    els.logoutButton?.addEventListener("click", async () => {
-        try {
-            await apiFetch("/logout", { method: "POST", body: JSON.stringify({}) });
-        } catch (error) {
-            showToast(error.message, "error");
-        } finally {
-            setView(false);
-        }
-    });
+    els.logoutButton?.addEventListener("click", logout);
+    els.mobileLogoutButton?.addEventListener("click", logout);
 
     els.refreshButton?.addEventListener("click", () => loadSnapshot(false));
     els.restartEngineButton?.addEventListener("click", async () => {
@@ -493,6 +501,8 @@
 
     els.navTasks?.addEventListener("click", () => setNav("tasks"));
     els.navSettings?.addEventListener("click", () => setNav("settings"));
+    els.mobileNavTasks?.addEventListener("click", () => setNav("tasks"));
+    els.mobileNavSettings?.addEventListener("click", () => setNav("settings"));
 
     els.taskResetButton?.addEventListener("click", () => openTaskModal());
     els.taskCancelButton?.addEventListener("click", closeTaskModal);

@@ -8,4 +8,5 @@ data/
 .pytest_cache/
 .ruff_cache/
 .test-bin/
+ui-check/
 node_modules/

@@ -62,7 +62,7 @@
             </div>
         </section>
 
-        <section id="dashboard-shell" class="hidden h-screen overflow-hidden">
+        <section id="dashboard-shell" class="hidden flex h-screen flex-col overflow-hidden md:flex-row">
             <aside class="glass-sidebar hidden h-full w-64 flex-none flex-col md:flex">
                 <div class="flex h-20 items-center border-b border-slate-800 px-6">
                     <div class="mr-3 flex h-8 w-8 items-center justify-center">
@@ -119,7 +119,40 @@
                 </div>
             </aside>
 
-            <main class="h-full flex-1 overflow-y-auto scroll-smooth">
+            <header class="glass-sidebar flex flex-none flex-col gap-3 border-b border-slate-800 px-4 py-3 md:hidden">
+                <div class="flex items-center justify-between gap-3">
+                    <div class="flex items-center gap-3">
+                        <svg viewBox="0 0 24 24" fill="none" class="h-8 w-8">
+                            <defs>
+                                <linearGradient id="mobile-lg1" x1="0%" y1="0%" x2="100%" y2="100%">
+                                    <stop offset="0%" stop-color="#818CF8"/>
+                                    <stop offset="100%" stop-color="#38BDF8"/>
+                                </linearGradient>
+                                <linearGradient id="mobile-lg2" x1="0%" y1="0%" x2="100%" y2="100%">
+                                    <stop offset="0%" stop-color="#F43F5E"/>
+                                    <stop offset="100%" stop-color="#E11D48"/>
+                                </linearGradient>
+                            </defs>
+                            <circle cx="12" cy="12" r="10" stroke="url(#mobile-lg1)" stroke-width="2" stroke-dasharray="4 4" class="origin-center animate-[spin_6s_linear_infinite]"/>
+                            <circle cx="12" cy="12" r="3" fill="url(#mobile-lg1)"/>
+                            <circle cx="12" cy="12" r="5" stroke="url(#mobile-lg1)" stroke-width="1.5" opacity="0.5"/>
+                            <path d="M5 5L19 19" stroke="url(#mobile-lg2)" stroke-width="2.5" stroke-linecap="round"/>
+                        </svg>
+                        <span class="text-sm font-bold tracking-widest text-slate-200">NOAFF_PANEL</span>
+                    </div>
+                    <button id="mobile-logout-button" type="button" class="danger-button !min-h-10 !rounded-lg !px-3 !py-2 text-xs">退出</button>
+                </div>
+                <div class="grid grid-cols-2 gap-2">
+                    <button id="mobile-nav-tasks" type="button" class="nav-item nav-item-active justify-center">
+                        <span>任务大厅</span>
+                    </button>
+                    <button id="mobile-nav-settings" type="button" class="nav-item justify-center">
+                        <span>全局配置</span>
+                    </button>
+                </div>
+            </header>
+
+            <main class="min-h-0 flex-1 overflow-y-auto scroll-smooth">
                 <div class="mx-auto max-w-[1600px] p-5 md:p-10 lg:p-12">
                     <header class="reveal mb-8 flex flex-col justify-between gap-6 md:flex-row md:items-center">
                         <div>

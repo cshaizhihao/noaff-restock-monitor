@@ -120,6 +120,10 @@ class PortalAppTestCase(unittest.TestCase):
 
         allowed_response = self.client.get(app_module.PORTAL_PATH, headers={"User-Agent": BROWSER_UA}, base_url=BASE_URL)
         self.assertEqual(allowed_response.status_code, 200)
+        html = allowed_response.get_data(as_text=True)
+        self.assertIn('id="dashboard-shell" class="hidden flex h-screen flex-col overflow-hidden md:flex-row"', html)
+        self.assertIn('id="mobile-nav-settings"', html)
+        self.assertIn('id="mobile-logout-button"', html)
 
     def test_login_requires_ajax_and_csrf_headers(self) -> None:
         bootstrap = self.read_bootstrap_credentials()
