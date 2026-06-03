@@ -50,6 +50,8 @@ class InstallScriptTestCase(unittest.TestCase):
             cwd=ROOT_DIR,
             env=env,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             capture_output=True,
             timeout=30,
             check=False,
@@ -73,6 +75,7 @@ class InstallScriptTestCase(unittest.TestCase):
         output = self.assert_shell_ok(
             textwrap.dedent(
                 r"""
+                ACCESS_MODE=domain-cf \
                 FQDN=monitor.example.com \
                 CF_ZONE_NAME=example.com \
                 CF_API_TOKEN=test-token \
@@ -84,6 +87,28 @@ class InstallScriptTestCase(unittest.TestCase):
         self.assertIn("NOAFF installer validation passed.", output)
         self.assertIn("APP_BIND:          127.0.0.1:7777", output)
         self.assertIn("PUBLIC_HTTPS_PORT: 443", output)
+
+    def test_validate_only_accepts_ip_mode_without_domain(self) -> None:
+        output = self.assert_shell_ok("ACCESS_MODE=ip APP_PORT=7777 bash install.sh --validate-only")
+        self.assertIn("ACCESS_MODE:       ip", output)
+        self.assertIn("FQDN:              IP mode", output)
+        self.assertIn("ENABLE_TLS:        false", output)
+
+    def test_validate_only_accepts_domain_direct_without_cloudflare_token(self) -> None:
+        output = self.assert_shell_ok(
+            textwrap.dedent(
+                r"""
+                ACCESS_MODE=domain-direct \
+                FQDN=monitor.example.com \
+                CERTBOT_EMAIL=ops@example.com \
+                CF_RECORD_PROXIED=false \
+                bash install.sh --validate-only
+                """
+            )
+        )
+        self.assertIn("ACCESS_MODE:       domain-direct", output)
+        self.assertIn("CERT_MODE:         http", output)
+        self.assertIn("CF_RECORD_PROXIED: false", output)
 
     def test_cloudflare_zone_and_dns_record_json_parsing(self) -> None:
         output = self.assert_shell_ok(
@@ -165,6 +190,12 @@ class InstallScriptTestCase(unittest.TestCase):
                 r"""
                 set -Eeuo pipefail
                 export NOAFF_INSTALL_LIBRARY_MODE=true
+                export ACCESS_MODE=domain-cf
+                export FQDN=monitor.example.com
+                export CERT_MODE=dns
+                export CF_ZONE_NAME=example.com
+                export CF_API_TOKEN=test-token
+                export CERTBOT_EMAIL=ops@example.com
                 export PUBLIC_HTTP_PORT=81
                 source ./install.sh
                 validate_runtime_config

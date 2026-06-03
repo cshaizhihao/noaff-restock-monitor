@@ -110,25 +110,45 @@ bash install.sh --help
 - 拉取或更新 GitHub 仓库
 - 创建虚拟环境并安装依赖
 - 自动写入或保留现有 `.env`
-- 自动在 Cloudflare 中创建 / 更新 `FQDN` 与 `TLS_DOMAINS` 的 A/AAAA 记录
-- 自动申请 / 续签证书
-- 自动写入 Cloudflare Real IP 与源站锁定规则
-- 自动注册 `systemd` 服务与定时续期任务
+- 域名直连模式下通过 HTTP-01 自动申请 / 续签证书
+- Cloudflare Token 模式下自动创建 / 更新 `FQDN` 与 `TLS_DOMAINS` 的 A/AAAA 记录
+- 小黄云模式下可写入 Cloudflare Real IP 与源站锁定规则
+- 自动注册 `systemd` 服务、升级服务与证书续期任务
 
 ## 一键安装
 
 在 Linux VDS 上以 `root` 运行：
 
-一行安装版：
+交互安装版，推荐普通用户使用：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/cshaizhihao/noaff-restock-monitor/master/install.sh | FQDN=monitor.example.com CF_ZONE_NAME=example.com CF_API_TOKEN=cf_xxx CERTBOT_EMAIL=ops@example.com bash
+curl -fsSL https://raw.githubusercontent.com/cshaizhihao/noaff-restock-monitor/master/install.sh | bash
+```
+
+脚本会进入全中文向导，依次选择：
+
+- 应用本机端口
+- `IP + 端口`、`域名直连` 或 `Cloudflare 小黄云`
+- 是否自动申请 HTTPS 证书
+- 是否提供 Cloudflare Token 开启 DNS-01 全自动模式
+- 是否现在填写 Telegram 配置
+
+静默安装版，适合已经准备好域名和参数的用户：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/cshaizhihao/noaff-restock-monitor/master/install.sh | ACCESS_MODE=domain-direct FQDN=monitor.example.com CERTBOT_EMAIL=ops@example.com bash
+```
+
+Cloudflare 小黄云 + Token 全自动版：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/cshaizhihao/noaff-restock-monitor/master/install.sh | ACCESS_MODE=domain-cf FQDN=monitor.example.com CF_ZONE_NAME=example.com CF_API_TOKEN=cf_xxx CERTBOT_EMAIL=ops@example.com bash
 ```
 
 一行预检版，不会安装依赖或写系统服务：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/cshaizhihao/noaff-restock-monitor/master/install.sh | FQDN=monitor.example.com CF_ZONE_NAME=example.com CF_API_TOKEN=cf_xxx CERTBOT_EMAIL=ops@example.com bash -s -- --validate-only
+curl -fsSL https://raw.githubusercontent.com/cshaizhihao/noaff-restock-monitor/master/install.sh | ACCESS_MODE=domain-direct FQDN=monitor.example.com CERTBOT_EMAIL=ops@example.com bash -s -- --validate-only
 ```
 
 如果你想先保存脚本再运行：
@@ -157,9 +177,8 @@ chmod +x noaff-install.sh
 最小示例：
 
 ```bash
+ACCESS_MODE=domain-direct \
 FQDN=monitor.example.com \
-CF_ZONE_NAME=example.com \
-CF_API_TOKEN=cf_xxx \
 CERTBOT_EMAIL=ops@example.com \
 bash install.sh
 ```
@@ -173,9 +192,8 @@ bash install.sh
 正式安装前可以先跑预检模式。它只校验必要变量、TLS 域名和 Cloudflare 小黄云可代理端口，不会安装 apt 依赖、写入 Nginx 或注册 systemd：
 
 ```bash
+ACCESS_MODE=domain-direct \
 FQDN=monitor.example.com \
-CF_ZONE_NAME=example.com \
-CF_API_TOKEN=cf_xxx \
 CERTBOT_EMAIL=ops@example.com \
 bash install.sh --validate-only
 ```
@@ -183,6 +201,7 @@ bash install.sh --validate-only
 常用自定义示例：
 
 ```bash
+ACCESS_MODE=domain-cf \
 FQDN=monitor.example.com \
 TLS_DOMAINS=monitor.example.com,www.monitor.example.com \
 CF_ZONE_NAME=example.com \
@@ -205,17 +224,20 @@ bash install.sh
 - 隐蔽入口 `PORTAL_PATH`
 - 当前管理员用户名
 - 首次引导密码或“沿用现有密码”的说明
+- 后台“系统升级”入口会调用 `noaff-monitor-upgrade.service` 完成后续版本升级
 
 ## 关键变量
 
 | 变量 | 用途 | 默认值 |
 | --- | --- | --- |
-| `FQDN` | 面板主域名，必填 | 无 |
+| `ACCESS_MODE` | 安装模式：`ip` / `domain-direct` / `domain-cf` | 交互选择 |
+| `FQDN` | 面板主域名，域名模式必填 | 无 |
 | `TLS_DOMAINS` | 逗号分隔的附加证书域名 | `FQDN` |
-| `CF_ZONE_NAME` | Cloudflare Zone 名称，推荐填写 | 无 |
+| `CERT_MODE` | 证书模式：`http` / `dns` / `none` / `auto` | `auto` |
+| `CF_ZONE_NAME` | Cloudflare Zone 名称，DNS-01 自动模式需要 | 无 |
 | `CF_ZONE_ID` | Cloudflare Zone ID，可替代 `CF_ZONE_NAME` | 无 |
-| `CF_API_TOKEN` | Cloudflare API Token，必填 | 无 |
-| `CERTBOT_EMAIL` | Let's Encrypt 邮箱，必填 | 无 |
+| `CF_API_TOKEN` | Cloudflare API Token，仅 DNS-01 全自动模式需要 | 无 |
+| `CERTBOT_EMAIL` | Let's Encrypt 邮箱，启用 HTTPS 时需要 | 无 |
 | `APP_PORT` | Flask / Waitress 本机监听端口 | `7777` |
 | `APP_HOST` | Flask / Waitress 监听地址 | `127.0.0.1` |
 | `PUBLIC_HTTP_PORT` | Nginx 暴露的 HTTP 端口 | `80` |
@@ -231,7 +253,7 @@ bash install.sh
 
 ## Cloudflare Token 权限
 
-脚本当前会访问 Zone、DNS 和 SSL 设置接口。建议令牌最少具备：
+Cloudflare Token 不是普通安装必填项。只有你选择 `ACCESS_MODE=domain-cf` 并使用 `CERT_MODE=dns` 时，脚本才会访问 Zone、DNS 和 SSL 设置接口。建议令牌最少具备：
 
 - `Zone / Zone / Read`
 - `Zone / DNS / Edit`

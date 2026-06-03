@@ -274,6 +274,35 @@
                                         <button type="submit" class="primary-button">更新凭据</button>
                                     </form>
                                 </section>
+
+                                <section class="control-panel reveal">
+                                    <h3 class="panel-heading">系统升级</h3>
+                                    <div class="mt-5 grid gap-4">
+                                        <div class="grid gap-4 border-b border-slate-800/80 pb-4 sm:grid-cols-3">
+                                            <div class="min-w-0">
+                                                <p class="text-xs font-bold uppercase tracking-widest text-slate-500">版本</p>
+                                                <p id="system-version" class="mt-2 truncate font-mono text-lg font-bold text-white">-</p>
+                                            </div>
+                                            <div class="min-w-0">
+                                                <p class="text-xs font-bold uppercase tracking-widest text-slate-500">分支</p>
+                                                <p id="system-branch" class="mt-2 truncate font-mono text-lg font-bold text-white">-</p>
+                                            </div>
+                                            <div class="min-w-0">
+                                                <p class="text-xs font-bold uppercase tracking-widest text-slate-500">服务</p>
+                                                <p id="upgrade-service-state" class="mt-2 truncate font-mono text-lg font-bold text-white">-</p>
+                                            </div>
+                                        </div>
+                                        <button id="upgrade-button" type="button" class="primary-button">
+                                            <svg class="mr-2 h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 11l5-5m0 0l5 5m-5-5v12"/>
+                                            </svg>
+                                            执行升级
+                                        </button>
+                                        <div class="terminal-box max-h-52 overflow-y-auto p-4">
+                                            <pre id="upgrade-log" class="whitespace-pre-wrap font-mono text-xs leading-6 text-slate-400">暂无升级日志。</pre>
+                                        </div>
+                                    </div>
+                                </section>
                             </div>
 
                             <section class="control-panel reveal">

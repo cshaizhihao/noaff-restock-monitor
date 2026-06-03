@@ -46,6 +46,11 @@
         settingsTestPort: document.getElementById("settings-test-port"),
         settingsPollInterval: document.getElementById("settings-poll-interval"),
         settingsTimeout: document.getElementById("settings-timeout"),
+        systemVersion: document.getElementById("system-version"),
+        systemBranch: document.getElementById("system-branch"),
+        upgradeServiceState: document.getElementById("upgrade-service-state"),
+        upgradeButton: document.getElementById("upgrade-button"),
+        upgradeLog: document.getElementById("upgrade-log"),
         profileForm: document.getElementById("profile-form"),
         profileUsername: document.getElementById("profile-username"),
         profileCurrentPassword: document.getElementById("profile-current-password"),
@@ -236,6 +241,15 @@
         els.settingsTimeout.value = settings.request_timeout_seconds || 25;
     }
 
+    function renderSystem(system) {
+        els.systemVersion.textContent = system.version || "-";
+        els.systemBranch.textContent = system.branch || "-";
+        els.upgradeServiceState.textContent = system.upgrade_supported ? "可用" : "未安装";
+        els.upgradeButton.disabled = !system.upgrade_supported;
+        const logLines = system.upgrade_log || [];
+        els.upgradeLog.textContent = logLines.length ? logLines.join("\n") : "暂无升级日志。";
+    }
+
     function renderAdmin(admin) {
         els.adminIdentity.textContent = admin.username ? `管理员：${admin.username}` : "管理员";
         els.portalChip.textContent = admin.portal_path || portalPath;
@@ -362,6 +376,7 @@
         renderMetrics(data.metrics || {});
         renderEngine(data.engine || {});
         renderSettings(data.settings || {});
+        renderSystem(data.system || {});
         renderAdmin(data.admin || {});
         renderLogs(data.logs || []);
         renderTasks(data.tasks || []);
@@ -496,6 +511,25 @@
             showToast(error.message, "error");
         } finally {
             els.restartEngineButton.disabled = false;
+        }
+    });
+
+    els.upgradeButton?.addEventListener("click", async () => {
+        if (!window.confirm("确认启动系统升级？升级完成后服务会自动重启。")) {
+            return;
+        }
+        els.upgradeButton.disabled = true;
+        try {
+            const data = await apiFetch("/api/system/upgrade", {
+                method: "POST",
+                body: JSON.stringify({})
+            });
+            showToast(data.message || "升级任务已启动。");
+            await loadSnapshot(false);
+        } catch (error) {
+            showToast(error.message, "error");
+        } finally {
+            els.upgradeButton.disabled = false;
         }
     });
 

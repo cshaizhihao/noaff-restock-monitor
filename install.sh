@@ -12,6 +12,11 @@ APP_HOST="${APP_HOST:-127.0.0.1}"
 APP_PORT="${APP_PORT:-7777}"
 PUBLIC_HTTP_PORT="${PUBLIC_HTTP_PORT:-80}"
 PUBLIC_HTTPS_PORT="${PUBLIC_HTTPS_PORT:-443}"
+ACCESS_MODE="${ACCESS_MODE:-}"
+ENABLE_NGINX="${ENABLE_NGINX:-true}"
+ENABLE_TLS="${ENABLE_TLS:-true}"
+CERT_MODE="${CERT_MODE:-auto}"
+INTERACTIVE_INSTALL="${INTERACTIVE_INSTALL:-auto}"
 
 MONITOR_DEBUG_PORT="${MONITOR_DEBUG_PORT:-9223}"
 TEST_DEBUG_PORT="${TEST_DEBUG_PORT:-9334}"
@@ -62,20 +67,81 @@ CERTBOT_BIN="${CERTBOT_VENV}/bin/certbot"
 CERTBOT_RENEW_SCRIPT="/usr/local/bin/${APP_NAME}-cert-renew.sh"
 CERTBOT_RENEW_SERVICE="/etc/systemd/system/${APP_NAME}-cert-renew.service"
 CERTBOT_RENEW_TIMER="/etc/systemd/system/${APP_NAME}-cert-renew.timer"
+UPGRADE_SCRIPT="/usr/local/bin/${APP_NAME}-upgrade.sh"
+UPGRADE_SERVICE="/etc/systemd/system/${APP_NAME}-upgrade.service"
+UPGRADE_LOG="/var/log/${APP_NAME}-upgrade.log"
+ACME_WEBROOT="/var/www/${APP_NAME}-acme"
+INSTALL_LOG="/var/log/${APP_NAME}-install.log"
 CF_SUPPORTED_HTTP_PORTS=(80 8080 8880 2052 2082 2086 2095)
 CF_SUPPORTED_HTTPS_PORTS=(443 2053 2083 2087 2096 8443)
+CURRENT_STEP=0
+TOTAL_STEPS=1
+
+if [[ -t 1 ]]; then
+  C_RESET=$'\033[0m'
+  C_BOLD=$'\033[1m'
+  C_DIM=$'\033[2m'
+  C_RED=$'\033[31m'
+  C_GREEN=$'\033[32m'
+  C_YELLOW=$'\033[33m'
+  C_BLUE=$'\033[34m'
+  C_MAGENTA=$'\033[35m'
+  C_CYAN=$'\033[36m'
+else
+  C_RESET=""
+  C_BOLD=""
+  C_DIM=""
+  C_RED=""
+  C_GREEN=""
+  C_YELLOW=""
+  C_BLUE=""
+  C_MAGENTA=""
+  C_CYAN=""
+fi
 
 log() {
-  printf '\n[%s] %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*"
+  printf '\n%s[%s]%s %s\n' "$C_CYAN" "$(date '+%Y-%m-%d %H:%M:%S')" "$C_RESET" "$*"
 }
 
 warn() {
-  printf '\n[WARN] %s\n' "$*" >&2
+  printf '\n%s[提示]%s %s\n' "$C_YELLOW" "$C_RESET" "$*" >&2
 }
 
 die() {
-  printf '\n[ERROR] %s\n' "$*" >&2
+  printf '\n%s[错误]%s %s\n' "$C_RED" "$C_RESET" "$*" >&2
   exit 1
+}
+
+banner() {
+  cat <<EOF
+${C_CYAN}${C_BOLD}
+ _   _  ___    _    _____ _____
+| \ | |/ _ \  / \  |  ___|  ___|
+|  \| | | | |/ _ \ | |_  | |_
+| |\  | |_| / ___ \|  _| |  _|
+|_| \_|\___/_/   \_\_|   |_|
+${C_RESET}${C_BOLD}NOAFF 补货监控助手 · 中文交互安装向导${C_RESET}
+EOF
+}
+
+progress_bar() {
+  local current="$1"
+  local total="$2"
+  local width=24
+  local filled=$(( current * width / total ))
+  local empty=$(( width - filled ))
+  printf '%s[' "$C_BLUE"
+  printf '%*s' "$filled" '' | tr ' ' '#'
+  printf '%*s' "$empty" '' | tr ' ' '-'
+  printf ']%s %s/%s' "$C_RESET" "$current" "$total"
+}
+
+run_step() {
+  local title="$1"
+  shift
+  CURRENT_STEP=$((CURRENT_STEP + 1))
+  printf '\n%s==>%s %s  %s%s%s\n' "$C_MAGENTA" "$C_RESET" "$(progress_bar "$CURRENT_STEP" "$TOTAL_STEPS")" "$C_BOLD" "$title" "$C_RESET"
+  "$@"
 }
 
 usage() {
@@ -83,21 +149,28 @@ usage() {
 NOAFF Restock Monitor installer
 
 Usage:
+  bash install.sh
   bash install.sh [--validate-only]
   bash install.sh --help
 
-Required environment:
-  FQDN              Public panel domain, for example monitor.example.com
-  CF_ZONE_NAME     Cloudflare zone name, for example example.com
-    or CF_ZONE_ID  Cloudflare zone id
-  CF_API_TOKEN     Cloudflare API token
-  CERTBOT_EMAIL    Let's Encrypt account email
+Interactive mode:
+  Run without required variables to enter a full Chinese installer wizard.
+
+Install modes:
+  ACCESS_MODE=ip             IP + port test mode
+  ACCESS_MODE=domain-direct  Domain direct mode without Cloudflare orange-cloud
+  ACCESS_MODE=domain-cf      Domain mode with Cloudflare orange-cloud
 
 Common optional environment:
   APP_PORT=7777
   PUBLIC_HTTP_PORT=80
   PUBLIC_HTTPS_PORT=443
+  FQDN=monitor.example.com
   TLS_DOMAINS=monitor.example.com,www.monitor.example.com
+  CERTBOT_EMAIL=ops@example.com
+  CERT_MODE=http|dns|none|auto
+  CF_ZONE_NAME=example.com
+  CF_API_TOKEN=cf_xxx
   MONITOR_DEBUG_PORT=9223
   TEST_DEBUG_PORT=9334
   CF_RECORD_PROXIED=true
@@ -129,6 +202,56 @@ parse_args() {
 
 command_exists() {
   command -v "$1" >/dev/null 2>&1
+}
+
+has_tty() {
+  [[ -r /dev/tty && -w /dev/tty ]]
+}
+
+prompt_read() {
+  local prompt="$1"
+  local answer=""
+  if has_tty; then
+    read -r -p "$prompt" answer </dev/tty
+  else
+    read -r -p "$prompt" answer
+  fi
+  printf '%s' "$answer"
+}
+
+prompt_default() {
+  local label="$1"
+  local default_value="$2"
+  local answer
+  answer="$(prompt_read "${label} [${default_value}]: ")"
+  if [[ -z "$answer" ]]; then
+    printf '%s' "$default_value"
+  else
+    printf '%s' "$answer"
+  fi
+}
+
+prompt_secret_optional() {
+  local label="$1"
+  local answer=""
+  if has_tty; then
+    read -r -s -p "$label" answer </dev/tty
+    printf '\n' >/dev/tty
+  else
+    read -r -s -p "$label" answer
+    printf '\n'
+  fi
+  printf '%s' "$answer"
+}
+
+prompt_yes_no() {
+  local label="$1"
+  local default_value="${2:-Y}"
+  local answer normalized
+  answer="$(prompt_read "${label} [${default_value}]: ")"
+  answer="${answer:-$default_value}"
+  normalized="${answer,,}"
+  [[ "$normalized" == "y" || "$normalized" == "yes" || "$normalized" == "1" || "$normalized" == "true" ]]
 }
 
 bool_is_true() {
@@ -257,6 +380,62 @@ apt_install() {
   apt-get install -y "$@"
 }
 
+normalize_access_mode() {
+  if [[ -z "$ACCESS_MODE" ]]; then
+    if [[ -n "$FQDN" ]]; then
+      if bool_is_true "$CF_RECORD_PROXIED"; then
+        ACCESS_MODE="domain-cf"
+      else
+        ACCESS_MODE="domain-direct"
+      fi
+    else
+      ACCESS_MODE="ip"
+    fi
+  fi
+
+  case "$ACCESS_MODE" in
+    ip)
+      ENABLE_NGINX="false"
+      ENABLE_TLS="false"
+      CERT_MODE="none"
+      CF_RECORD_PROXIED="false"
+      ORIGIN_LOCKDOWN_TO_CLOUDFLARE="false"
+      SESSION_COOKIE_SECURE="false"
+      ENABLE_PROXY_FIX="false"
+      APP_HOST="0.0.0.0"
+      ;;
+    domain-direct)
+      ENABLE_NGINX="true"
+      CF_RECORD_PROXIED="false"
+      ORIGIN_LOCKDOWN_TO_CLOUDFLARE="false"
+      APP_HOST="127.0.0.1"
+      CERT_MODE="${CERT_MODE:-auto}"
+      ;;
+    domain-cf)
+      ENABLE_NGINX="true"
+      CF_RECORD_PROXIED="${CF_RECORD_PROXIED:-true}"
+      APP_HOST="127.0.0.1"
+      CERT_MODE="${CERT_MODE:-auto}"
+      ;;
+    *)
+      die "ACCESS_MODE must be ip, domain-direct, or domain-cf."
+      ;;
+  esac
+
+  if [[ "$CERT_MODE" == "auto" ]]; then
+    if [[ -n "$CF_API_TOKEN" ]]; then
+      CERT_MODE="dns"
+    elif bool_is_true "$ENABLE_TLS"; then
+      CERT_MODE="http"
+    else
+      CERT_MODE="none"
+    fi
+  fi
+  if [[ "$CERT_MODE" == "none" ]]; then
+    ENABLE_TLS="false"
+  fi
+}
+
 validate_port() {
   local label="$1"
   local value="$2"
@@ -267,9 +446,12 @@ validate_port() {
 }
 
 validate_runtime_config() {
+  normalize_access_mode
   validate_port "APP_PORT" "$APP_PORT" 1024 65535
-  validate_port "PUBLIC_HTTP_PORT" "$PUBLIC_HTTP_PORT" 1 65535
-  validate_port "PUBLIC_HTTPS_PORT" "$PUBLIC_HTTPS_PORT" 1 65535
+  if bool_is_true "$ENABLE_NGINX"; then
+    validate_port "PUBLIC_HTTP_PORT" "$PUBLIC_HTTP_PORT" 1 65535
+    validate_port "PUBLIC_HTTPS_PORT" "$PUBLIC_HTTPS_PORT" 1 65535
+  fi
   validate_port "MONITOR_DEBUG_PORT" "$MONITOR_DEBUG_PORT" 1024 65535
   validate_port "TEST_DEBUG_PORT" "$TEST_DEBUG_PORT" 1024 65535
 
@@ -277,26 +459,43 @@ validate_runtime_config() {
   [[ "$MONITOR_DEBUG_PORT" != "$APP_PORT" ]] || die "MONITOR_DEBUG_PORT must not reuse APP_PORT."
   [[ "$TEST_DEBUG_PORT" != "$APP_PORT" ]] || die "TEST_DEBUG_PORT must not reuse APP_PORT."
 
-  if bool_is_true "$CF_RECORD_PROXIED"; then
+  if [[ "$CERT_MODE" == "http" && "$PUBLIC_HTTP_PORT" != "80" ]]; then
+    die "CERT_MODE=http requires PUBLIC_HTTP_PORT=80 because Let's Encrypt HTTP-01 validates on port 80."
+  fi
+
+  if [[ "$ACCESS_MODE" == "domain-cf" ]] && bool_is_true "$CF_RECORD_PROXIED"; then
     port_in_list "$PUBLIC_HTTP_PORT" "${CF_SUPPORTED_HTTP_PORTS[@]}" || die "PUBLIC_HTTP_PORT=${PUBLIC_HTTP_PORT} is not supported by Cloudflare orange-cloud proxy. Supported HTTP ports: ${CF_SUPPORTED_HTTP_PORTS[*]}"
     port_in_list "$PUBLIC_HTTPS_PORT" "${CF_SUPPORTED_HTTPS_PORTS[@]}" || die "PUBLIC_HTTPS_PORT=${PUBLIC_HTTPS_PORT} is not supported by Cloudflare orange-cloud proxy. Supported HTTPS ports: ${CF_SUPPORTED_HTTPS_PORTS[*]}"
   fi
 }
 
 validate_required_inputs() {
-  [[ -n "$FQDN" ]] || die "FQDN is required, for example FQDN=monitor.example.com"
-  [[ -n "$CF_ZONE_NAME" || -n "$CF_ZONE_ID" ]] || die "CF_ZONE_NAME or CF_ZONE_ID is required"
-  [[ -n "$CF_API_TOKEN" ]] || die "CF_API_TOKEN is required"
-  [[ -n "$CERTBOT_EMAIL" ]] || die "CERTBOT_EMAIL is required"
+  normalize_access_mode
+  if [[ "$ACCESS_MODE" == "ip" ]]; then
+    return
+  fi
+
+  [[ -n "$FQDN" ]] || die "FQDN is required for domain install mode."
+  if bool_is_true "$ENABLE_TLS"; then
+    [[ -n "$CERTBOT_EMAIL" ]] || die "CERTBOT_EMAIL is required when TLS is enabled."
+  fi
+  if [[ "$CERT_MODE" == "dns" ]]; then
+    [[ -n "$CF_ZONE_NAME" || -n "$CF_ZONE_ID" ]] || die "CF_ZONE_NAME or CF_ZONE_ID is required for Cloudflare DNS-01."
+    [[ -n "$CF_API_TOKEN" ]] || die "CF_API_TOKEN is required for Cloudflare DNS-01."
+  fi
 }
 
 print_validation_summary() {
-  local domains_csv
-  domains_csv="$(build_tls_domains)"
+  local domains_csv="-"
+  [[ -n "$FQDN" ]] && domains_csv="$(build_tls_domains)"
   echo "NOAFF installer validation passed."
-  echo "FQDN:              ${FQDN}"
+  echo "ACCESS_MODE:       ${ACCESS_MODE}"
+  echo "FQDN:              ${FQDN:-IP mode}"
   echo "TLS_DOMAINS:       ${domains_csv}"
   echo "APP_BIND:          ${APP_HOST}:${APP_PORT}"
+  echo "ENABLE_NGINX:      ${ENABLE_NGINX}"
+  echo "ENABLE_TLS:        ${ENABLE_TLS}"
+  echo "CERT_MODE:         ${CERT_MODE}"
   echo "PUBLIC_HTTP_PORT:  ${PUBLIC_HTTP_PORT}"
   echo "PUBLIC_HTTPS_PORT: ${PUBLIC_HTTPS_PORT}"
   echo "CF_RECORD_PROXIED: ${CF_RECORD_PROXIED}"
@@ -307,6 +506,147 @@ validate_only() {
   validate_required_inputs
   validate_runtime_config
   print_validation_summary
+}
+
+should_run_interactive_wizard() {
+  [[ "$INTERACTIVE_INSTALL" != "false" ]] || return 1
+  [[ "$INSTALL_VALIDATE_ONLY" != "true" ]] || return 1
+  [[ -z "$ACCESS_MODE" && -z "$FQDN" ]] || return 1
+  has_tty
+}
+
+prompt_domain() {
+  local answer
+  while true; do
+    answer="$(prompt_read "请输入域名，例如 monitor.example.com：")"
+    if [[ -n "$answer" ]]; then
+      FQDN="$answer"
+      TLS_DOMAINS="${TLS_DOMAINS:-$FQDN}"
+      return
+    fi
+    warn "域名不能为空；如果没有域名，请在访问方式中选择 IP + 端口。"
+  done
+}
+
+interactive_wizard() {
+  banner
+  echo "${C_DIM}脚本会显示每一步进度和命令输出，不会黑盒安装。${C_RESET}"
+  echo
+
+  APP_PORT="$(prompt_default "[1/8] 请输入应用本机端口" "$APP_PORT")"
+  validate_port "APP_PORT" "$APP_PORT" 1024 65535
+
+  echo
+  echo "${C_BOLD}[2/8] 选择访问方式${C_RESET}"
+  echo "  1) IP + 端口访问，适合测试机"
+  echo "  2) 域名直连，不开启 Cloudflare 小黄云"
+  echo "  3) 域名访问，开启或已开启 Cloudflare 小黄云"
+  local mode_choice
+  mode_choice="$(prompt_default "请选择" "1")"
+  case "$mode_choice" in
+    1)
+      ACCESS_MODE="ip"
+      ENABLE_NGINX="false"
+      ENABLE_TLS="false"
+      CERT_MODE="none"
+      PUBLIC_HTTP_PORT="$APP_PORT"
+      PUBLIC_HTTPS_PORT="$APP_PORT"
+      ;;
+    2)
+      ACCESS_MODE="domain-direct"
+      CF_RECORD_PROXIED="false"
+      ORIGIN_LOCKDOWN_TO_CLOUDFLARE="false"
+      APP_HOST="127.0.0.1"
+      prompt_domain
+      PUBLIC_HTTP_PORT="80"
+      PUBLIC_HTTPS_PORT="$(prompt_default "[3/8] 请输入 HTTPS 公网端口" "$PUBLIC_HTTPS_PORT")"
+      if prompt_yes_no "[4/8] 是否自动申请 Let's Encrypt HTTPS 证书？证书验证需要 80 端口可访问" "Y"; then
+        ENABLE_TLS="true"
+        CERT_MODE="http"
+        CERTBOT_EMAIL="$(prompt_default "请输入 Let's Encrypt 邮箱" "${CERTBOT_EMAIL:-ops@example.com}")"
+      else
+        ENABLE_TLS="false"
+        CERT_MODE="none"
+        SESSION_COOKIE_SECURE="false"
+      fi
+      ;;
+    3)
+      ACCESS_MODE="domain-cf"
+      APP_HOST="127.0.0.1"
+      prompt_domain
+      PUBLIC_HTTP_PORT="80"
+      PUBLIC_HTTPS_PORT="$(prompt_default "[3/8] 请输入 HTTPS 公网端口，Cloudflare 小黄云推荐 443" "$PUBLIC_HTTPS_PORT")"
+      if prompt_yes_no "[4/8] 你是否已经在 Cloudflare 开启或准备开启小黄云？" "Y"; then
+        CF_RECORD_PROXIED="true"
+        ORIGIN_LOCKDOWN_TO_CLOUDFLARE="true"
+      else
+        CF_RECORD_PROXIED="false"
+        ORIGIN_LOCKDOWN_TO_CLOUDFLARE="false"
+        ACCESS_MODE="domain-direct"
+      fi
+      if prompt_yes_no "[5/8] 是否提供 Cloudflare API Token 以启用 DNS-01 全自动证书？普通用户可选 n" "n"; then
+        CF_API_TOKEN="$(prompt_secret_optional "请输入 Cloudflare API Token（输入时不显示）：")"
+        CF_ZONE_NAME="$(prompt_default "请输入 Cloudflare Zone 名称，例如 example.com" "$CF_ZONE_NAME")"
+        CERT_MODE="dns"
+      else
+        CERT_MODE="http"
+      fi
+      ENABLE_TLS="true"
+      CERTBOT_EMAIL="$(prompt_default "[6/8] 请输入 Let's Encrypt 邮箱" "${CERTBOT_EMAIL:-ops@example.com}")"
+      ;;
+    *)
+      die "访问方式只能选择 1、2 或 3。"
+      ;;
+  esac
+
+  echo
+  if prompt_yes_no "[7/8] 是否现在填写 Telegram Bot Token 和 Chat ID？" "n"; then
+    TELEGRAM_BOT_TOKEN="$(prompt_secret_optional "请输入 Telegram Bot Token（输入时不显示）：")"
+    TELEGRAM_CHAT_ID="$(prompt_default "请输入 Telegram Chat ID" "$TELEGRAM_CHAT_ID")"
+  fi
+
+  normalize_access_mode
+  validate_required_inputs
+  validate_runtime_config
+  print_install_summary
+  prompt_yes_no "[8/8] 确认开始安装？" "Y" || die "用户取消安装。"
+}
+
+print_install_summary() {
+  local access_label public_url
+  case "$ACCESS_MODE" in
+    ip)
+      access_label="IP + 端口"
+      detect_origin_ips
+      public_url="http://${ORIGIN_IPV4:-服务器IP}:${APP_PORT}"
+      ;;
+    domain-direct)
+      access_label="域名直连"
+      public_url="$(bool_is_true "$ENABLE_TLS" && printf 'https' || printf 'http')://${FQDN}"
+      ;;
+    domain-cf)
+      access_label="Cloudflare 小黄云"
+      public_url="https://${FQDN}"
+      ;;
+  esac
+  if bool_is_true "$ENABLE_TLS" && [[ "$PUBLIC_HTTPS_PORT" != "443" ]]; then
+    public_url="${public_url}:${PUBLIC_HTTPS_PORT}"
+  elif ! bool_is_true "$ENABLE_TLS" && [[ "$ACCESS_MODE" != "ip" && "$PUBLIC_HTTP_PORT" != "80" ]]; then
+    public_url="${public_url}:${PUBLIC_HTTP_PORT}"
+  fi
+
+  echo
+  echo "${C_BOLD}${C_GREEN}安装摘要${C_RESET}"
+  echo "访问方式：      ${access_label}"
+  echo "面板地址：      ${public_url}${PORTAL_PATH:-/portal_自动生成}"
+  echo "应用监听：      ${APP_HOST}:${APP_PORT}"
+  echo "Nginx：         ${ENABLE_NGINX}"
+  echo "HTTPS：         ${ENABLE_TLS}"
+  echo "证书模式：      ${CERT_MODE}"
+  echo "小黄云代理：    ${CF_RECORD_PROXIED}"
+  echo "源站锁定 CF：   ${ORIGIN_LOCKDOWN_TO_CLOUDFLARE}"
+  echo "监控/测试端口： ${MONITOR_DEBUG_PORT}/${TEST_DEBUG_PORT}"
+  echo
 }
 
 ensure_packages() {
@@ -536,7 +876,7 @@ for raw in sys.argv[1].split(","):
 PY
 }
 
-issue_certificate() {
+issue_certificate_dns() {
   [[ -n "$CERTBOT_EMAIL" ]] || die "CERTBOT_EMAIL is required for Let's Encrypt."
   write_cloudflare_credentials
 
@@ -573,6 +913,87 @@ issue_certificate() {
     -m "$CERTBOT_EMAIL" \
     "${extra_flags[@]}" \
     "${args[@]}"
+}
+
+write_acme_challenge_nginx() {
+  local domains_csv server_names
+  domains_csv="$(build_tls_domains)"
+  server_names="$(printf '%s' "$domains_csv" | tr ',' ' ')"
+  mkdir -p "$ACME_WEBROOT/.well-known/acme-challenge"
+
+  cat > "$NGINX_SITE_PATH" <<EOF
+server {
+    listen 80;
+    listen [::]:80;
+    server_name ${server_names};
+
+    location /.well-known/acme-challenge/ {
+        root ${ACME_WEBROOT};
+        try_files \$uri =404;
+    }
+
+    location / {
+        return 200 'NOAFF ACME preflight is ready.';
+        add_header Content-Type text/plain;
+    }
+}
+EOF
+
+  rm -f /etc/nginx/sites-enabled/default
+  ln -sf "$NGINX_SITE_PATH" "$NGINX_SITE_LINK"
+  nginx -t
+  systemctl enable nginx
+  systemctl restart nginx
+}
+
+issue_certificate_http() {
+  [[ -n "$CERTBOT_EMAIL" ]] || die "CERTBOT_EMAIL is required for Let's Encrypt."
+  [[ "$PUBLIC_HTTP_PORT" == "80" ]] || die "HTTP-01 certificate mode requires PUBLIC_HTTP_PORT=80."
+
+  local domains_csv args=()
+  domains_csv="$(build_tls_domains)"
+  IFS=',' read -r -a domain_items <<< "$domains_csv"
+  local domain
+  for domain in "${domain_items[@]}"; do
+    domain="$(printf '%s' "$domain" | xargs)"
+    [[ -n "$domain" ]] && args+=("-d" "$domain")
+  done
+  [[ "${#args[@]}" -gt 0 ]] || die "No valid TLS domains were provided."
+
+  write_acme_challenge_nginx
+
+  local extra_flags=()
+  bool_is_true "$LETSENCRYPT_STAGING" && extra_flags+=(--staging)
+
+  "$CERTBOT_BIN" certonly \
+    --webroot \
+    --webroot-path "$ACME_WEBROOT" \
+    --agree-tos \
+    --non-interactive \
+    --keep-until-expiring \
+    -m "$CERTBOT_EMAIL" \
+    "${extra_flags[@]}" \
+    "${args[@]}"
+}
+
+issue_certificate() {
+  if ! bool_is_true "$ENABLE_TLS"; then
+    return
+  fi
+  case "$CERT_MODE" in
+    dns)
+      issue_certificate_dns
+      ;;
+    http)
+      issue_certificate_http
+      ;;
+    none)
+      return
+      ;;
+    *)
+      die "Unknown CERT_MODE: $CERT_MODE"
+      ;;
+  esac
 }
 
 fetch_cloudflare_ips() {
@@ -622,6 +1043,10 @@ EOF
 }
 
 configure_nginx() {
+  if ! bool_is_true "$ENABLE_NGINX"; then
+    return
+  fi
+
   local domains_csv primary_domain
   domains_csv="$(build_tls_domains)"
   primary_domain="$(printf '%s' "$domains_csv" | cut -d',' -f1 | xargs)"
@@ -633,6 +1058,38 @@ configure_nginx() {
   fi
 
   mkdir -p /var/www/html
+
+  if ! bool_is_true "$ENABLE_TLS"; then
+    cat > "$NGINX_SITE_PATH" <<EOF
+server {
+    listen ${PUBLIC_HTTP_PORT};
+    listen [::]:${PUBLIC_HTTP_PORT};
+    server_name ${server_names};
+
+    client_max_body_size 2m;
+
+    location / {
+        proxy_pass http://${APP_HOST}:${APP_PORT};
+        proxy_http_version 1.1;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto http;
+        proxy_set_header X-Forwarded-Host \$host;
+        proxy_set_header X-Forwarded-Port ${PUBLIC_HTTP_PORT};
+        proxy_set_header Upgrade \$http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_read_timeout 90;
+    }
+}
+EOF
+    rm -f /etc/nginx/sites-enabled/default
+    ln -sf "$NGINX_SITE_PATH" "$NGINX_SITE_LINK"
+    nginx -t
+    systemctl enable nginx
+    systemctl restart nginx
+    return
+  fi
 
   cat > "$NGINX_SITE_PATH" <<EOF
 server {
@@ -749,6 +1206,47 @@ WantedBy=multi-user.target
 EOF
 }
 
+write_upgrade_service() {
+  cat > "$UPGRADE_SCRIPT" <<EOF
+#!/usr/bin/env bash
+set -Eeuo pipefail
+exec > >(tee -a "$UPGRADE_LOG") 2>&1
+echo
+echo "[\$(date '+%Y-%m-%d %H:%M:%S')] 开始升级 ${APP_NAME}"
+cd "$APP_DIR"
+git fetch origin "$REPO_REF" --prune
+git checkout "$REPO_REF"
+git pull --ff-only origin "$REPO_REF"
+${APP_DIR}/.venv/bin/python -m pip install --upgrade pip setuptools wheel
+${APP_DIR}/.venv/bin/pip install -r requirements.txt
+chown -R "$SERVICE_USER:$SERVICE_USER" "$APP_DIR"
+systemctl restart "$APP_NAME"
+echo "[\$(date '+%Y-%m-%d %H:%M:%S')] 升级完成"
+EOF
+  chmod 755 "$UPGRADE_SCRIPT"
+  touch "$UPGRADE_LOG"
+  chmod 644 "$UPGRADE_LOG"
+
+  cat > "$UPGRADE_SERVICE" <<EOF
+[Unit]
+Description=Upgrade NOAFF Restock Monitor
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=$UPGRADE_SCRIPT
+EOF
+}
+
+write_systemd_units() {
+  write_app_service
+  write_upgrade_service
+  if bool_is_true "$ENABLE_TLS"; then
+    write_certbot_renewal_units
+  fi
+}
+
 write_certbot_renewal_units() {
   cat > "$CERTBOT_RENEW_SCRIPT" <<EOF
 #!/usr/bin/env bash
@@ -786,33 +1284,44 @@ enable_services() {
   systemctl restart redis-server
   systemctl enable "${APP_NAME}"
   systemctl restart "${APP_NAME}"
-  systemctl enable "$(basename "$CERTBOT_RENEW_TIMER")"
-  systemctl restart "$(basename "$CERTBOT_RENEW_TIMER")"
+  if bool_is_true "$ENABLE_TLS"; then
+    systemctl enable "$(basename "$CERTBOT_RENEW_TIMER")"
+    systemctl restart "$(basename "$CERTBOT_RENEW_TIMER")"
+  fi
 }
 
 adjust_firewall() {
   if command_exists ufw && ufw status | grep -qi active; then
-    ufw allow "${PUBLIC_HTTP_PORT}/tcp" || true
-    ufw allow "${PUBLIC_HTTPS_PORT}/tcp" || true
+    if bool_is_true "$ENABLE_NGINX"; then
+      ufw allow "${PUBLIC_HTTP_PORT}/tcp" || true
+      bool_is_true "$ENABLE_TLS" && ufw allow "${PUBLIC_HTTPS_PORT}/tcp" || true
+    else
+      ufw allow "${APP_PORT}/tcp" || true
+    fi
   fi
 }
 
 final_summary() {
-  local domains_csv primary_domain
-  domains_csv="$(build_tls_domains)"
-  primary_domain="$(printf '%s' "$domains_csv" | cut -d',' -f1 | xargs)"
-  local public_url="https://${primary_domain}"
-  if [[ "$PUBLIC_HTTPS_PORT" != "443" ]]; then
-    public_url="${public_url}:${PUBLIC_HTTPS_PORT}"
+  local public_url
+  if [[ "$ACCESS_MODE" == "ip" ]]; then
+    detect_origin_ips
+    public_url="http://${ORIGIN_IPV4:-服务器IP}:${APP_PORT}"
+  elif bool_is_true "$ENABLE_TLS"; then
+    public_url="https://${FQDN}"
+    [[ "$PUBLIC_HTTPS_PORT" != "443" ]] && public_url="${public_url}:${PUBLIC_HTTPS_PORT}"
+  else
+    public_url="http://${FQDN}"
+    [[ "$PUBLIC_HTTP_PORT" != "80" ]] && public_url="${public_url}:${PUBLIC_HTTP_PORT}"
   fi
 
   echo
-  echo "NOAFF monitor is installed."
+  echo "${C_GREEN}${C_BOLD}NOAFF monitor is installed.${C_RESET}"
   echo "Service:   systemctl status ${APP_NAME} --no-pager"
   echo "Logs:      journalctl -u ${APP_NAME} -f"
-  echo "Nginx:     systemctl status nginx --no-pager"
-  echo "Cert renew: systemctl list-timers | grep ${APP_NAME}"
-  echo "Domain:    ${public_url}${PORTAL_PATH}"
+  bool_is_true "$ENABLE_NGINX" && echo "Nginx:     systemctl status nginx --no-pager"
+  bool_is_true "$ENABLE_TLS" && echo "Cert renew: systemctl list-timers | grep ${APP_NAME}"
+  echo "Upgrade:   systemctl start ${APP_NAME}-upgrade.service"
+  echo "Panel:     ${public_url}${PORTAL_PATH}"
   echo "Admin:     ${ADMIN_USERNAME}"
   if [[ -f "${APP_DIR}/data/bootstrap_admin.txt" ]]; then
     echo "Password:  ${ADMIN_PASSWORD}"
@@ -821,61 +1330,81 @@ final_summary() {
   fi
   echo "Portal:    ${PORTAL_PATH}"
   echo
-  echo "If Cloudflare SSL mode was not switched automatically, set it to Full (strict)."
+  if [[ "$ACCESS_MODE" == "domain-cf" ]]; then
+    echo "If Cloudflare SSL mode was not switched automatically, set it to Full (strict)."
+  fi
   echo "Delete ${APP_DIR}/data/bootstrap_admin.txt after first password change."
+}
+
+set_total_steps() {
+  TOTAL_STEPS=8
+  bool_is_true "$ENABLE_TLS" && TOTAL_STEPS=$((TOTAL_STEPS + 2))
+  [[ "$CERT_MODE" == "dns" ]] && TOTAL_STEPS=$((TOTAL_STEPS + 1))
+  bool_is_true "$ORIGIN_LOCKDOWN_TO_CLOUDFLARE" && TOTAL_STEPS=$((TOTAL_STEPS + 1))
+  bool_is_true "$ENABLE_NGINX" && TOTAL_STEPS=$((TOTAL_STEPS + 1))
 }
 
 main() {
   parse_args "$@"
+  if ! bool_is_true "$INSTALL_VALIDATE_ONLY"; then
+    require_root
+    touch "$INSTALL_LOG"
+    chmod 644 "$INSTALL_LOG"
+    exec > >(tee -a "$INSTALL_LOG") 2>&1
+  fi
+  if should_run_interactive_wizard; then
+    interactive_wizard
+  fi
+  normalize_access_mode
+
   if bool_is_true "$INSTALL_VALIDATE_ONLY"; then
     validate_only
     return
   fi
 
-  require_root
   validate_required_inputs
+  validate_runtime_config
+  set_total_steps
 
-  log "Installing system packages"
-  ensure_packages
-  ensure_browser
-  ensure_service_user
+  run_step "安装系统依赖" ensure_packages
+  run_step "安装/定位 Chromium 浏览器" ensure_browser
+  run_step "创建服务用户" ensure_service_user
 
-  log "Fetching application source"
-  clone_or_update_repo
+  run_step "拉取或更新应用源码" clone_or_update_repo
   load_existing_env_defaults
   validate_required_inputs
   validate_runtime_config
 
-  log "Installing Python dependencies"
-  setup_python_env
+  run_step "安装 Python 虚拟环境依赖" setup_python_env
 
-  log "Installing certbot DNS-Cloudflare runtime"
-  setup_certbot_env
+  if bool_is_true "$ENABLE_TLS"; then
+    run_step "安装 Certbot 证书运行环境" setup_certbot_env
+  fi
 
-  log "Configuring Cloudflare DNS"
-  configure_cloudflare_dns
+  if [[ "$CERT_MODE" == "dns" ]]; then
+    run_step "配置 Cloudflare DNS / 小黄云" configure_cloudflare_dns
+  fi
 
-  log "Issuing or renewing TLS certificate"
-  issue_certificate
+  if bool_is_true "$ENABLE_TLS"; then
+    run_step "申请或续期 HTTPS 证书" issue_certificate
+  fi
 
-  log "Writing Cloudflare-aware nginx snippets"
-  write_cloudflare_nginx_snippets
+  if bool_is_true "$ORIGIN_LOCKDOWN_TO_CLOUDFLARE"; then
+    run_step "写入 Cloudflare 回源识别与锁定规则" write_cloudflare_nginx_snippets
+  fi
 
-  log "Writing application environment"
-  write_env_file
+  run_step "写入应用环境配置" write_env_file
 
-  log "Writing systemd service and renewal timer"
-  write_app_service
-  write_certbot_renewal_units
+  run_step "写入 systemd 服务与升级服务" write_systemd_units
 
   mkdir -p "${APP_DIR}/data"
   chown -R "${SERVICE_USER}:${SERVICE_USER}" "${APP_DIR}"
 
-  log "Configuring nginx reverse proxy"
-  configure_nginx
+  if bool_is_true "$ENABLE_NGINX"; then
+    run_step "配置 Nginx 反向代理" configure_nginx
+  fi
 
-  log "Enabling services"
-  enable_services
+  run_step "启动并启用系统服务" enable_services
 
   adjust_firewall
   final_summary

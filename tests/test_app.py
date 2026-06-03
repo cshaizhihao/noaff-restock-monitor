@@ -216,6 +216,19 @@ class PortalAppTestCase(unittest.TestCase):
         payload = refreshed.get_json()
         self.assertEqual(payload["metrics"]["total"], 1)
         self.assertEqual(len(payload["tasks"]), 1)
+        self.assertIn("system", payload)
+        self.assertIn("version", payload["system"])
+
+    def test_system_upgrade_endpoint_reports_unsupported_local_environment(self) -> None:
+        _, headers = self.login()
+        response = self.client.post(
+            f"{app_module.PORTAL_PATH}/api/system/upgrade",
+            headers=headers,
+            base_url=BASE_URL,
+            json={},
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("暂不支持", response.get_json()["message"])
 
     def test_telegram_state_machine_sends_edits_and_clears_message_id(self) -> None:
         _, headers = self.login()

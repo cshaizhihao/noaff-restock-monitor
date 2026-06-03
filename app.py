@@ -92,6 +92,8 @@ PROXY_FIX_X_FOR = int(os.getenv("PROXY_FIX_X_FOR", "1"))
 PROXY_FIX_X_PROTO = int(os.getenv("PROXY_FIX_X_PROTO", "1"))
 PROXY_FIX_X_HOST = int(os.getenv("PROXY_FIX_X_HOST", "1"))
 PROXY_FIX_X_PORT = int(os.getenv("PROXY_FIX_X_PORT", "1"))
+UPGRADE_SERVICE_NAME = os.getenv("UPGRADE_SERVICE_NAME", "noaff-monitor-upgrade.service")
+UPGRADE_LOG_PATH = Path(os.getenv("UPGRADE_LOG_PATH", "/var/log/noaff-monitor-upgrade.log"))
 
 LOGIN_RATE_LIMIT = os.getenv("LOGIN_RATE_LIMIT", "5 per minute")
 GENERAL_MUTATION_LIMIT = os.getenv("GENERAL_MUTATION_LIMIT", "40 per minute")
@@ -186,6 +188,52 @@ def mask_secret(value: str) -> str:
     if len(value) <= 8:
         return "*" * len(value)
     return f"{value[:4]}{'*' * (len(value) - 8)}{value[-4:]}"
+
+
+def run_short_command(args: list[str], timeout: int = 4) -> str:
+    try:
+        completed = subprocess.run(
+            args,
+            cwd=BASE_DIR,
+            text=True,
+            capture_output=True,
+            timeout=timeout,
+            check=False,
+        )
+    except Exception:
+        return ""
+    if completed.returncode != 0:
+        return ""
+    return completed.stdout.strip()
+
+
+def tail_file(path: Path, lines: int = 12) -> list[str]:
+    try:
+        content = path.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return []
+    return content[-lines:]
+
+
+def upgrade_service_exists() -> bool:
+    return any(
+        Path(base, UPGRADE_SERVICE_NAME).exists()
+        for base in ("/etc/systemd/system", "/lib/systemd/system", "/usr/lib/systemd/system")
+    )
+
+
+def system_payload() -> dict[str, Any]:
+    commit = run_short_command(["git", "rev-parse", "--short", "HEAD"])
+    branch = run_short_command(["git", "rev-parse", "--abbrev-ref", "HEAD"])
+    tag = run_short_command(["git", "describe", "--tags", "--exact-match", "HEAD"])
+    return {
+        "version": tag or commit or "unknown",
+        "branch": branch or "",
+        "commit": commit or "",
+        "upgrade_service": UPGRADE_SERVICE_NAME,
+        "upgrade_supported": bool(shutil.which("systemctl") and upgrade_service_exists()),
+        "upgrade_log": tail_file(UPGRADE_LOG_PATH),
+    }
 
 
 def validate_http_url(candidate: str) -> bool:
@@ -1070,6 +1118,7 @@ def make_app() -> Flask:
                     "enabled": sum(1 for task in tasks if task["enabled"]),
                 },
                 "engine": app.extensions["monitor_engine"].get_status(),
+                "system": system_payload(),
                 "logs": [dict(row) for row in logs],
                 "csrf_token": ensure_csrf_token(),
             }
@@ -1303,6 +1352,28 @@ def make_app() -> Flask:
     def restart_engine():
         app.extensions["monitor_engine"].restart("panel action")
         return jsonify({"ok": True, "message": "浏览器引擎已重启。"})
+
+    @app.route(f"{PORTAL_PATH}/api/system/upgrade", methods=["POST"])
+    @login_required
+    @limiter.limit("3 per hour")
+    def start_system_upgrade():
+        if not shutil.which("systemctl") or not upgrade_service_exists():
+            return jsonify({"ok": False, "message": "当前环境不是安装脚本部署版，暂不支持面板内升级。"}), 400
+        try:
+            completed = subprocess.run(
+                ["systemctl", "start", UPGRADE_SERVICE_NAME],
+                text=True,
+                capture_output=True,
+                timeout=12,
+                check=False,
+            )
+        except Exception as exc:
+            return jsonify({"ok": False, "message": f"升级服务启动失败：{exc}"}), 500
+        if completed.returncode != 0:
+            message = (completed.stderr or completed.stdout or "升级服务启动失败。").strip()
+            return jsonify({"ok": False, "message": message}), 500
+        log_activity("warning", "system", f"管理员 {session.get('admin_username', '')} 已启动系统升级。")
+        return jsonify({"ok": True, "message": "升级任务已启动，请稍后查看升级日志。", "system": system_payload()})
 
     return app
 
