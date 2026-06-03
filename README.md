@@ -88,9 +88,10 @@ http://127.0.0.1:7777/<你的 PORTAL_PATH>
 python -m unittest discover -s tests -v
 python -m py_compile app.py tests/test_app.py
 bash -n install.sh
+bash install.sh --help
 ```
 
-测试覆盖隐藏入口、浏览器 UA 校验、CSRF / AJAX 写操作拦截、登录限流、任务创建、端口隔离校验、管理员重名处理、精准切片、库存解析，以及安装脚本的 Cloudflare JSON 解析和代理端口校验。
+测试覆盖隐藏入口、浏览器 UA 校验、CSRF / AJAX 写操作拦截、登录限流、任务创建、端口隔离校验、管理员重名处理、精准切片、库存解析，以及安装脚本的 Cloudflare JSON 解析、代理端口校验和预检模式。
 
 ## 生产部署说明
 
@@ -131,6 +132,16 @@ CF_ZONE_NAME=example.com \
 CF_API_TOKEN=cf_xxx \
 CERTBOT_EMAIL=ops@example.com \
 bash install.sh
+```
+
+正式安装前可以先跑预检模式。它只校验必要变量、TLS 域名和 Cloudflare 小黄云可代理端口，不会安装 apt 依赖、写入 Nginx 或注册 systemd：
+
+```bash
+FQDN=monitor.example.com \
+CF_ZONE_NAME=example.com \
+CF_API_TOKEN=cf_xxx \
+CERTBOT_EMAIL=ops@example.com \
+bash install.sh --validate-only
 ```
 
 常用自定义示例：

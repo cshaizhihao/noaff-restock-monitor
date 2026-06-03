@@ -64,6 +64,27 @@ class InstallScriptTestCase(unittest.TestCase):
         result = self.run_bash("bash -n install.sh")
         self.assertEqual(result.returncode, 0, msg=result.stderr)
 
+    def test_help_mode_does_not_require_root(self) -> None:
+        output = self.assert_shell_ok("bash install.sh --help")
+        self.assertIn("NOAFF Restock Monitor installer", output)
+        self.assertIn("--validate-only", output)
+
+    def test_validate_only_accepts_complete_configuration(self) -> None:
+        output = self.assert_shell_ok(
+            textwrap.dedent(
+                r"""
+                FQDN=monitor.example.com \
+                CF_ZONE_NAME=example.com \
+                CF_API_TOKEN=test-token \
+                CERTBOT_EMAIL=ops@example.com \
+                bash install.sh --validate-only
+                """
+            )
+        )
+        self.assertIn("NOAFF installer validation passed.", output)
+        self.assertIn("APP_BIND:          127.0.0.1:7777", output)
+        self.assertIn("PUBLIC_HTTPS_PORT: 443", output)
+
     def test_cloudflare_zone_and_dns_record_json_parsing(self) -> None:
         output = self.assert_shell_ok(
             textwrap.dedent(

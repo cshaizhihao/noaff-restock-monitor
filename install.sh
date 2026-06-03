@@ -49,6 +49,7 @@ PROXY_FIX_X_FOR="${PROXY_FIX_X_FOR:-1}"
 PROXY_FIX_X_PROTO="${PROXY_FIX_X_PROTO:-1}"
 PROXY_FIX_X_HOST="${PROXY_FIX_X_HOST:-1}"
 PROXY_FIX_X_PORT="${PROXY_FIX_X_PORT:-1}"
+INSTALL_VALIDATE_ONLY=false
 
 CF_CREDENTIALS_PATH="/root/.secrets/certbot/cloudflare.ini"
 CF_REALIP_SNIPPET="/etc/nginx/snippets/noaff-cloudflare-realip.conf"
@@ -75,6 +76,55 @@ warn() {
 die() {
   printf '\n[ERROR] %s\n' "$*" >&2
   exit 1
+}
+
+usage() {
+  cat <<'EOF'
+NOAFF Restock Monitor installer
+
+Usage:
+  bash install.sh [--validate-only]
+  bash install.sh --help
+
+Required environment:
+  FQDN              Public panel domain, for example monitor.example.com
+  CF_ZONE_NAME     Cloudflare zone name, for example example.com
+    or CF_ZONE_ID  Cloudflare zone id
+  CF_API_TOKEN     Cloudflare API token
+  CERTBOT_EMAIL    Let's Encrypt account email
+
+Common optional environment:
+  APP_PORT=7777
+  PUBLIC_HTTP_PORT=80
+  PUBLIC_HTTPS_PORT=443
+  TLS_DOMAINS=monitor.example.com,www.monitor.example.com
+  MONITOR_DEBUG_PORT=9223
+  TEST_DEBUG_PORT=9334
+  CF_RECORD_PROXIED=true
+  REPO_REF=master
+
+Modes:
+  --validate-only  Validate required variables and Cloudflare-compatible ports without installing.
+  --help           Show this help.
+EOF
+}
+
+parse_args() {
+  while [[ "$#" -gt 0 ]]; do
+    case "$1" in
+      --validate-only)
+        INSTALL_VALIDATE_ONLY=true
+        shift
+        ;;
+      -h|--help)
+        usage
+        exit 0
+        ;;
+      *)
+        die "Unknown argument: $1"
+        ;;
+    esac
+  done
 }
 
 command_exists() {
@@ -231,6 +281,32 @@ validate_runtime_config() {
     port_in_list "$PUBLIC_HTTP_PORT" "${CF_SUPPORTED_HTTP_PORTS[@]}" || die "PUBLIC_HTTP_PORT=${PUBLIC_HTTP_PORT} is not supported by Cloudflare orange-cloud proxy. Supported HTTP ports: ${CF_SUPPORTED_HTTP_PORTS[*]}"
     port_in_list "$PUBLIC_HTTPS_PORT" "${CF_SUPPORTED_HTTPS_PORTS[@]}" || die "PUBLIC_HTTPS_PORT=${PUBLIC_HTTPS_PORT} is not supported by Cloudflare orange-cloud proxy. Supported HTTPS ports: ${CF_SUPPORTED_HTTPS_PORTS[*]}"
   fi
+}
+
+validate_required_inputs() {
+  [[ -n "$FQDN" ]] || die "FQDN is required, for example FQDN=monitor.example.com"
+  [[ -n "$CF_ZONE_NAME" || -n "$CF_ZONE_ID" ]] || die "CF_ZONE_NAME or CF_ZONE_ID is required"
+  [[ -n "$CF_API_TOKEN" ]] || die "CF_API_TOKEN is required"
+  [[ -n "$CERTBOT_EMAIL" ]] || die "CERTBOT_EMAIL is required"
+}
+
+print_validation_summary() {
+  local domains_csv
+  domains_csv="$(build_tls_domains)"
+  echo "NOAFF installer validation passed."
+  echo "FQDN:              ${FQDN}"
+  echo "TLS_DOMAINS:       ${domains_csv}"
+  echo "APP_BIND:          ${APP_HOST}:${APP_PORT}"
+  echo "PUBLIC_HTTP_PORT:  ${PUBLIC_HTTP_PORT}"
+  echo "PUBLIC_HTTPS_PORT: ${PUBLIC_HTTPS_PORT}"
+  echo "CF_RECORD_PROXIED: ${CF_RECORD_PROXIED}"
+  echo "MONITOR/TEST CDP:  ${MONITOR_DEBUG_PORT}/${TEST_DEBUG_PORT}"
+}
+
+validate_only() {
+  validate_required_inputs
+  validate_runtime_config
+  print_validation_summary
 }
 
 ensure_packages() {
@@ -750,11 +826,14 @@ final_summary() {
 }
 
 main() {
+  parse_args "$@"
+  if bool_is_true "$INSTALL_VALIDATE_ONLY"; then
+    validate_only
+    return
+  fi
+
   require_root
-  [[ -n "$FQDN" ]] || die "FQDN is required, for example FQDN=monitor.example.com"
-  [[ -n "$CF_ZONE_NAME" || -n "$CF_ZONE_ID" ]] || die "CF_ZONE_NAME or CF_ZONE_ID is required"
-  [[ -n "$CF_API_TOKEN" ]] || die "CF_API_TOKEN is required"
-  [[ -n "$CERTBOT_EMAIL" ]] || die "CERTBOT_EMAIL is required"
+  validate_required_inputs
 
   log "Installing system packages"
   ensure_packages
@@ -764,6 +843,7 @@ main() {
   log "Fetching application source"
   clone_or_update_repo
   load_existing_env_defaults
+  validate_required_inputs
   validate_runtime_config
 
   log "Installing Python dependencies"
