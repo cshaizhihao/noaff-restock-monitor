@@ -7,9 +7,12 @@ APP_DIR="${APP_DIR:-/opt/noaff-monitor}"
 REPO_URL="${REPO_URL:-https://github.com/cshaizhihao/noaff-restock-monitor.git}"
 REPO_REF="${REPO_REF:-master}"
 GIT_AUTH_TOKEN="${GIT_AUTH_TOKEN:-${GH_TOKEN:-}}"
+DEPLOY_MODE="${DEPLOY_MODE:-native}"
 
 APP_HOST="${APP_HOST:-127.0.0.1}"
 APP_PORT="${APP_PORT:-7777}"
+PUBLIC_APP_PORT="${PUBLIC_APP_PORT:-$APP_PORT}"
+DOCKER_BIND_HOST="${DOCKER_BIND_HOST:-0.0.0.0}"
 PUBLIC_HTTP_PORT="${PUBLIC_HTTP_PORT:-80}"
 PUBLIC_HTTPS_PORT="${PUBLIC_HTTPS_PORT:-443}"
 ACCESS_MODE="${ACCESS_MODE:-}"
@@ -161,8 +164,15 @@ Install modes:
   ACCESS_MODE=domain-direct  Domain direct mode without Cloudflare orange-cloud
   ACCESS_MODE=domain-cf      Domain mode with Cloudflare orange-cloud
 
+Deploy modes:
+  DEPLOY_MODE=native          Native systemd deployment
+  DEPLOY_MODE=docker          Docker Compose isolated deployment, high-port only
+
 Common optional environment:
+  DEPLOY_MODE=native
   APP_PORT=7777
+  PUBLIC_APP_PORT=7777
+  DOCKER_BIND_HOST=0.0.0.0
   PUBLIC_HTTP_PORT=80
   PUBLIC_HTTPS_PORT=443
   FQDN=monitor.example.com
@@ -381,6 +391,27 @@ apt_install() {
 }
 
 normalize_access_mode() {
+  case "$DEPLOY_MODE" in
+    native|docker)
+      ;;
+    *)
+      die "DEPLOY_MODE must be native or docker."
+      ;;
+  esac
+
+  if [[ "$DEPLOY_MODE" == "docker" ]]; then
+    ACCESS_MODE="ip"
+    ENABLE_NGINX="false"
+    ENABLE_TLS="false"
+    CERT_MODE="none"
+    CF_RECORD_PROXIED="false"
+    ORIGIN_LOCKDOWN_TO_CLOUDFLARE="false"
+    SESSION_COOKIE_SECURE="false"
+    ENABLE_PROXY_FIX="false"
+    APP_HOST="0.0.0.0"
+    LIMITER_STORAGE_URI="redis://redis:6379/0"
+  fi
+
   if [[ -z "$ACCESS_MODE" ]]; then
     if [[ -n "$FQDN" ]]; then
       if bool_is_true "$CF_RECORD_PROXIED"; then
@@ -489,6 +520,7 @@ print_validation_summary() {
   local domains_csv="-"
   [[ -n "$FQDN" ]] && domains_csv="$(build_tls_domains)"
   echo "NOAFF installer validation passed."
+  echo "DEPLOY_MODE:       ${DEPLOY_MODE}"
   echo "ACCESS_MODE:       ${ACCESS_MODE}"
   echo "FQDN:              ${FQDN:-IP mode}"
   echo "TLS_DOMAINS:       ${domains_csv}"
@@ -539,8 +571,44 @@ interactive_wizard() {
   echo "${C_DIM}脚本会显示每一步进度和命令输出，不会黑盒安装。${C_RESET}"
   echo
 
+  echo "${C_BOLD}[0/9] 选择部署方式${C_RESET}"
+  echo "  1) Docker 隔离 + 高位端口，不接管现有 Nginx（推荐已有网站的机器）"
+  echo "  2) 原生 systemd + 可选 Nginx，适合干净机器"
+  local deploy_choice
+  deploy_choice="$(prompt_default "请选择" "1")"
+  case "$deploy_choice" in
+    1)
+      DEPLOY_MODE="docker"
+      ;;
+    2)
+      DEPLOY_MODE="native"
+      ;;
+    *)
+      die "部署方式只能选择 1 或 2。"
+      ;;
+  esac
+
   APP_PORT="$(prompt_default "[1/8] 请输入应用本机端口" "$APP_PORT")"
   validate_port "APP_PORT" "$APP_PORT" 1024 65535
+
+  if [[ "$DEPLOY_MODE" == "docker" ]]; then
+    ACCESS_MODE="ip"
+    PUBLIC_APP_PORT="$(prompt_default "[2/9] 请输入 Docker 对外访问端口" "$PUBLIC_APP_PORT")"
+    validate_port "PUBLIC_APP_PORT" "$PUBLIC_APP_PORT" 1024 65535
+    DOCKER_BIND_HOST="$(prompt_default "[3/9] 监听地址，0.0.0.0 表示公网可访问" "$DOCKER_BIND_HOST")"
+    echo
+    warn "Docker 模式不会修改或重启宿主机 Nginx。已有 Nginx 可手动反代到 ${DOCKER_BIND_HOST}:${PUBLIC_APP_PORT}。"
+    if prompt_yes_no "[4/9] 是否现在填写 Telegram Bot Token 和 Chat ID？" "n"; then
+      TELEGRAM_BOT_TOKEN="$(prompt_secret_optional "请输入 Telegram Bot Token（输入时不显示）：")"
+      TELEGRAM_CHAT_ID="$(prompt_default "请输入 Telegram Chat ID" "$TELEGRAM_CHAT_ID")"
+    fi
+    normalize_access_mode
+    validate_required_inputs
+    validate_runtime_config
+    print_install_summary
+    prompt_yes_no "[5/9] 确认开始 Docker 安装？" "Y" || die "用户取消安装。"
+    return
+  fi
 
   echo
   echo "${C_BOLD}[2/8] 选择访问方式${C_RESET}"
@@ -672,6 +740,27 @@ ensure_browser() {
   [[ -n "$CHROMIUM_BINARY" ]] || die "Chromium was not found. Install chromium manually and rerun this script."
 }
 
+ensure_docker() {
+  if ! command_exists docker; then
+    export DEBIAN_FRONTEND=noninteractive
+    apt-get update
+    apt_install docker.io
+  fi
+  if ! docker compose version >/dev/null 2>&1 && ! command_exists docker-compose; then
+    apt_install docker-compose-plugin || apt_install docker-compose
+  fi
+  systemctl enable docker
+  systemctl restart docker
+}
+
+docker_compose() {
+  if docker compose version >/dev/null 2>&1; then
+    docker compose "$@"
+  else
+    docker-compose "$@"
+  fi
+}
+
 ensure_service_user() {
   if ! id "$SERVICE_USER" >/dev/null 2>&1; then
     useradd --system --home "$APP_DIR" --shell /usr/sbin/nologin "$SERVICE_USER"
@@ -720,6 +809,12 @@ setup_python_env() {
   python3 -m venv .venv
   .venv/bin/python -m pip install --upgrade pip setuptools wheel
   .venv/bin/pip install -r requirements.txt
+}
+
+deploy_docker_stack() {
+  cd "$APP_DIR"
+  mkdir -p data
+  docker_compose up -d --build
 }
 
 setup_certbot_env() {
@@ -945,7 +1040,6 @@ server {
 }
 EOF
 
-  rm -f /etc/nginx/sites-enabled/default
   ln -sf "$NGINX_SITE_PATH" "$NGINX_SITE_LINK"
   restart_nginx_safely
 }
@@ -1007,32 +1101,55 @@ fetch_cloudflare_ips() {
 restart_nginx_safely() {
   nginx -t
   systemctl enable nginx
-  if systemctl restart nginx; then
+
+  if systemctl is-active --quiet nginx; then
+    log "检测到 Nginx 已在运行，仅执行 reload，不影响已有连接。"
+    systemctl reload nginx && return
+    journalctl -u nginx --no-pager -n 60 -l || true
+    die "Nginx reload 失败。安装脚本不会重启或清理已有 Nginx，请检查上方日志。"
+  fi
+
+  if nginx_managed_ports_are_busy; then
+    warn "检测到 80/443 等公网端口已被现有进程占用，安装脚本不会杀掉或重启它们。"
+    print_nginx_port_listeners
+    die "请改用 IP + 高位端口 / Docker 高位端口模式，或手动把现有 Nginx 反代到 ${APP_HOST}:${APP_PORT} 后重试。"
+  fi
+
+  if systemctl start nginx; then
     return
   fi
 
-  warn "Nginx 配置检查通过，但 systemd 启动失败。正在检查是否有残留 nginx 进程占用端口。"
-  systemctl status nginx --no-pager -l || true
-  if pgrep -x nginx >/dev/null 2>&1; then
-    warn "检测到残留 nginx 进程，尝试优雅退出后重新启动。"
-    nginx -s quit >/dev/null 2>&1 || true
-    sleep 2
-    if pgrep -x nginx >/dev/null 2>&1; then
-      warn "残留 nginx 未完全退出，执行 TERM 清理。"
-      pkill -TERM -x nginx || true
-      sleep 2
-    fi
-    if pgrep -x nginx >/dev/null 2>&1; then
-      warn "残留 nginx 仍占用端口，执行 KILL 清理。"
-      pkill -KILL -x nginx || true
-      sleep 1
-    fi
-    systemctl reset-failed nginx || true
-    systemctl restart nginx && return
-  fi
-
   journalctl -u nginx --no-pager -n 60 -l || true
-  die "Nginx 启动失败。请根据上方日志处理端口占用或服务错误后重试。"
+  die "Nginx 启动失败。请根据上方日志处理服务错误后重试。"
+}
+
+nginx_managed_ports_are_busy() {
+  local ports=()
+  ports+=("$PUBLIC_HTTP_PORT")
+  bool_is_true "$ENABLE_TLS" && ports+=("$PUBLIC_HTTPS_PORT")
+  local port
+  for port in "${ports[@]}"; do
+    if ss -ltn "( sport = :${port} )" 2>/dev/null | grep -q LISTEN; then
+      return 0
+    fi
+  done
+  return 1
+}
+
+print_nginx_port_listeners() {
+  local ports=()
+  ports+=("$PUBLIC_HTTP_PORT")
+  bool_is_true "$ENABLE_TLS" && ports+=("$PUBLIC_HTTPS_PORT")
+  local expression=""
+  local port
+  for port in "${ports[@]}"; do
+    if [[ -z "$expression" ]]; then
+      expression="sport = :${port}"
+    else
+      expression="${expression} or sport = :${port}"
+    fi
+  done
+  ss -ltnp "( ${expression} )" 2>/dev/null || true
 }
 
 write_cloudflare_nginx_snippets() {
@@ -1118,7 +1235,6 @@ server {
     }
 }
 EOF
-    rm -f /etc/nginx/sites-enabled/default
     ln -sf "$NGINX_SITE_PATH" "$NGINX_SITE_LINK"
     restart_nginx_safely
     return
@@ -1166,7 +1282,6 @@ $(bool_is_true "$ORIGIN_LOCKDOWN_TO_CLOUDFLARE" && printf '    include %s;\n' "$
 }
 EOF
 
-  rm -f /etc/nginx/sites-enabled/default
   ln -sf "$NGINX_SITE_PATH" "$NGINX_SITE_LINK"
   restart_nginx_safely
 }
@@ -1183,6 +1298,8 @@ PY
   cat > "$APP_DIR/.env" <<EOF
 APP_HOST=${APP_HOST}
 APP_PORT=${APP_PORT}
+PUBLIC_APP_PORT=${PUBLIC_APP_PORT}
+DOCKER_BIND_HOST=${DOCKER_BIND_HOST}
 PORTAL_PATH=${PORTAL_PATH}
 SECRET_KEY=${SECRET_KEY}
 ADMIN_USERNAME=${ADMIN_USERNAME}
@@ -1323,7 +1440,9 @@ enable_services() {
 
 adjust_firewall() {
   if command_exists ufw && ufw status | grep -qi active; then
-    if bool_is_true "$ENABLE_NGINX"; then
+    if [[ "$DEPLOY_MODE" == "docker" ]]; then
+      ufw allow "${PUBLIC_APP_PORT}/tcp" || true
+    elif bool_is_true "$ENABLE_NGINX"; then
       ufw allow "${PUBLIC_HTTP_PORT}/tcp" || true
       bool_is_true "$ENABLE_TLS" && ufw allow "${PUBLIC_HTTPS_PORT}/tcp" || true
     else
@@ -1334,7 +1453,10 @@ adjust_firewall() {
 
 final_summary() {
   local public_url
-  if [[ "$ACCESS_MODE" == "ip" ]]; then
+  if [[ "$DEPLOY_MODE" == "docker" ]]; then
+    detect_origin_ips
+    public_url="http://${ORIGIN_IPV4:-服务器IP}:${PUBLIC_APP_PORT}"
+  elif [[ "$ACCESS_MODE" == "ip" ]]; then
     detect_origin_ips
     public_url="http://${ORIGIN_IPV4:-服务器IP}:${APP_PORT}"
   elif bool_is_true "$ENABLE_TLS"; then
@@ -1348,10 +1470,20 @@ final_summary() {
   echo
   echo "${C_GREEN}${C_BOLD}NOAFF monitor is installed.${C_RESET}"
   echo "Service:   systemctl status ${APP_NAME} --no-pager"
-  echo "Logs:      journalctl -u ${APP_NAME} -f"
+  if [[ "$DEPLOY_MODE" == "docker" ]]; then
+    echo "Docker:    cd ${APP_DIR} && docker compose ps"
+    echo "Logs:      cd ${APP_DIR} && docker compose logs -f noaff"
+    echo "Proxy:     existing Nginx can proxy to http://127.0.0.1:${PUBLIC_APP_PORT}"
+  else
+    echo "Logs:      journalctl -u ${APP_NAME} -f"
+  fi
   bool_is_true "$ENABLE_NGINX" && echo "Nginx:     systemctl status nginx --no-pager"
   bool_is_true "$ENABLE_TLS" && echo "Cert renew: systemctl list-timers | grep ${APP_NAME}"
-  echo "Upgrade:   systemctl start ${APP_NAME}-upgrade.service"
+  if [[ "$DEPLOY_MODE" == "docker" ]]; then
+    echo "Upgrade:   cd ${APP_DIR} && git pull --ff-only origin ${REPO_REF} && docker compose up -d --build"
+  else
+    echo "Upgrade:   systemctl start ${APP_NAME}-upgrade.service"
+  fi
   echo "Panel:     ${public_url}${PORTAL_PATH}"
   echo "Admin:     ${ADMIN_USERNAME}"
   if [[ -f "${APP_DIR}/data/bootstrap_admin.txt" ]]; then
@@ -1397,6 +1529,20 @@ main() {
 
   validate_required_inputs
   validate_runtime_config
+
+  if [[ "$DEPLOY_MODE" == "docker" ]]; then
+    TOTAL_STEPS=5
+    run_step "安装 Docker 运行环境" ensure_docker
+    run_step "拉取或更新应用源码" clone_or_update_repo
+    load_existing_env_defaults
+    normalize_access_mode
+    run_step "写入 Docker 应用环境配置" write_env_file
+    run_step "构建并启动 Docker Compose 服务" deploy_docker_stack
+    run_step "调整防火墙放行高位端口" adjust_firewall
+    final_summary
+    return
+  fi
+
   set_total_steps
 
   run_step "安装系统依赖" ensure_packages

@@ -94,6 +94,12 @@ class InstallScriptTestCase(unittest.TestCase):
         self.assertIn("FQDN:              IP mode", output)
         self.assertIn("ENABLE_TLS:        false", output)
 
+    def test_validate_only_accepts_docker_mode_without_domain(self) -> None:
+        output = self.assert_shell_ok("DEPLOY_MODE=docker PUBLIC_APP_PORT=7777 bash install.sh --validate-only")
+        self.assertIn("ACCESS_MODE:       ip", output)
+        self.assertIn("ENABLE_NGINX:      false", output)
+        self.assertIn("ENABLE_TLS:        false", output)
+
     def test_validate_only_accepts_domain_direct_without_cloudflare_token(self) -> None:
         output = self.assert_shell_ok(
             textwrap.dedent(
@@ -204,6 +210,12 @@ class InstallScriptTestCase(unittest.TestCase):
         )
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("not supported by Cloudflare orange-cloud proxy", result.stderr)
+
+    def test_installer_does_not_destroy_existing_nginx(self) -> None:
+        script = (ROOT_DIR / "install.sh").read_text(encoding="utf-8")
+        self.assertNotIn("pkill", script)
+        self.assertNotIn("killall", script)
+        self.assertNotIn("rm -f /etc/nginx/sites-enabled/default", script)
 
 
 if __name__ == "__main__":

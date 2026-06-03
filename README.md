@@ -106,14 +106,18 @@ bash install.sh --help
 
 安装脚本会自动完成：
 
-- 安装 `nginx`、`redis-server`、`xvfb`、`chromium`、Python 运行时
+- 原生模式安装 `nginx`、`redis-server`、`xvfb`、`chromium`、Python 运行时
+- Docker 模式安装 / 使用 Docker，并通过 Compose 启动应用与 Redis
 - 拉取或更新 GitHub 仓库
 - 创建虚拟环境并安装依赖
 - 自动写入或保留现有 `.env`
 - 域名直连模式下通过 HTTP-01 自动申请 / 续签证书
 - Cloudflare Token 模式下自动创建 / 更新 `FQDN` 与 `TLS_DOMAINS` 的 A/AAAA 记录
 - 小黄云模式下可写入 Cloudflare Real IP 与源站锁定规则
-- 自动注册 `systemd` 服务、升级服务与证书续期任务
+- 原生模式自动注册 `systemd` 服务、升级服务与证书续期任务
+- Docker 模式不接管宿主机 Nginx，适合已有网站或已有反代的机器
+
+安全说明：原生 Nginx 模式只写入 `/etc/nginx/sites-available/noaff-monitor.conf` 和对应 enabled 链接，不删除默认站点，不杀已有 nginx 进程。如果 80/443 已被现有服务占用，脚本会打印占用详情并退出。
 
 ## 一键安装
 
@@ -127,6 +131,7 @@ curl -fsSL "https://raw.githubusercontent.com/cshaizhihao/noaff-restock-monitor/
 
 脚本会进入全中文向导，依次选择：
 
+- `Docker 隔离 + 高位端口` 或 `原生 systemd + Nginx`
 - 应用本机端口
 - `IP + 端口`、`域名直连` 或 `Cloudflare 小黄云`
 - 是否自动申请 HTTPS 证书
@@ -134,6 +139,20 @@ curl -fsSL "https://raw.githubusercontent.com/cshaizhihao/noaff-restock-monitor/
 - 是否现在填写 Telegram 配置
 
 静默安装版，适合已经准备好域名和参数的用户：
+
+Docker 隔离模式，推荐已经有 Nginx/网站的机器：
+
+```bash
+curl -fsSL "https://raw.githubusercontent.com/cshaizhihao/noaff-restock-monitor/master/install.sh?$(date +%s)" | DEPLOY_MODE=docker PUBLIC_APP_PORT=7777 bash
+```
+
+这个模式不会修改宿主机 Nginx。已有 Nginx 可以自行反代到：
+
+```text
+http://127.0.0.1:7777
+```
+
+原生域名直连模式：
 
 ```bash
 curl -fsSL "https://raw.githubusercontent.com/cshaizhihao/noaff-restock-monitor/master/install.sh?$(date +%s)" | ACCESS_MODE=domain-direct FQDN=monitor.example.com CERTBOT_EMAIL=ops@example.com bash
@@ -230,6 +249,7 @@ bash install.sh
 
 | 变量 | 用途 | 默认值 |
 | --- | --- | --- |
+| `DEPLOY_MODE` | 部署方式：`native` / `docker` | `native` 或交互选择 |
 | `ACCESS_MODE` | 安装模式：`ip` / `domain-direct` / `domain-cf` | 交互选择 |
 | `FQDN` | 面板主域名，域名模式必填 | 无 |
 | `TLS_DOMAINS` | 逗号分隔的附加证书域名 | `FQDN` |
@@ -239,6 +259,8 @@ bash install.sh
 | `CF_API_TOKEN` | Cloudflare API Token，仅 DNS-01 全自动模式需要 | 无 |
 | `CERTBOT_EMAIL` | Let's Encrypt 邮箱，启用 HTTPS 时需要 | 无 |
 | `APP_PORT` | Flask / Waitress 本机监听端口 | `7777` |
+| `PUBLIC_APP_PORT` | Docker 模式对外端口 | `APP_PORT` |
+| `DOCKER_BIND_HOST` | Docker 模式绑定地址 | `0.0.0.0` |
 | `APP_HOST` | Flask / Waitress 监听地址 | `127.0.0.1` |
 | `PUBLIC_HTTP_PORT` | Nginx 暴露的 HTTP 端口 | `80` |
 | `PUBLIC_HTTPS_PORT` | Nginx 暴露的 HTTPS 端口 | `443` |
