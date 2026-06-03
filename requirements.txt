@@ -5,3 +5,4 @@ requests>=2.32,<3
 python-dotenv>=1.0,<2
 waitress>=3.0,<4
 psutil>=5.9,<8
+redis>=5.0,<7

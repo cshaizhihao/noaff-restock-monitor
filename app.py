@@ -28,6 +28,7 @@ from flask_limiter.util import get_remote_address
 from requests import Response
 from waitress import serve
 from werkzeug.exceptions import BadRequest
+from werkzeug.middleware.proxy_fix import ProxyFix
 from werkzeug.security import check_password_hash, generate_password_hash
 
 try:
@@ -78,12 +79,18 @@ if not PORTAL_PATH.startswith("/"):
     PORTAL_PATH = f"/{PORTAL_PATH}"
 
 DEFAULT_APP_PORT = int(os.getenv("APP_PORT", "7777"))
+DEFAULT_APP_HOST = os.getenv("APP_HOST", "0.0.0.0").strip() or "0.0.0.0"
 DEFAULT_MONITOR_PORT = int(os.getenv("MONITOR_DEBUG_PORT", "9223"))
 DEFAULT_TEST_PORT = int(os.getenv("TEST_DEBUG_PORT", "9334"))
 DEFAULT_POLL_INTERVAL = int(os.getenv("POLL_INTERVAL_SECONDS", "45"))
 DEFAULT_TIMEOUT_SECONDS = int(os.getenv("REQUEST_TIMEOUT_SECONDS", "25"))
 DEFAULT_HEADLESS = env_bool("CHROMIUM_HEADLESS", True)
 DEFAULT_BROWSER_PATH = os.getenv("CHROMIUM_BINARY", "").strip()
+ENABLE_PROXY_FIX = env_bool("ENABLE_PROXY_FIX", False)
+PROXY_FIX_X_FOR = int(os.getenv("PROXY_FIX_X_FOR", "1"))
+PROXY_FIX_X_PROTO = int(os.getenv("PROXY_FIX_X_PROTO", "1"))
+PROXY_FIX_X_HOST = int(os.getenv("PROXY_FIX_X_HOST", "1"))
+PROXY_FIX_X_PORT = int(os.getenv("PROXY_FIX_X_PORT", "1"))
 
 LOGIN_RATE_LIMIT = os.getenv("LOGIN_RATE_LIMIT", "5 per minute")
 GENERAL_MUTATION_LIMIT = os.getenv("GENERAL_MUTATION_LIMIT", "40 per minute")
@@ -878,6 +885,14 @@ def parse_stock(fragment: str) -> tuple[int | None, str]:
 
 def make_app() -> Flask:
     app = Flask(__name__)
+    if ENABLE_PROXY_FIX:
+        app.wsgi_app = ProxyFix(  # type: ignore[assignment]
+            app.wsgi_app,
+            x_for=PROXY_FIX_X_FOR,
+            x_proto=PROXY_FIX_X_PROTO,
+            x_host=PROXY_FIX_X_HOST,
+            x_port=PROXY_FIX_X_PORT,
+        )
     app.secret_key = SECRET_KEY
     app.config.update(
         SESSION_COOKIE_HTTPONLY=True,
@@ -1293,7 +1308,7 @@ def main() -> None:
         signal.signal(signal.SIGTERM, shutdown_handler)
         signal.signal(signal.SIGINT, shutdown_handler)
 
-    serve(app, host="0.0.0.0", port=DEFAULT_APP_PORT)
+    serve(app, host=DEFAULT_APP_HOST, port=DEFAULT_APP_PORT)
 
 
 if __name__ == "__main__":

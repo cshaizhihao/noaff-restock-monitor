@@ -1,34 +1,42 @@
-# NOAFF 补货监控助手
+# NOAFF补货监控助手
 
-一个面向 IDC / WHMCS 多商品列表页的私有补货监控面板。项目坚持 NOAFF 公益属性，核心目标是稳定绕过 Cloudflare 场景抓取、精准识别指定商品库存，并通过 Telegram 状态机推送补货、库存变化和售罄状态。
+面向 IDC / WHMCS 多商品列表页的补货监控 SaaS 面板。项目坚持 NOAFF 公益属性，重点解决 Cloudflare 场景抓取、目标商品精准识别、Telegram 状态机推送，以及生产环境下的安全部署。
 
-## 核心能力
+仓库地址：
 
-- 隐蔽控制台入口：默认生成高熵 `PORTAL_PATH`，避免 `/login`、`/admin` 这类扫描热点。
-- 严格登录限流：`Flask-Limiter` 默认 `5 per minute`，降低字典爆破风险。
-- 请求头与 CSRF 防护：所有写操作必须带浏览器 UA、同源 Origin、`X-Requested-With` 和内部 CSRF Token。
-- 高位端口绑定：默认 `7777`，支持 `.env` 自定义。
-- SQLite 管理员凭据：首次启动自动生成初始账号，面板内可改用户名和密码。
-- 任务 CRUD：商品名称、监控链接、精准关键词、TG 补货文案、售罄文案、2 个 Telegram 底部透明按钮。
-- DrissionPage 反爬引擎：主监控和测试推送使用不同远程调试端口，测试不会拖垮后台轮询。
-- 精准切片算法：命中关键词后，仅截取关键词前 50 字符和后 1200 字符，隔离同页其他商品干扰。
-- 库存正则嗅探：支持中文 / English 库存词，并容忍最多 40 个 HTML 标签或不可见片段。
-- 崩溃自愈：`disconnected`、`Timeout` 等异常会重建 Chromium 控制链路。
-- Telegram 状态机：刚补货发新消息，库存变动静默编辑，售罄覆盖原消息并清空 `message_id`。
+- [GitHub 仓库](https://github.com/cshaizhihao/noaff-restock-monitor)
+- [一键安装脚本 `install.sh`](https://raw.githubusercontent.com/cshaizhihao/noaff-restock-monitor/master/install.sh)
+
+## 功能概览
+
+- 隐蔽控制台入口：默认使用高熵 `PORTAL_PATH`，不暴露 `/login`、`/admin`
+- 登录限流：`Flask-Limiter` 默认 `5 per minute`
+- 请求头校验：写操作要求浏览器 UA、同源 `Origin`、`X-Requested-With`、CSRF Token
+- 深色 SaaS 面板：Tailwind CDN + Vanilla JS，AJAX 无刷轮询，登录页和后台已替换为新版 UI
+- SQLite 管理员凭据：首次启动自动引导，面板内可安全修改账号密码
+- 任务 CRUD：商品名称、监控链接、精准关键词、补货文案、售罄文案、2 组 Telegram 底部按钮
+- DrissionPage 反爬：主监控与测试推送分离调试端口，避免互相拖垮
+- 精准切片：命中关键词后只截取前 50 字符和后 1200 字符
+- 库存正则嗅探：允许库存词和数字之间夹杂最多 40 个 HTML 标签或不可见片段
+- 崩溃自愈：浏览器 `disconnected` / `Timeout` 自动重建
+- Telegram 状态机：
+  - 刚补货：发送新消息
+  - 库存变动：静默 `editMessageText`
+  - 已售罄：覆盖原消息为售罄文案，并清空 `message_id`
 
 ## 项目结构
 
 ```text
 .
-├── app.py                 # Flask 后端、数据库、监控引擎、TG 状态机
-├── requirements.txt       # Python 依赖
-├── install.sh             # Linux VDS 一键安装脚本
-├── .env.example           # 环境变量模板
+├── app.py
+├── install.sh
+├── requirements.txt
+├── .env.example
 ├── templates/
-│   └── portal.html        # 深色 SaaS 面板模板
+│   └── portal.html
 └── static/
-    ├── app.css            # 面板样式
-    └── app.js             # AJAX 轮询与 CRUD 交互
+    ├── app.css
+    └── app.js
 ```
 
 ## 本地运行
@@ -44,18 +52,20 @@ python app.py
 首次启动后访问：
 
 ```text
-http://127.0.0.1:7777/你在 .env 中配置的 PORTAL_PATH
+http://127.0.0.1:7777/<你的 PORTAL_PATH>
 ```
 
-如果未设置 `ADMIN_PASSWORD`，系统会在 `data/bootstrap_admin.txt` 写入一次性初始凭据。首次登录后请立刻修改密码。
+注意：
+
+- `http://127.0.0.1:7777/` 返回 `404` 是设计行为，不是故障
+- 如果没有手动设置 `ADMIN_PASSWORD`，系统会把一次性初始凭据写到 `data/bootstrap_admin.txt`
+- 首次登录后请立刻在面板里修改密码，并删除 `data/bootstrap_admin.txt`
 
 ## 文案占位符
 
-Telegram 文案支持以下占位符：
-
 ```text
 {name}        商品名称
-{stock}       当前库存数字
+{stock}       当前库存
 {url}         监控链接
 {keyword}     精准狙击关键词
 {checked_at}  检测时间
@@ -71,171 +81,127 @@ Telegram 文案支持以下占位符：
 检测时间：{checked_at}
 ```
 
-## 生产部署
+## 生产部署说明
 
-在 VDS 上使用 root 执行。脚本会自动安装 apt 依赖、Chromium、Xvfb、Python venv、pip 依赖，写入 `.env`，注册并启动 systemd 服务。
+推荐部署形态：
 
-> 把 `REPO_URL` 替换为你的 GitHub 仓库地址。
+1. Cloudflare 小黄云代理域名
+2. Nginx 暴露公网端口并反代到本机 `127.0.0.1:APP_PORT`
+3. Waitress 仅监听本机高位端口
+4. `certbot-dns-cloudflare` 通过 DNS-01 申请证书
+5. `redis-server` 作为 Flask-Limiter 存储
+6. `systemd` 守护 Flask 应用与证书续期
+
+安装脚本会自动完成：
+
+- 安装 `nginx`、`redis-server`、`xvfb`、`chromium`、Python 运行时
+- 拉取或更新 GitHub 仓库
+- 创建虚拟环境并安装依赖
+- 自动写入或保留现有 `.env`
+- 自动在 Cloudflare 中创建 / 更新 `FQDN` 与 `TLS_DOMAINS` 的 A/AAAA 记录
+- 自动申请 / 续签证书
+- 自动写入 Cloudflare Real IP 与源站锁定规则
+- 自动注册 `systemd` 服务与定时续期任务
+
+## 一键安装
+
+在 Linux VDS 上以 `root` 运行：
 
 ```bash
-cat > install.sh << 'EOF'
-#!/usr/bin/env bash
-set -Eeuo pipefail
-
-APP_NAME="${APP_NAME:-noaff-monitor}"
-SERVICE_USER="${SERVICE_USER:-noaffmon}"
-APP_DIR="${APP_DIR:-/opt/noaff-monitor}"
-REPO_URL="${REPO_URL:-}"
-APP_PORT="${APP_PORT:-7777}"
-MONITOR_DEBUG_PORT="${MONITOR_DEBUG_PORT:-9223}"
-TEST_DEBUG_PORT="${TEST_DEBUG_PORT:-9334}"
-POLL_INTERVAL_SECONDS="${POLL_INTERVAL_SECONDS:-45}"
-REQUEST_TIMEOUT_SECONDS="${REQUEST_TIMEOUT_SECONDS:-25}"
-ADMIN_USERNAME="${ADMIN_USERNAME:-operator}"
-TELEGRAM_BOT_TOKEN="${TELEGRAM_BOT_TOKEN:-}"
-TELEGRAM_CHAT_ID="${TELEGRAM_CHAT_ID:-}"
-
-if [[ "$(id -u)" != "0" ]]; then
-  echo "Please run as root."
-  exit 1
-fi
-
-if [[ -z "$REPO_URL" && ! -f "$APP_DIR/app.py" ]]; then
-  echo "REPO_URL is required unless $APP_DIR already contains the app."
-  echo "Example: REPO_URL=https://github.com/yourname/noaff-monitor.git bash install.sh"
-  exit 1
-fi
-
-export DEBIAN_FRONTEND=noninteractive
-apt-get update
-apt-get install -y python3 python3-venv python3-pip git curl ca-certificates xvfb procps
-apt-get install -y fonts-noto-cjk fonts-noto-color-emoji || true
-
-if ! command -v chromium >/dev/null 2>&1; then
-  apt-get install -y chromium || apt-get install -y chromium-browser || true
-fi
-
-CHROMIUM_BINARY="${CHROMIUM_BINARY:-$(command -v chromium || command -v chromium-browser || command -v google-chrome || true)}"
-if [[ -z "$CHROMIUM_BINARY" ]]; then
-  echo "Chromium was not found. Install chromium manually and rerun this script."
-  exit 1
-fi
-
-if ! id "$SERVICE_USER" >/dev/null 2>&1; then
-  useradd --system --home "$APP_DIR" --shell /usr/sbin/nologin "$SERVICE_USER"
-fi
-
-if [[ -n "$REPO_URL" ]]; then
-  if [[ -d "$APP_DIR/.git" ]]; then
-    git -C "$APP_DIR" fetch --all --prune
-    git -C "$APP_DIR" pull --ff-only
-  elif [[ -e "$APP_DIR" && "$(find "$APP_DIR" -mindepth 1 -maxdepth 1 2>/dev/null | wc -l)" -gt 0 ]]; then
-    echo "$APP_DIR exists and is not an empty git checkout. Move it away or set APP_DIR."
-    exit 1
-  else
-    mkdir -p "$(dirname "$APP_DIR")"
-    git clone "$REPO_URL" "$APP_DIR"
-  fi
-fi
-
-cd "$APP_DIR"
-python3 -m venv .venv
-.venv/bin/python -m pip install --upgrade pip setuptools wheel
-.venv/bin/pip install -r requirements.txt
-
-SECRET_KEY="${SECRET_KEY:-$(python3 - <<'PY'
-import secrets
-print(secrets.token_urlsafe(48))
-PY
-)}"
-
-PORTAL_PATH="${PORTAL_PATH:-$(python3 - <<'PY'
-import secrets
-print('/portal_' + secrets.token_urlsafe(18).replace('-', '').replace('_', '')[:24])
-PY
-)}"
-
-ADMIN_PASSWORD="${ADMIN_PASSWORD:-$(python3 - <<'PY'
-import secrets
-print(secrets.token_urlsafe(18))
-PY
-)}"
-
-if [[ ! -f .env ]]; then
-  cat > .env <<EOF_ENV
-APP_PORT=$APP_PORT
-PORTAL_PATH=$PORTAL_PATH
-SECRET_KEY=$SECRET_KEY
-ADMIN_USERNAME=$ADMIN_USERNAME
-ADMIN_PASSWORD=$ADMIN_PASSWORD
-TELEGRAM_BOT_TOKEN=$TELEGRAM_BOT_TOKEN
-TELEGRAM_CHAT_ID=$TELEGRAM_CHAT_ID
-MONITOR_DEBUG_PORT=$MONITOR_DEBUG_PORT
-TEST_DEBUG_PORT=$TEST_DEBUG_PORT
-POLL_INTERVAL_SECONDS=$POLL_INTERVAL_SECONDS
-REQUEST_TIMEOUT_SECONDS=$REQUEST_TIMEOUT_SECONDS
-CHROMIUM_HEADLESS=true
-CHROMIUM_BINARY=$CHROMIUM_BINARY
-SESSION_COOKIE_SECURE=false
-LOGIN_RATE_LIMIT=5 per minute
-GENERAL_MUTATION_LIMIT=40 per minute
-LIMITER_STORAGE_URI=memory://
-EOF_ENV
-fi
-
-mkdir -p data
-chown -R "$SERVICE_USER:$SERVICE_USER" "$APP_DIR"
-chmod 600 "$APP_DIR/.env"
-
-cat > "/etc/systemd/system/$APP_NAME.service" <<EOF_SERVICE
-[Unit]
-Description=NOAFF Restock Monitor
-After=network-online.target
-Wants=network-online.target
-
-[Service]
-Type=simple
-User=$SERVICE_USER
-Group=$SERVICE_USER
-WorkingDirectory=$APP_DIR
-EnvironmentFile=$APP_DIR/.env
-ExecStart=/usr/bin/xvfb-run -a --server-args="-screen 0 1920x1080x24" $APP_DIR/.venv/bin/python $APP_DIR/app.py
-Restart=always
-RestartSec=6
-KillSignal=SIGTERM
-TimeoutStopSec=20
-NoNewPrivileges=true
-PrivateTmp=true
-ProtectSystem=full
-ReadWritePaths=$APP_DIR
-
-[Install]
-WantedBy=multi-user.target
-EOF_SERVICE
-
-systemctl daemon-reload
-systemctl enable "$APP_NAME"
-systemctl restart "$APP_NAME"
-
-if command -v ufw >/dev/null 2>&1 && ufw status | grep -qi active; then
-  ufw allow "$APP_PORT/tcp" || true
-fi
-
-echo
-echo "NOAFF monitor is installed."
-echo "Service: systemctl status $APP_NAME --no-pager"
-echo "Logs:    journalctl -u $APP_NAME -f"
-echo "URL:     http://YOUR_SERVER_IP:$APP_PORT$PORTAL_PATH"
-echo "Admin:   $ADMIN_USERNAME"
-if [[ -n "${ADMIN_PASSWORD:-}" ]]; then
-  echo "Password: $ADMIN_PASSWORD"
-fi
-echo "Change the password immediately after first login."
-EOF
-
+curl -fsSL https://raw.githubusercontent.com/cshaizhihao/noaff-restock-monitor/master/install.sh -o install.sh
 chmod +x install.sh
-REPO_URL=https://github.com/your-name/noaff-monitor.git bash install.sh
 ```
+
+最小示例：
+
+```bash
+FQDN=monitor.example.com \
+CF_ZONE_NAME=example.com \
+CF_API_TOKEN=cf_xxx \
+CERTBOT_EMAIL=ops@example.com \
+bash install.sh
+```
+
+常用自定义示例：
+
+```bash
+FQDN=monitor.example.com \
+TLS_DOMAINS=monitor.example.com,www.monitor.example.com \
+CF_ZONE_NAME=example.com \
+CF_API_TOKEN=cf_xxx \
+CERTBOT_EMAIL=ops@example.com \
+APP_PORT=7777 \
+PUBLIC_HTTP_PORT=80 \
+PUBLIC_HTTPS_PORT=443 \
+MONITOR_DEBUG_PORT=9223 \
+TEST_DEBUG_PORT=9334 \
+ADMIN_USERNAME=operator \
+TELEGRAM_BOT_TOKEN=123456:ABCDEF \
+TELEGRAM_CHAT_ID=-1001234567890 \
+bash install.sh
+```
+
+安装完成后，脚本会输出：
+
+- 面板完整地址
+- 隐蔽入口 `PORTAL_PATH`
+- 当前管理员用户名
+- 首次引导密码或“沿用现有密码”的说明
+
+## 关键变量
+
+| 变量 | 用途 | 默认值 |
+| --- | --- | --- |
+| `FQDN` | 面板主域名，必填 | 无 |
+| `TLS_DOMAINS` | 逗号分隔的附加证书域名 | `FQDN` |
+| `CF_ZONE_NAME` | Cloudflare Zone 名称，推荐填写 | 无 |
+| `CF_ZONE_ID` | Cloudflare Zone ID，可替代 `CF_ZONE_NAME` | 无 |
+| `CF_API_TOKEN` | Cloudflare API Token，必填 | 无 |
+| `CERTBOT_EMAIL` | Let's Encrypt 邮箱，必填 | 无 |
+| `APP_PORT` | Flask / Waitress 本机监听端口 | `7777` |
+| `APP_HOST` | Flask / Waitress 监听地址 | `127.0.0.1` |
+| `PUBLIC_HTTP_PORT` | Nginx 暴露的 HTTP 端口 | `80` |
+| `PUBLIC_HTTPS_PORT` | Nginx 暴露的 HTTPS 端口 | `443` |
+| `MONITOR_DEBUG_PORT` | 主监控浏览器调试端口 | `9223` |
+| `TEST_DEBUG_PORT` | 测试推送浏览器调试端口 | `9334` |
+| `CF_RECORD_PROXIED` | Cloudflare 是否开启代理 | `true` |
+| `CF_SSL_MODE` | Cloudflare SSL 模式 | `strict` |
+| `ORIGIN_LOCKDOWN_TO_CLOUDFLARE` | 是否只允许 Cloudflare 回源 | `true` |
+| `LETSENCRYPT_STAGING` | 证书调试模式 | `false` |
+| `REPO_URL` | 仓库地址 | 当前 GitHub 仓库 |
+| `REPO_REF` | 部署分支 | `master` |
+
+## Cloudflare Token 权限
+
+脚本当前会访问 Zone、DNS 和 SSL 设置接口。建议令牌最少具备：
+
+- `Zone / Zone / Read`
+- `Zone / DNS / Edit`
+- `Zone / Settings / Edit`
+
+如果你不想让脚本自动切换 Cloudflare SSL 模式，可以删掉 `Zone / Settings / Edit`，然后手动把 SSL/TLS 模式改为 `Full (strict)`。
+
+## 端口建议
+
+Cloudflare 小黄云最稳妥的公网端口仍然是 `80 / 443`。脚本支持自定义 `PUBLIC_HTTP_PORT` 和 `PUBLIC_HTTPS_PORT`，但当 `CF_RECORD_PROXIED=true` 时，只能使用 Cloudflare 支持的代理端口：
+
+- HTTP：`80 8080 8880 2052 2082 2086 2095`
+- HTTPS：`443 2053 2083 2087 2096 8443`
+
+建议理解为两层端口：
+
+- `APP_PORT`：应用本机监听端口，推荐继续使用高位端口 `7777`
+- `PUBLIC_HTTP_PORT` / `PUBLIC_HTTPS_PORT`：公网入口端口，推荐保持 `80 / 443`
+
+## 安装后文件与服务
+
+- 应用目录：`/opt/noaff-monitor`
+- 环境文件：`/opt/noaff-monitor/.env`
+- 数据目录：`/opt/noaff-monitor/data`
+- Flask 服务：`noaff-monitor.service`
+- 证书续期服务：`noaff-monitor-cert-renew.service`
+- 证书续期定时器：`noaff-monitor-cert-renew.timer`
+- Nginx 站点：`/etc/nginx/sites-available/noaff-monitor.conf`
 
 ## 常用运维命令
 
@@ -243,22 +209,24 @@ REPO_URL=https://github.com/your-name/noaff-monitor.git bash install.sh
 systemctl status noaff-monitor --no-pager
 journalctl -u noaff-monitor -f
 systemctl restart noaff-monitor
-systemctl stop noaff-monitor
+systemctl restart nginx
+systemctl status redis-server --no-pager
+systemctl list-timers | grep noaff-monitor
 ```
 
-查看生产配置：
+查看当前配置：
 
 ```bash
 cat /opt/noaff-monitor/.env
 ```
 
-查看首次启动凭据文件：
+查看首次引导凭据：
 
 ```bash
 cat /opt/noaff-monitor/data/bootstrap_admin.txt
 ```
 
-首次登录并修改密码后，应删除该文件：
+首次改密后删除：
 
 ```bash
 rm -f /opt/noaff-monitor/data/bootstrap_admin.txt
@@ -266,16 +234,29 @@ rm -f /opt/noaff-monitor/data/bootstrap_admin.txt
 
 ## 安全建议
 
-- 不要把 `.env`、`data/`、SQLite 数据库和 bootstrap 凭据提交到 GitHub。
-- 生产环境建议用防火墙只允许可信 IP 访问 `APP_PORT`。
-- 若反向代理并启用 HTTPS，可把 `SESSION_COOKIE_SECURE=true`。
-- `PORTAL_PATH` 建议保持随机高熵，不要使用 `/login`、`/admin`。
-- 测试推送端口和后台监控端口必须保持不同，默认 `9223` / `9334`。
+- 不要把 `.env`、`data/`、SQLite 数据库提交到 GitHub
+- `PORTAL_PATH` 保持随机高熵，不要改成 `/login`、`/admin`
+- 面板实际写操作依赖浏览器请求头与 CSRF，脚本直打接口会被拒绝
+- `MONITOR_DEBUG_PORT` 与 `TEST_DEBUG_PORT` 必须不同
+- 默认源站仅允许 Cloudflare 回源；如果你关闭 `ORIGIN_LOCKDOWN_TO_CLOUDFLARE`，请自行补防火墙
+- 生产环境建议保持 `SESSION_COOKIE_SECURE=true`
+
+## 仓库重新设为私有时
+
+当前仓库已经是公开仓库，可以直接使用上面的 `curl` 命令。如果以后重新切回私有仓库，安装脚本仍然支持：
+
+```bash
+GH_TOKEN=github_pat_xxx \
+REPO_URL=https://github.com/cshaizhihao/noaff-restock-monitor.git \
+bash install.sh
+```
 
 ## 故障排查
 
-- 面板无法访问：检查 `systemctl status noaff-monitor --no-pager` 和防火墙端口。
-- Chromium 启动失败：检查 `CHROMIUM_BINARY` 是否指向有效浏览器。
-- Telegram 推送失败：确认 Bot Token、Chat ID、群组权限和 Bot 是否已加入频道/群组。
-- 库存识别失败：确认精准关键词能在源码中命中目标商品，并适当调整关键词。
-- 登录频繁失败：默认每 IP 每分钟 5 次，等待限流窗口结束或调整 `LOGIN_RATE_LIMIT`。
+- 访问域名返回 522/523：先检查 Cloudflare DNS 是否回源到正确 IP，再看防火墙与 Nginx
+- 面板打不开但服务运行：确认访问的是脚本输出的隐藏 `PORTAL_PATH`
+- 直接访问根路径得到 404：这是正常行为
+- 证书申请失败：确认域名已托管到 Cloudflare，Token 权限完整，邮箱有效
+- 登录频繁失败：默认每 IP 每分钟最多 5 次
+- Telegram 推送失败：确认 Bot Token、Chat ID、群组权限和 Bot 入群状态
+- 库存识别不准：优先优化精准关键词，再检查目标 HTML 片段
