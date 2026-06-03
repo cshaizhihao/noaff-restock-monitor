@@ -132,6 +132,23 @@
         return ok;
     }
 
+    function syncInputValue(input, value) {
+        if (!input) return;
+        const nextValue = String(value ?? "");
+        const syncedValue = input.dataset.syncedValue;
+        const hasLocalEdit = syncedValue !== undefined && input.value !== syncedValue;
+
+        if (input.value === nextValue) {
+            input.dataset.syncedValue = nextValue;
+            return;
+        }
+        if (document.activeElement === input || hasLocalEdit) {
+            return;
+        }
+        input.value = nextValue;
+        input.dataset.syncedValue = nextValue;
+    }
+
     async function apiFetch(path, options = {}) {
         const headers = {
             Accept: "application/json",
@@ -258,11 +275,11 @@
         els.settingsBotTokenMask.textContent = settings.telegram_bot_token_masked
             ? `当前 Token：${settings.telegram_bot_token_masked}`
             : "当前未配置 Bot Token";
-        els.settingsChatId.value = settings.telegram_chat_id || "";
-        els.settingsMonitorPort.value = settings.monitor_debug_port || 9223;
-        els.settingsTestPort.value = settings.test_debug_port || 9334;
-        els.settingsPollInterval.value = settings.poll_interval_seconds || 45;
-        els.settingsTimeout.value = settings.request_timeout_seconds || 25;
+        syncInputValue(els.settingsChatId, settings.telegram_chat_id || "");
+        syncInputValue(els.settingsMonitorPort, settings.monitor_debug_port || 9223);
+        syncInputValue(els.settingsTestPort, settings.test_debug_port || 9334);
+        syncInputValue(els.settingsPollInterval, settings.poll_interval_seconds || 45);
+        syncInputValue(els.settingsTimeout, settings.request_timeout_seconds || 25);
     }
 
     function renderSystem(system) {
@@ -297,7 +314,7 @@
     function renderAdmin(admin) {
         els.adminIdentity.textContent = admin.username ? `管理员：${admin.username}` : "管理员";
         els.portalChip.textContent = admin.portal_path || portalPath;
-        els.profileUsername.value = admin.username || "";
+        syncInputValue(els.profileUsername, admin.username || "");
     }
 
     function renderLogs(logs) {

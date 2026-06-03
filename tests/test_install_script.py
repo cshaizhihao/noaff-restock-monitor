@@ -253,6 +253,15 @@ class InstallScriptTestCase(unittest.TestCase):
         self.assertIn('docker build --pull=false -t "${APP_NAME}-noaff:latest" .', script)
         self.assertIn("docker_compose up -d --no-build --force-recreate noaff", script)
 
+    def test_dashboard_polling_preserves_dirty_settings_inputs(self) -> None:
+        app_js = (ROOT_DIR / "static" / "app.js").read_text(encoding="utf-8")
+        self.assertIn("function syncInputValue", app_js)
+        self.assertIn("document.activeElement === input || hasLocalEdit", app_js)
+        self.assertIn("syncInputValue(els.settingsChatId", app_js)
+        self.assertIn("syncInputValue(els.settingsMonitorPort", app_js)
+        self.assertIn("syncInputValue(els.profileUsername", app_js)
+        self.assertNotIn("els.profileUsername.value = admin.username", app_js)
+
     def test_docker_publish_port_conflict_is_reported_cleanly(self) -> None:
         result = self.run_bash(
             textwrap.dedent(
