@@ -80,7 +80,7 @@ class InstallScriptTestCase(unittest.TestCase):
                 FQDN=monitor.example.com \
                 CF_ZONE_NAME=example.com \
                 CF_API_TOKEN=test-token \
-                CERTBOT_EMAIL=ops@example.com \
+                CERTBOT_EMAIL=ops@noaff.dev \
                 bash install.sh --validate-only
                 """
             )
@@ -107,7 +107,7 @@ class InstallScriptTestCase(unittest.TestCase):
                 r"""
                 ACCESS_MODE=domain-direct \
                 FQDN=monitor.example.com \
-                CERTBOT_EMAIL=ops@example.com \
+                CERTBOT_EMAIL=ops@noaff.dev \
                 CF_RECORD_PROXIED=false \
                 bash install.sh --validate-only
                 """
@@ -116,6 +116,21 @@ class InstallScriptTestCase(unittest.TestCase):
         self.assertIn("ACCESS_MODE:       domain-direct", output)
         self.assertIn("CERT_MODE:         http", output)
         self.assertIn("CF_RECORD_PROXIED: false", output)
+
+    def test_validate_only_rejects_placeholder_certbot_email(self) -> None:
+        result = self.run_bash(
+            textwrap.dedent(
+                r"""
+                ACCESS_MODE=domain-direct \
+                FQDN=monitor.example.com \
+                CERTBOT_EMAIL=ops@example.com \
+                CF_RECORD_PROXIED=false \
+                bash install.sh --validate-only
+                """
+            )
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("CERTBOT_EMAIL must be a real email address", result.stderr)
 
     def test_cloudflare_zone_and_dns_record_json_parsing(self) -> None:
         output = self.assert_shell_ok(
@@ -191,6 +206,21 @@ class InstallScriptTestCase(unittest.TestCase):
         self.assertIn("allow 203.0.113.0/24;", output)
         self.assertIn("deny all;", output)
 
+    def test_nginx_tls_config_always_writes_ssl_snippet(self) -> None:
+        output = self.assert_shell_ok(
+            textwrap.dedent(
+                r"""
+                set -Eeuo pipefail
+                export NOAFF_INSTALL_LIBRARY_MODE=true
+                source ./install.sh
+                printf '%s\n' "$(declare -f configure_nginx)"
+                printf '%s\n' "$(declare -f write_ssl_nginx_snippet)"
+                """
+            )
+        )
+        self.assertIn("write_ssl_nginx_snippet", output)
+        self.assertIn('cat > "$SSL_SNIPPET"', output)
+
     def test_runtime_config_rejects_unsupported_cloudflare_ports(self) -> None:
         result = self.run_bash(
             textwrap.dedent(
@@ -202,7 +232,7 @@ class InstallScriptTestCase(unittest.TestCase):
                 export CERT_MODE=dns
                 export CF_ZONE_NAME=example.com
                 export CF_API_TOKEN=test-token
-                export CERTBOT_EMAIL=ops@example.com
+                export CERTBOT_EMAIL=ops@noaff.dev
                 export PUBLIC_HTTP_PORT=81
                 source ./install.sh
                 validate_runtime_config
@@ -450,7 +480,7 @@ EOF
                 APP_PORT=7788
                 PUBLIC_APP_PORT=8787
                 FQDN=monitor.example.com
-                CERTBOT_EMAIL=ops@example.com
+                CERTBOT_EMAIL=ops@noaff.dev
                 CF_RECORD_PROXIED=false
                 write_env_file
                 grep -E '^(DEPLOY_MODE|ACCESS_MODE|ENABLE_NGINX|ENABLE_TLS|CERT_MODE|APP_PORT|PUBLIC_APP_PORT|FQDN|CERTBOT_EMAIL|CF_RECORD_PROXIED)=' "$APP_DIR/.env"
@@ -461,7 +491,7 @@ EOF
         self.assertIn("ACCESS_MODE=ip", output)
         self.assertIn("PUBLIC_APP_PORT=8787", output)
         self.assertIn("FQDN=monitor.example.com", output)
-        self.assertIn("CERTBOT_EMAIL=ops@example.com", output)
+        self.assertIn("CERTBOT_EMAIL=ops@noaff.dev", output)
 
     def test_non_git_existing_app_dir_is_backed_up_and_data_restored(self) -> None:
         output = self.assert_shell_ok(

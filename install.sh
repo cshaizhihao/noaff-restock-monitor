@@ -184,7 +184,7 @@ Common optional environment:
   PUBLIC_HTTPS_PORT=443
   FQDN=monitor.example.com
   TLS_DOMAINS=monitor.example.com,www.monitor.example.com
-  CERTBOT_EMAIL=ops@example.com
+  CERTBOT_EMAIL=your-real-email@gmail.com
   CERT_MODE=http|dns|none|auto
   CF_ZONE_NAME=example.com
   CF_API_TOKEN=cf_xxx
@@ -538,6 +538,42 @@ validate_port() {
   (( value >= minimum && value <= maximum )) || die "${label} must be between ${minimum} and ${maximum}."
 }
 
+is_valid_certbot_email() {
+  python3 - "$1" <<'PY'
+import re
+import sys
+
+email = sys.argv[1].strip()
+placeholder_domains = {"example.com", "example.org", "example.net", "invalid", "localhost"}
+domain = email.rsplit("@", 1)[-1].lower() if "@" in email else ""
+valid_shape = bool(re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", email))
+raise SystemExit(0 if valid_shape and domain not in placeholder_domains else 1)
+PY
+}
+
+validate_certbot_email() {
+  [[ -n "$CERTBOT_EMAIL" ]] || die "CERTBOT_EMAIL is required when TLS is enabled."
+  is_valid_certbot_email "$CERTBOT_EMAIL" || die "CERTBOT_EMAIL must be a real email address. Do not use example.com / example.org placeholders."
+}
+
+prompt_certbot_email() {
+  local label="$1"
+  local answer default_value
+  default_value="$CERTBOT_EMAIL"
+  while true; do
+    if [[ -n "$default_value" ]]; then
+      answer="$(prompt_default "$label" "$default_value")"
+    else
+      answer="$(prompt_read "${label}: ")"
+    fi
+    CERTBOT_EMAIL="$(printf '%s' "$answer" | xargs)"
+    if is_valid_certbot_email "$CERTBOT_EMAIL"; then
+      return
+    fi
+    warn "请输入真实有效的邮箱，不能使用 ops@example.com / example.com 这类占位邮箱。"
+  done
+}
+
 validate_runtime_config() {
   normalize_access_mode
   validate_port "APP_PORT" "$APP_PORT" 1024 65535
@@ -570,7 +606,7 @@ validate_required_inputs() {
 
   [[ -n "$FQDN" ]] || die "FQDN is required for domain install mode."
   if bool_is_true "$ENABLE_TLS"; then
-    [[ -n "$CERTBOT_EMAIL" ]] || die "CERTBOT_EMAIL is required when TLS is enabled."
+    validate_certbot_email
   fi
   if [[ "$CERT_MODE" == "dns" ]]; then
     [[ -n "$CF_ZONE_NAME" || -n "$CF_ZONE_ID" ]] || die "CF_ZONE_NAME or CF_ZONE_ID is required for Cloudflare DNS-01."
@@ -791,7 +827,7 @@ interactive_wizard() {
       if prompt_yes_no "[4/8] 是否自动申请 Let's Encrypt HTTPS 证书？证书验证需要 80 端口可访问" "Y"; then
         ENABLE_TLS="true"
         CERT_MODE="http"
-        CERTBOT_EMAIL="$(prompt_default "请输入 Let's Encrypt 邮箱" "${CERTBOT_EMAIL:-ops@example.com}")"
+        prompt_certbot_email "请输入 Let's Encrypt 邮箱"
       else
         ENABLE_TLS="false"
         CERT_MODE="none"
@@ -820,7 +856,7 @@ interactive_wizard() {
         CERT_MODE="http"
       fi
       ENABLE_TLS="true"
-      CERTBOT_EMAIL="$(prompt_default "[6/8] 请输入 Let's Encrypt 邮箱" "${CERTBOT_EMAIL:-ops@example.com}")"
+      prompt_certbot_email "[6/8] 请输入 Let's Encrypt 邮箱"
       ;;
     *)
       die "访问方式只能选择 1、2 或 3。"
@@ -1260,7 +1296,7 @@ PY
 }
 
 issue_certificate_dns() {
-  [[ -n "$CERTBOT_EMAIL" ]] || die "CERTBOT_EMAIL is required for Let's Encrypt."
+  validate_certbot_email
   write_cloudflare_credentials
 
   local domains_csv
@@ -1327,7 +1363,7 @@ EOF
 }
 
 issue_certificate_http() {
-  [[ -n "$CERTBOT_EMAIL" ]] || die "CERTBOT_EMAIL is required for Let's Encrypt."
+  validate_certbot_email
   [[ "$PUBLIC_HTTP_PORT" == "80" ]] || die "HTTP-01 certificate mode requires PUBLIC_HTTP_PORT=80."
 
   local domains_csv args=()
@@ -1434,10 +1470,26 @@ print_nginx_port_listeners() {
   ss -ltnp "( ${expression} )" 2>/dev/null || true
 }
 
+write_ssl_nginx_snippet() {
+  mkdir -p "$(dirname "$SSL_SNIPPET")"
+  cat > "$SSL_SNIPPET" <<'EOF'
+ssl_session_timeout 1d;
+ssl_session_cache shared:SSL:10m;
+ssl_session_tickets off;
+ssl_protocols TLSv1.2 TLSv1.3;
+ssl_prefer_server_ciphers off;
+ssl_ciphers HIGH:!aNULL:!MD5;
+add_header Strict-Transport-Security "max-age=31536000; includeSubDomains; preload" always;
+add_header X-Content-Type-Options "nosniff" always;
+add_header X-Frame-Options "DENY" always;
+add_header Referrer-Policy "same-origin" always;
+EOF
+}
+
 write_cloudflare_nginx_snippets() {
   local ip_json
   ip_json="$(fetch_cloudflare_ips)"
-  mkdir -p /etc/nginx/snippets
+  mkdir -p "$(dirname "$CF_REALIP_SNIPPET")" "$(dirname "$CF_ALLOW_SNIPPET")"
 
   python3 - "$CF_REALIP_SNIPPET" "$CF_ALLOW_SNIPPET" "$ip_json" <<'PY'
 import json
@@ -1462,18 +1514,7 @@ with open(allow_path, "w", encoding="utf-8") as fh:
     fh.write("deny all;\n")
 PY
 
-  cat > "$SSL_SNIPPET" <<'EOF'
-ssl_session_timeout 1d;
-ssl_session_cache shared:SSL:10m;
-ssl_session_tickets off;
-ssl_protocols TLSv1.2 TLSv1.3;
-ssl_prefer_server_ciphers off;
-ssl_ciphers HIGH:!aNULL:!MD5;
-add_header Strict-Transport-Security "max-age=31536000; includeSubDomains; preload" always;
-add_header X-Content-Type-Options "nosniff" always;
-add_header X-Frame-Options "DENY" always;
-add_header Referrer-Policy "same-origin" always;
-EOF
+  write_ssl_nginx_snippet
 }
 
 configure_nginx() {
@@ -1521,6 +1562,8 @@ EOF
     restart_nginx_safely
     return
   fi
+
+  write_ssl_nginx_snippet
 
   cat > "$NGINX_SITE_PATH" <<EOF
 server {

@@ -58,19 +58,19 @@ curl -H 'Cache-Control: no-cache' -fsSL https://raw.githubusercontent.com/cshaiz
 原生域名直连安装：
 
 ```bash
-curl -H 'Cache-Control: no-cache' -fsSL https://raw.githubusercontent.com/cshaizhihao/noaff-restock-monitor/master/install.sh -o install.sh && ACCESS_MODE=domain-direct FQDN=monitor.example.com CERTBOT_EMAIL=ops@example.com bash install.sh
+curl -H 'Cache-Control: no-cache' -fsSL https://raw.githubusercontent.com/cshaizhihao/noaff-restock-monitor/master/install.sh -o install.sh && ACCESS_MODE=domain-direct FQDN=monitor.example.com CERTBOT_EMAIL=your-real-email@gmail.com bash install.sh
 ```
 
 Cloudflare 小黄云 + Token 自动安装：
 
 ```bash
-curl -H 'Cache-Control: no-cache' -fsSL https://raw.githubusercontent.com/cshaizhihao/noaff-restock-monitor/master/install.sh -o install.sh && ACCESS_MODE=domain-cf FQDN=monitor.example.com CF_ZONE_NAME=example.com CF_API_TOKEN=cf_xxx CERTBOT_EMAIL=ops@example.com bash install.sh
+curl -H 'Cache-Control: no-cache' -fsSL https://raw.githubusercontent.com/cshaizhihao/noaff-restock-monitor/master/install.sh -o install.sh && ACCESS_MODE=domain-cf FQDN=monitor.example.com CF_ZONE_NAME=example.com CF_API_TOKEN=cf_xxx CERTBOT_EMAIL=your-real-email@gmail.com bash install.sh
 ```
 
 预检模式：
 
 ```bash
-ACCESS_MODE=domain-direct FQDN=monitor.example.com CERTBOT_EMAIL=ops@example.com bash install.sh --validate-only
+ACCESS_MODE=domain-direct FQDN=monitor.example.com CERTBOT_EMAIL=your-real-email@gmail.com bash install.sh --validate-only
 ```
 
 </details>
