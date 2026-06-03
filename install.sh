@@ -49,6 +49,7 @@ ORIGIN_LOCKDOWN_TO_CLOUDFLARE="${ORIGIN_LOCKDOWN_TO_CLOUDFLARE:-true}"
 
 CHROMIUM_BINARY="${CHROMIUM_BINARY:-}"
 CHROMIUM_HEADLESS="${CHROMIUM_HEADLESS:-true}"
+APP_STARTUP_TIMEOUT_SECONDS="${APP_STARTUP_TIMEOUT_SECONDS:-90}"
 
 LIMITER_STORAGE_URI="${LIMITER_STORAGE_URI:-redis://127.0.0.1:6379/0}"
 SESSION_COOKIE_SECURE="${SESSION_COOKIE_SECURE:-true}"
@@ -183,6 +184,7 @@ Common optional environment:
   CF_API_TOKEN=cf_xxx
   MONITOR_DEBUG_PORT=9223
   TEST_DEBUG_PORT=9334
+  APP_STARTUP_TIMEOUT_SECONDS=90
   CF_RECORD_PROXIED=true
   REPO_REF=master
 
@@ -879,6 +881,50 @@ deploy_docker_stack() {
   docker_compose up -d --build
 }
 
+probe_local_panel() {
+  local url
+  if [[ "$DEPLOY_MODE" == "docker" ]]; then
+    url="http://127.0.0.1:${PUBLIC_APP_PORT}${PORTAL_PATH}"
+  else
+    url="http://127.0.0.1:${APP_PORT}${PORTAL_PATH}"
+  fi
+  curl -fsS -o /dev/null \
+    -A "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/137 Safari/537.36" \
+    --connect-timeout 3 \
+    --max-time 8 \
+    "$url"
+}
+
+wait_for_application_ready() {
+  local max_attempts=$(( (APP_STARTUP_TIMEOUT_SECONDS + 1) / 2 ))
+  (( max_attempts < 1 )) && max_attempts=1
+  local attempt
+
+  for ((attempt = 1; attempt <= max_attempts; attempt++)); do
+    if [[ "$DEPLOY_MODE" == "docker" ]]; then
+      if docker_noaff_container_running && probe_local_panel; then
+        return 0
+      fi
+    else
+      if systemctl is-active --quiet "${APP_NAME}" && probe_local_panel; then
+        return 0
+      fi
+    fi
+    sleep 2
+  done
+
+  warn "Application health check failed after ${APP_STARTUP_TIMEOUT_SECONDS} seconds."
+  if [[ "$DEPLOY_MODE" == "docker" ]]; then
+    docker_compose ps || true
+    docker_compose logs --tail=120 noaff || true
+    die "Docker app failed health check. The installer stopped before reporting success."
+  fi
+
+  systemctl status "${APP_NAME}" --no-pager || true
+  journalctl -u "${APP_NAME}" --no-pager -n 120 -l || true
+  die "Native app failed health check. The installer stopped before reporting success."
+}
+
 setup_certbot_env() {
   python3 -m venv "$CERTBOT_VENV"
   "$CERTBOT_VENV/bin/pip" install --upgrade pip setuptools wheel
@@ -1562,7 +1608,7 @@ final_summary() {
 }
 
 set_total_steps() {
-  TOTAL_STEPS=8
+  TOTAL_STEPS=9
   bool_is_true "$ENABLE_TLS" && TOTAL_STEPS=$((TOTAL_STEPS + 2))
   [[ "$CERT_MODE" == "dns" ]] && TOTAL_STEPS=$((TOTAL_STEPS + 1))
   bool_is_true "$ORIGIN_LOCKDOWN_TO_CLOUDFLARE" && TOTAL_STEPS=$((TOTAL_STEPS + 1))
@@ -1593,13 +1639,14 @@ main() {
   validate_runtime_config
 
   if [[ "$DEPLOY_MODE" == "docker" ]]; then
-    TOTAL_STEPS=5
+    TOTAL_STEPS=6
     run_step "安装 Docker 运行环境" ensure_docker
     run_step "拉取或更新应用源码" clone_or_update_repo
     load_existing_env_defaults
     normalize_access_mode
     run_step "写入 Docker 应用环境配置" write_env_file
     run_step "构建并启动 Docker Compose 服务" deploy_docker_stack
+    run_step "验证 Docker 面板启动状态" wait_for_application_ready
     run_step "调整防火墙放行高位端口" adjust_firewall
     final_summary
     return
@@ -1646,6 +1693,7 @@ main() {
   fi
 
   run_step "启动并启用系统服务" enable_services
+  run_step "验证应用启动状态" wait_for_application_ready
 
   adjust_firewall
   final_summary

@@ -222,6 +222,11 @@ class InstallScriptTestCase(unittest.TestCase):
         self.assertIn("safe.directory", script)
         self.assertIn("prepare_git_checkout_permissions", script)
 
+    def test_installer_waits_for_application_health_before_success(self) -> None:
+        script = (ROOT_DIR / "install.sh").read_text(encoding="utf-8")
+        self.assertIn('run_step "验证 Docker 面板启动状态" wait_for_application_ready', script)
+        self.assertIn('run_step "验证应用启动状态" wait_for_application_ready', script)
+
     def test_xauth_is_installed_for_xvfb_runtime(self) -> None:
         script = (ROOT_DIR / "install.sh").read_text(encoding="utf-8")
         dockerfile = (ROOT_DIR / "Dockerfile").read_text(encoding="utf-8")
@@ -255,6 +260,28 @@ class InstallScriptTestCase(unittest.TestCase):
         )
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("PUBLIC_APP_PORT=7777 is already in use", result.stderr)
+
+    def test_docker_health_check_failure_stops_installer(self) -> None:
+        result = self.run_bash(
+            textwrap.dedent(
+                r"""
+                set -Eeuo pipefail
+                export NOAFF_INSTALL_LIBRARY_MODE=true
+                export DEPLOY_MODE=docker
+                export PORTAL_PATH=/portal_test
+                export PUBLIC_APP_PORT=7788
+                export APP_STARTUP_TIMEOUT_SECONDS=1
+                source ./install.sh
+                docker_noaff_container_running() { return 1; }
+                docker_compose() { printf 'compose %s\n' "$*"; }
+                probe_local_panel() { return 1; }
+                sleep() { :; }
+                wait_for_application_ready
+                """
+            )
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("Docker app failed health check", result.stderr)
 
 
 if __name__ == "__main__":
