@@ -49,6 +49,12 @@ curl -H 'Cache-Control: no-cache' -fsSL https://raw.githubusercontent.com/cshaiz
 curl -H 'Cache-Control: no-cache' -fsSL https://raw.githubusercontent.com/cshaizhihao/noaff-restock-monitor/master/install.sh -o install.sh && DEPLOY_MODE=docker PUBLIC_APP_PORT=7777 bash install.sh
 ```
 
+Docker + 已解析域名 + 高位端口：
+
+```bash
+curl -H 'Cache-Control: no-cache' -fsSL https://raw.githubusercontent.com/cshaizhihao/noaff-restock-monitor/master/install.sh -o install.sh && DEPLOY_MODE=docker FQDN=monitor.example.com PUBLIC_APP_PORT=7777 bash install.sh
+```
+
 原生域名直连安装：
 
 ```bash

@@ -312,6 +312,55 @@ class InstallScriptTestCase(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("Docker app failed health check", result.stderr)
 
+    def test_docker_summary_prefers_domain_and_public_port(self) -> None:
+        output = self.assert_shell_ok(
+            textwrap.dedent(
+                r"""
+                set -Eeuo pipefail
+                export NOAFF_INSTALL_LIBRARY_MODE=true
+                export DEPLOY_MODE=docker
+                export FQDN=monitor.example.com
+                export APP_PORT=7777
+                export PUBLIC_APP_PORT=8787
+                export PORTAL_PATH=/portal_test
+                source ./install.sh
+                detect_origin_ips() {
+                  printf 'should-not-detect\n'
+                  ORIGIN_IPV4=203.0.113.10
+                }
+                normalize_access_mode
+                print_install_summary
+                final_summary
+                """
+            )
+        )
+        self.assertIn("http://monitor.example.com:8787/portal_test", output)
+        self.assertNotIn("should-not-detect", output)
+        self.assertNotIn("http://monitor.example.com:7777", output)
+
+    def test_docker_summary_without_domain_uses_ip_and_public_port(self) -> None:
+        output = self.assert_shell_ok(
+            textwrap.dedent(
+                r"""
+                set -Eeuo pipefail
+                export NOAFF_INSTALL_LIBRARY_MODE=true
+                export DEPLOY_MODE=docker
+                export APP_PORT=7777
+                export PUBLIC_APP_PORT=8787
+                export PORTAL_PATH=/portal_test
+                source ./install.sh
+                detect_origin_ips() {
+                  ORIGIN_IPV4=203.0.113.20
+                }
+                normalize_access_mode
+                print_install_summary
+                final_summary
+                """
+            )
+        )
+        self.assertIn("http://203.0.113.20:8787/portal_test", output)
+        self.assertNotIn("http://203.0.113.20:7777", output)
+
     def test_existing_env_defaults_are_loaded_before_repeat_install(self) -> None:
         output = self.assert_shell_ok(
             textwrap.dedent(

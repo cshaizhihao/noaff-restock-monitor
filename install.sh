@@ -586,6 +586,35 @@ validate_only() {
   print_validation_summary
 }
 
+build_public_url() {
+  local public_url public_host
+  if [[ "$DEPLOY_MODE" == "docker" ]]; then
+    if [[ -n "$FQDN" ]]; then
+      public_host="$FQDN"
+    else
+      detect_origin_ips
+      public_host="${ORIGIN_IPV4:-服务器IP}"
+    fi
+    printf 'http://%s:%s' "$public_host" "$PUBLIC_APP_PORT"
+    return
+  fi
+
+  if [[ "$ACCESS_MODE" == "ip" ]]; then
+    detect_origin_ips
+    printf 'http://%s:%s' "${ORIGIN_IPV4:-服务器IP}" "$APP_PORT"
+    return
+  fi
+
+  if bool_is_true "$ENABLE_TLS"; then
+    public_url="https://${FQDN}"
+    [[ "$PUBLIC_HTTPS_PORT" != "443" ]] && public_url="${public_url}:${PUBLIC_HTTPS_PORT}"
+  else
+    public_url="http://${FQDN}"
+    [[ "$PUBLIC_HTTP_PORT" != "80" ]] && public_url="${public_url}:${PUBLIC_HTTP_PORT}"
+  fi
+  printf '%s' "$public_url"
+}
+
 should_run_interactive_wizard() {
   [[ "$SKIP_INTERACTIVE_WIZARD" != "true" ]] || return 1
   [[ "$INTERACTIVE_INSTALL" != "false" ]] || return 1
@@ -687,9 +716,19 @@ interactive_wizard() {
     PUBLIC_APP_PORT="$(prompt_default "[2/9] 请输入 Docker 对外访问端口" "$PUBLIC_APP_PORT")"
     validate_port "PUBLIC_APP_PORT" "$PUBLIC_APP_PORT" 1024 65535
     DOCKER_BIND_HOST="$(prompt_default "[3/9] 监听地址，0.0.0.0 表示公网可访问" "$DOCKER_BIND_HOST")"
+    local docker_domain_default="n"
+    [[ -n "$FQDN" ]] && docker_domain_default="Y"
+    if prompt_yes_no "[4/9] 是否使用已解析域名生成面板地址？（Docker 不会配置 Nginx/证书）" "$docker_domain_default"; then
+      FQDN="$(prompt_default "请输入已解析到本机的域名，例如 monitor.example.com" "$FQDN")"
+      [[ -n "$FQDN" ]] || die "域名不能为空；如不使用域名，请选择否。"
+      TLS_DOMAINS="${TLS_DOMAINS:-$FQDN}"
+    else
+      FQDN=""
+      TLS_DOMAINS=""
+    fi
     echo
     warn "Docker 模式不会修改或重启宿主机 Nginx。已有 Nginx 可手动反代到 ${DOCKER_BIND_HOST}:${PUBLIC_APP_PORT}。"
-    if prompt_yes_no "[4/9] 是否现在填写 Telegram Bot Token 和 Chat ID？" "n"; then
+    if prompt_yes_no "[5/9] 是否现在填写 Telegram Bot Token 和 Chat ID？" "n"; then
       TELEGRAM_BOT_TOKEN="$(prompt_secret_optional "请输入 Telegram Bot Token（输入时不显示）：")"
       TELEGRAM_CHAT_ID="$(prompt_default "请输入 Telegram Chat ID" "$TELEGRAM_CHAT_ID")"
     fi
@@ -697,7 +736,7 @@ interactive_wizard() {
     validate_required_inputs
     validate_runtime_config
     print_install_summary
-    prompt_yes_no "[5/9] 确认开始 Docker 安装？" "Y" || die "用户取消安装。"
+    prompt_yes_no "[6/9] 确认开始 Docker 安装？" "Y" || die "用户取消安装。"
     return
   fi
 
@@ -779,26 +818,26 @@ interactive_wizard() {
 
 print_install_summary() {
   local access_label public_url
-  case "$ACCESS_MODE" in
-    ip)
-      access_label="IP + 端口"
-      detect_origin_ips
-      public_url="http://${ORIGIN_IPV4:-服务器IP}:${APP_PORT}"
-      ;;
-    domain-direct)
-      access_label="域名直连"
-      public_url="$(bool_is_true "$ENABLE_TLS" && printf 'https' || printf 'http')://${FQDN}"
-      ;;
-    domain-cf)
-      access_label="Cloudflare 小黄云"
-      public_url="https://${FQDN}"
-      ;;
-  esac
-  if bool_is_true "$ENABLE_TLS" && [[ "$PUBLIC_HTTPS_PORT" != "443" ]]; then
-    public_url="${public_url}:${PUBLIC_HTTPS_PORT}"
-  elif ! bool_is_true "$ENABLE_TLS" && [[ "$ACCESS_MODE" != "ip" && "$PUBLIC_HTTP_PORT" != "80" ]]; then
-    public_url="${public_url}:${PUBLIC_HTTP_PORT}"
+  if [[ "$DEPLOY_MODE" == "docker" ]]; then
+    if [[ -n "$FQDN" ]]; then
+      access_label="域名 + 高位端口（Docker）"
+    else
+      access_label="IP + 高位端口（Docker）"
+    fi
+  else
+    case "$ACCESS_MODE" in
+      ip)
+        access_label="IP + 端口"
+        ;;
+      domain-direct)
+        access_label="域名直连"
+        ;;
+      domain-cf)
+        access_label="Cloudflare 小黄云"
+        ;;
+    esac
   fi
+  public_url="$(build_public_url)"
 
   echo
   echo "${C_BOLD}${C_GREEN}安装摘要${C_RESET}"
@@ -1696,19 +1735,7 @@ adjust_firewall() {
 
 final_summary() {
   local public_url
-  if [[ "$DEPLOY_MODE" == "docker" ]]; then
-    detect_origin_ips
-    public_url="http://${ORIGIN_IPV4:-服务器IP}:${PUBLIC_APP_PORT}"
-  elif [[ "$ACCESS_MODE" == "ip" ]]; then
-    detect_origin_ips
-    public_url="http://${ORIGIN_IPV4:-服务器IP}:${APP_PORT}"
-  elif bool_is_true "$ENABLE_TLS"; then
-    public_url="https://${FQDN}"
-    [[ "$PUBLIC_HTTPS_PORT" != "443" ]] && public_url="${public_url}:${PUBLIC_HTTPS_PORT}"
-  else
-    public_url="http://${FQDN}"
-    [[ "$PUBLIC_HTTP_PORT" != "80" ]] && public_url="${public_url}:${PUBLIC_HTTP_PORT}"
-  fi
+  public_url="$(build_public_url)"
 
   echo
   echo "${C_GREEN}${C_BOLD}NOAFF 补货监控已安装完成。${C_RESET}"
