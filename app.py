@@ -627,17 +627,67 @@ class ScrapeResult:
     used_test_browser: bool
 
 
+def sanitize_telegram_error(value: str, token: str = "") -> str:
+    text = str(value or "")
+    if token:
+        text = text.replace(token, "<hidden-token>")
+    text = re.sub(r"bot\d+:[A-Za-z0-9_-]+", "bot<hidden-token>", text)
+    return text
+
+
+def telegram_error_hint(description: str) -> str:
+    normalized = description.lower()
+    if "chat not found" in normalized:
+        return "Chat ID 不正确，或机器人没有加入该会话/群组。"
+    if "can't parse entities" in normalized or "can't find end tag" in normalized:
+        return "TG 推送文案 HTML 格式不合法，请检查 <b>、<a> 等标签是否闭合。"
+    if "message text is empty" in normalized:
+        return "TG 推送文案为空，请检查补货文案或售罄文案。"
+    if "button_url_invalid" in normalized or "wrong http url" in normalized:
+        return "TG 底部按钮链接无效，按钮 URL 必须是完整 http/https 地址。"
+    if "not enough rights" in normalized or "have no rights" in normalized:
+        return "机器人权限不足，请确认它在群组/频道内并拥有发消息权限。"
+    if "bot was blocked" in normalized or "blocked by the user" in normalized:
+        return "机器人被目标用户或会话屏蔽了。"
+    return description or "Telegram API 返回未知错误。"
+
+
+def telegram_html_value(value: Any) -> str:
+    return html_module.escape(str(value if value is not None else ""), quote=False)
+
+
 class TelegramClient:
     def __init__(self) -> None:
         self.session = requests.Session()
 
     def _request(self, method: str, token: str, payload: dict[str, Any]) -> dict[str, Any]:
+        if not token.strip():
+            raise RuntimeError("Telegram Bot Token 未配置。")
+        if not str(payload.get("chat_id", "")).strip():
+            raise RuntimeError("Telegram Chat ID 未配置。")
+        if not str(payload.get("text", "")).strip():
+            raise RuntimeError("Telegram 推送文案为空，请检查补货文案或售罄文案。")
+
         url = f"https://api.telegram.org/bot{token}/{method}"
-        response: Response = self.session.post(url, json=payload, timeout=20)
-        response.raise_for_status()
-        data = response.json()
-        if not data.get("ok"):
-            raise RuntimeError(data.get("description") or f"Telegram API {method} 失败")
+        try:
+            response: Response = self.session.post(url, json=payload, timeout=20)
+        except requests.RequestException as exc:
+            raise RuntimeError(
+                f"Telegram {method} 网络请求失败：{sanitize_telegram_error(str(exc), token)}"
+            ) from exc
+
+        try:
+            data = response.json()
+        except ValueError:
+            data = {}
+        if response.status_code >= 400 or not data.get("ok"):
+            description = str(data.get("description") or response.text or response.reason or "未知错误")
+            safe_description = sanitize_telegram_error(description[:500], token)
+            hint = telegram_error_hint(safe_description)
+            detail = f"Telegram {method} 失败（HTTP {response.status_code}）：{hint}"
+            if safe_description and safe_description not in hint:
+                detail = f"{detail}；原始提示：{safe_description}"
+            raise RuntimeError(detail)
         return data
 
     def send_message(
@@ -970,7 +1020,7 @@ class MonitoringEngine:
                     )
                     log_activity("info", f"task:{task['id']}", f"{task['name']} 库存变化为 {result.stock}，已静默编辑消息。")
                 elif result.stock <= 0 and message_id:
-                    text = safe_format(task["soldout_template"], message_values | {"status": "sold_out"})
+                    text = safe_format(task["soldout_template"], message_values | {"status": telegram_html_value("sold_out")})
                     self.telegram.edit_message(
                         settings_payload["telegram_bot_token"],
                         settings_payload["telegram_chat_id"],
@@ -981,7 +1031,8 @@ class MonitoringEngine:
                     message_id = None
                     log_activity("warning", f"task:{task['id']}", f"{task['name']} 已售罄，已覆盖原消息。")
             except Exception as exc:
-                last_error = str(exc)
+                last_error = sanitize_telegram_error(str(exc), settings_payload["telegram_bot_token"])
+                exc = RuntimeError(last_error)
                 log_activity("error", f"task:{task['id']}", f"{task['name']} Telegram 推送失败：{exc}")
 
             connection.execute(
@@ -1055,12 +1106,12 @@ def build_buttons(task: sqlite3.Row | dict[str, Any]) -> list[dict[str, str]]:
 def message_template_values(task: sqlite3.Row, stock: int | None) -> dict[str, str]:
     checked_at = now_utc().astimezone().strftime("%Y-%m-%d %H:%M:%S")
     return {
-        "name": task["name"],
-        "stock": "" if stock is None else str(stock),
-        "url": task["monitor_url"],
-        "keyword": task["target_keyword"],
-        "checked_at": checked_at,
-        "status": "in_stock" if (stock or 0) > 0 else "sold_out",
+        "name": telegram_html_value(task["name"]),
+        "stock": "" if stock is None else telegram_html_value(stock),
+        "url": telegram_html_value(task["monitor_url"]),
+        "keyword": telegram_html_value(task["target_keyword"]),
+        "checked_at": telegram_html_value(checked_at),
+        "status": telegram_html_value("in_stock" if (stock or 0) > 0 else "sold_out"),
     }
 
 

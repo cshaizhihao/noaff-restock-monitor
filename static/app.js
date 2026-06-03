@@ -6,6 +6,8 @@
     let currentTasks = new Map();
     let currentSystem = null;
     let currentView = "tasks";
+    let tasksRendered = false;
+    let taskIdsSignature = "";
 
     const els = {
         loginShell: document.getElementById("login-shell"),
@@ -345,8 +347,12 @@
         return ["status-unknown", "◌ UNKNOWN", "等待首次识别"];
     }
 
-    function renderTasks(tasks) {
+    function renderTasks(tasks, initial = false) {
         currentTasks = new Map(tasks.map((task) => [String(task.id), task]));
+        const nextTaskIdsSignature = tasks.map((task) => String(task.id)).join("|");
+        const animateCards = initial || !tasksRendered || taskIdsSignature !== nextTaskIdsSignature;
+        tasksRendered = true;
+        taskIdsSignature = nextTaskIdsSignature;
         const taskCards = tasks.map((task, index) => {
             const [statusClass, statusText, logHint] = statusMeta(task);
             const stockText = task.last_stock === null || task.last_stock === undefined ? "Hidden" : String(task.last_stock);
@@ -355,8 +361,10 @@
                 : `> ${escapeHtml(logHint)} ${escapeHtml(formatTime(task.last_checked_at))}`;
             const lastChecked = task.last_checked_at ? escapeHtml(formatTime(task.last_checked_at)) : "尚未检查";
             const actionLabel = task.enabled ? "停用节点" : "启用节点";
+            const cardClass = animateCards ? "task-card reveal" : "task-card";
+            const cardStyle = animateCards ? ` style="animation-delay: ${index * 80}ms;"` : "";
             return `
-                <article class="task-card reveal" style="animation-delay: ${index * 80}ms;" data-task-id="${task.id}">
+                <article class="${cardClass}"${cardStyle} data-task-id="${task.id}">
                     <div class="absolute right-6 top-6">
                         <span class="status-badge ${statusClass}">${statusText}</span>
                     </div>
@@ -415,8 +423,10 @@
             `;
         }).join("");
 
+        const addCardClass = animateCards ? "add-card reveal" : "add-card";
+        const addCardStyle = animateCards ? ` style="animation-delay: ${tasks.length * 80}ms;"` : "";
         const addCard = `
-            <button type="button" id="tasks-add-card" class="add-card reveal" style="animation-delay: ${tasks.length * 80}ms;">
+            <button type="button" id="tasks-add-card" class="${addCardClass}"${addCardStyle}>
                 <div class="mb-4 flex h-16 w-16 items-center justify-center rounded-full bg-slate-800/80 transition-transform group-hover:scale-110">
                     <svg class="h-8 w-8 text-slate-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/>
@@ -430,20 +440,20 @@
         els.tasksGrid.innerHTML = tasks.length ? `${taskCards}${addCard}` : addCard;
     }
 
-    function renderSnapshot(data) {
+    function renderSnapshot(data, initial = false) {
         renderMetrics(data.metrics || {});
         renderEngine(data.engine || {});
         renderSettings(data.settings || {});
         renderSystem(data.system || {});
         renderAdmin(data.admin || {});
         renderLogs(data.logs || []);
-        renderTasks(data.tasks || []);
+        renderTasks(data.tasks || [], initial);
     }
 
     async function loadSnapshot(initial = false) {
         try {
             const data = await apiFetch("/api/snapshot");
-            renderSnapshot(data);
+            renderSnapshot(data, initial);
             els.loadingSkeleton.classList.add("hidden");
             els.dashboardContent.classList.remove("hidden");
         } catch (error) {

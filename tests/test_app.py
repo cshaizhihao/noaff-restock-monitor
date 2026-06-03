@@ -478,6 +478,50 @@ class PortalAppTestCase(unittest.TestCase):
             engine.telegram = original_telegram
             engine.scrape_task = original_scrape_task
 
+    def test_telegram_error_masks_bot_token_and_explains_bad_request(self) -> None:
+        class FakeResponse:
+            status_code = 400
+            text = ""
+            reason = "Bad Request"
+
+            def json(self):
+                return {"ok": False, "description": "Bad Request: chat not found"}
+
+        class FakeSession:
+            def post(self, url, json, timeout):
+                self.url = url
+                return FakeResponse()
+
+        token = "8839205541:AAFCQmQOEQaVerySecretToken"
+        client = app_module.TelegramClient()
+        fake_session = FakeSession()
+        client.session = fake_session
+
+        with self.assertRaises(RuntimeError) as raised:
+            client.send_message(token, "bad-chat", "hello")
+
+        message = str(raised.exception)
+        self.assertNotIn(token, message)
+        self.assertNotIn("api.telegram.org", message)
+        self.assertIn("Chat ID", message)
+        self.assertIn("chat not found", message)
+        self.assertIn(token, fake_session.url)
+
+    def test_message_template_values_escape_dynamic_html_for_telegram(self) -> None:
+        values = app_module.message_template_values(
+            {
+                "name": "Geelinx & Sonic <JP>",
+                "monitor_url": "https://www.geelinx.com/cart?fid=6&gid=12",
+                "target_keyword": "Sonic & Kawasaki",
+            },
+            28,
+        )
+
+        self.assertEqual(values["name"], "Geelinx &amp; Sonic &lt;JP&gt;")
+        self.assertEqual(values["url"], "https://www.geelinx.com/cart?fid=6&amp;gid=12")
+        self.assertEqual(values["keyword"], "Sonic &amp; Kawasaki")
+        self.assertEqual(values["stock"], "28")
+
     def test_update_settings_rejects_debug_port_collisions(self) -> None:
         _, headers = self.login()
 

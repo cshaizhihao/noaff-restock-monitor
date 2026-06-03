@@ -459,6 +459,13 @@ class InstallScriptTestCase(unittest.TestCase):
         self.assertIn("syncInputValue(els.profileUsername", app_js)
         self.assertNotIn("els.profileUsername.value = admin.username", app_js)
 
+    def test_dashboard_polling_does_not_replay_task_reveal_animation(self) -> None:
+        app_js = (ROOT_DIR / "static" / "app.js").read_text(encoding="utf-8")
+        self.assertIn("let tasksRendered = false", app_js)
+        self.assertIn("const animateCards = initial || !tasksRendered || taskIdsSignature !== nextTaskIdsSignature", app_js)
+        self.assertIn('const cardClass = animateCards ? "task-card reveal" : "task-card"', app_js)
+        self.assertIn("renderSnapshot(data, initial)", app_js)
+
     def test_docker_publish_port_conflict_is_reported_cleanly(self) -> None:
         result = self.run_bash(
             textwrap.dedent(
