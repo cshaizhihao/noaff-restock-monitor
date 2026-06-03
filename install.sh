@@ -2482,6 +2482,10 @@ final_summary() {
   fi
   echo "快捷命令:  noaff"
   echo "面板地址:  ${public_url}"
+  if ! bool_is_true "$ENABLE_TLS" && [[ -n "$FQDN" ]]; then
+    echo "提示:      当前为 HTTP 模式，请直接访问 http://${FQDN}"
+    echo "提示:      如果浏览器自动跳转到 https，请清除该域名的 HTTPS-Only / HSTS 记录后再访问。"
+  fi
   echo "管理员:    ${ADMIN_USERNAME}"
   if [[ -f "${APP_DIR}/data/bootstrap_admin.txt" ]]; then
     echo "初始密码:  ${ADMIN_PASSWORD}"

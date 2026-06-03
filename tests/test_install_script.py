@@ -248,6 +248,25 @@ class InstallScriptTestCase(unittest.TestCase):
         self.assertIn("HTTPS 证书申请失败：公网 HTTP-01 验证没有通过", output)
         self.assertIn("tls=false cert=none secure=false", output)
 
+    def test_http_mode_summary_warns_about_https_only_browsers(self) -> None:
+        output = self.assert_shell_ok(
+            textwrap.dedent(
+                r"""
+                set -Eeuo pipefail
+                export NOAFF_INSTALL_LIBRARY_MODE=true
+                export ACCESS_MODE=domain-direct
+                export ENABLE_TLS=false
+                export FQDN=monitor.example.com
+                source ./install.sh
+                normalize_access_mode
+                print_install_summary
+                final_summary
+                """
+            )
+        )
+        self.assertIn("当前为 HTTP 模式，请直接访问 http://monitor.example.com", output)
+        self.assertIn("HTTPS-Only / HSTS", output)
+
     def test_nginx_tls_config_uses_modern_http2_directive(self) -> None:
         output = self.assert_shell_ok(
             textwrap.dedent(
