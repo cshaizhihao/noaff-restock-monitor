@@ -947,9 +947,7 @@ EOF
 
   rm -f /etc/nginx/sites-enabled/default
   ln -sf "$NGINX_SITE_PATH" "$NGINX_SITE_LINK"
-  nginx -t
-  systemctl enable nginx
-  systemctl restart nginx
+  restart_nginx_safely
 }
 
 issue_certificate_http() {
@@ -1004,6 +1002,37 @@ issue_certificate() {
 
 fetch_cloudflare_ips() {
   curl -fsSL --retry 3 --connect-timeout 10 --max-time 60 https://api.cloudflare.com/client/v4/ips
+}
+
+restart_nginx_safely() {
+  nginx -t
+  systemctl enable nginx
+  if systemctl restart nginx; then
+    return
+  fi
+
+  warn "Nginx 配置检查通过，但 systemd 启动失败。正在检查是否有残留 nginx 进程占用端口。"
+  systemctl status nginx --no-pager -l || true
+  if pgrep -x nginx >/dev/null 2>&1; then
+    warn "检测到残留 nginx 进程，尝试优雅退出后重新启动。"
+    nginx -s quit >/dev/null 2>&1 || true
+    sleep 2
+    if pgrep -x nginx >/dev/null 2>&1; then
+      warn "残留 nginx 未完全退出，执行 TERM 清理。"
+      pkill -TERM -x nginx || true
+      sleep 2
+    fi
+    if pgrep -x nginx >/dev/null 2>&1; then
+      warn "残留 nginx 仍占用端口，执行 KILL 清理。"
+      pkill -KILL -x nginx || true
+      sleep 1
+    fi
+    systemctl reset-failed nginx || true
+    systemctl restart nginx && return
+  fi
+
+  journalctl -u nginx --no-pager -n 60 -l || true
+  die "Nginx 启动失败。请根据上方日志处理端口占用或服务错误后重试。"
 }
 
 write_cloudflare_nginx_snippets() {
@@ -1091,9 +1120,7 @@ server {
 EOF
     rm -f /etc/nginx/sites-enabled/default
     ln -sf "$NGINX_SITE_PATH" "$NGINX_SITE_LINK"
-    nginx -t
-    systemctl enable nginx
-    systemctl restart nginx
+    restart_nginx_safely
     return
   fi
 
@@ -1141,9 +1168,7 @@ EOF
 
   rm -f /etc/nginx/sites-enabled/default
   ln -sf "$NGINX_SITE_PATH" "$NGINX_SITE_LINK"
-  nginx -t
-  systemctl enable nginx
-  systemctl restart nginx
+  restart_nginx_safely
 }
 
 write_env_file() {
