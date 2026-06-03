@@ -1,346 +1,331 @@
 <!doctype html>
-<html lang="zh-CN" class="h-full bg-slate-950">
+<html lang="zh-CN" class="h-full bg-[#030712]">
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="csrf-token" content="{{ csrf_token }}">
-    <title>NOAFF 补货监控助手</title>
+    <title>NOAFF MONITOR | 控制中心</title>
     <script src="https://cdn.tailwindcss.com"></script>
-    <script>
-        tailwind.config = {
-            darkMode: 'class',
-            theme: {
-                extend: {
-                    colors: {
-                        brand: {
-                            500: '#6366f1',
-                            600: '#4f46e5',
-                            700: '#4338ca'
-                        }
-                    },
-                    boxShadow: {
-                        soft: '0 22px 60px rgba(15, 23, 42, 0.35)'
-                    }
-                }
-            }
-        };
-    </script>
     <link rel="stylesheet" href="{{ url_for('static', filename='app.css') }}">
 </head>
-<body class="h-full bg-slate-950 text-slate-100 antialiased dark">
+<body class="h-full selection:bg-indigo-500/30">
     <div id="app-root"
          data-portal-path="{{ portal_path }}"
          data-logged-in="{{ 'true' if logged_in else 'false' }}"
          class="min-h-full">
 
-        <section id="login-shell" class="min-h-screen px-6 py-10">
-            <div class="mx-auto flex min-h-[calc(100vh-5rem)] max-w-6xl items-center justify-center">
-                <div class="grid w-full gap-10 lg:grid-cols-[1.1fr_0.9fr]">
-                    <div class="hidden rounded-3xl border border-slate-800 bg-slate-900/55 p-10 shadow-soft backdrop-blur lg:block">
-                        <div class="space-y-10">
-                            <div class="space-y-4">
-                                <span class="inline-flex items-center rounded-full border border-brand-500/30 bg-brand-500/10 px-3 py-1 text-xs font-medium text-brand-200">
-                                    Private Control Surface
-                                </span>
-                                <div class="space-y-4">
-                                    <h1 class="text-4xl font-semibold tracking-tight text-white">
-                                        NOAFF 补货监控助手
-                                    </h1>
-                                    <p class="max-w-xl text-base leading-7 text-slate-300">
-                                        面向 IDC 补货场景的私有监控面板。深色实时控制台、隔离式浏览器引擎、Telegram 状态机推送，全部围绕高频风控和稳定轮询设计。
-                                    </p>
-                                </div>
-                            </div>
+        <div class="fixed inset-0 -z-10 bg-grid"></div>
 
-                            <div class="grid gap-4 sm:grid-cols-2">
-                                <div class="rounded-2xl border border-slate-800 bg-slate-950/60 p-5">
-                                    <p class="text-sm font-medium text-slate-300">隐蔽入口</p>
-                                    <p class="mt-2 text-sm leading-6 text-slate-400">
-                                        默认启用高熵控制台路径与严格会话保护。
-                                    </p>
-                                </div>
-                                <div class="rounded-2xl border border-slate-800 bg-slate-950/60 p-5">
-                                    <p class="text-sm font-medium text-slate-300">双端口隔离</p>
-                                    <p class="mt-2 text-sm leading-6 text-slate-400">
-                                        监控浏览器和测试推送浏览器完全分离，互不干扰。
-                                    </p>
-                                </div>
-                                <div class="rounded-2xl border border-slate-800 bg-slate-950/60 p-5">
-                                    <p class="text-sm font-medium text-slate-300">静默库存更新</p>
-                                    <p class="mt-2 text-sm leading-6 text-slate-400">
-                                        库存变化走 editMessageText，不制造额外弹窗。
-                                    </p>
-                                </div>
-                                <div class="rounded-2xl border border-slate-800 bg-slate-950/60 p-5">
-                                    <p class="text-sm font-medium text-slate-300">自愈机制</p>
-                                    <p class="mt-2 text-sm leading-6 text-slate-400">
-                                        disconnected / Timeout 自动重建 Chromium 控制链路。
-                                    </p>
-                                </div>
-                            </div>
-                        </div>
+        <section id="login-shell" class="flex min-h-screen items-center justify-center px-6 py-10">
+            <div class="glass-panel reveal w-full max-w-md overflow-hidden rounded-2xl p-10">
+                <div class="absolute left-0 top-0 h-1 w-full bg-gradient-to-r from-indigo-500 via-cyan-400 to-indigo-500"></div>
+
+                <div class="mb-8 flex flex-col items-center text-center">
+                    <div class="mb-4 flex h-12 w-12 items-center justify-center">
+                        <svg viewBox="0 0 24 24" fill="none" class="h-full w-full">
+                            <defs>
+                                <linearGradient id="login-lg1" x1="0%" y1="0%" x2="100%" y2="100%">
+                                    <stop offset="0%" stop-color="#818CF8"/>
+                                    <stop offset="100%" stop-color="#38BDF8"/>
+                                </linearGradient>
+                                <linearGradient id="login-lg2" x1="0%" y1="0%" x2="100%" y2="100%">
+                                    <stop offset="0%" stop-color="#F43F5E"/>
+                                    <stop offset="100%" stop-color="#E11D48"/>
+                                </linearGradient>
+                            </defs>
+                            <circle cx="12" cy="12" r="10" stroke="url(#login-lg1)" stroke-width="2" stroke-dasharray="4 4" class="origin-center animate-[spin_6s_linear_infinite]"/>
+                            <circle cx="12" cy="12" r="3" fill="url(#login-lg1)"/>
+                            <circle cx="12" cy="12" r="5" stroke="url(#login-lg1)" stroke-width="1.5" opacity="0.5"/>
+                            <path d="M5 5L19 19" stroke="url(#login-lg2)" stroke-width="2.5" stroke-linecap="round"/>
+                        </svg>
                     </div>
-
-                    <div class="rounded-3xl border border-slate-800 bg-slate-900/80 p-8 shadow-soft backdrop-blur">
-                        <div class="space-y-8">
-                            <div class="space-y-3">
-                                <p class="text-sm font-medium text-brand-200">Secure Entry</p>
-                                <div class="space-y-2">
-                                    <h2 class="text-3xl font-semibold tracking-tight text-white">管理员登录</h2>
-                                    <p class="text-sm leading-6 text-slate-400">
-                                        登录接口已启用严格限流、浏览器请求头校验和内部 CSRF 令牌验证。
-                                    </p>
-                                </div>
-                            </div>
-
-                            <form id="login-form" class="space-y-5">
-                                <div class="space-y-2">
-                                    <label for="login-username" class="text-sm font-medium text-slate-300">用户名</label>
-                                    <input id="login-username" name="username" type="text" autocomplete="username" class="app-input" required>
-                                </div>
-                                <div class="space-y-2">
-                                    <label for="login-password" class="text-sm font-medium text-slate-300">密码</label>
-                                    <input id="login-password" name="password" type="password" autocomplete="current-password" class="app-input" required>
-                                </div>
-                                <button type="submit" class="app-button-primary w-full justify-center">
-                                    安全登录
-                                </button>
-                            </form>
-
-                            <div class="rounded-2xl border border-amber-400/20 bg-amber-400/10 px-4 py-3 text-sm leading-6 text-amber-100">
-                                初次启动如未设置环境变量，系统会在 <code>data/bootstrap_admin.txt</code> 中写入一次性初始凭据。
-                            </div>
-                        </div>
-                    </div>
+                    <h1 class="text-3xl font-extrabold tracking-tight text-white">NOAFF <span class="gradient-text">MONITOR</span></h1>
+                    <p class="mt-2 text-sm text-slate-400">授权访问安全控制中心</p>
                 </div>
+
+                <form id="login-form" class="space-y-5">
+                    <div>
+                        <label for="login-username" class="form-label uppercase tracking-wider">Access ID</label>
+                        <input id="login-username" type="text" autocomplete="username" placeholder="管理员账号" class="input-dark" required>
+                    </div>
+                    <div>
+                        <label for="login-password" class="form-label uppercase tracking-wider">Secret Key</label>
+                        <input id="login-password" type="password" autocomplete="current-password" placeholder="••••••••" class="input-dark" required>
+                    </div>
+                    <button type="submit" class="primary-button group w-full">
+                        <span>初始化登入进程</span>
+                        <svg class="ml-2 h-4 w-4 transition-transform group-hover:translate-x-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14 5l7 7m0 0l-7 7m7-7H3"/>
+                        </svg>
+                    </button>
+                </form>
             </div>
         </section>
 
-        <section id="dashboard-shell" class="hidden min-h-screen px-5 py-5 sm:px-6 lg:px-8">
-            <div class="mx-auto flex max-w-[1680px] flex-col gap-6">
-                <header class="flex flex-col gap-4 rounded-3xl border border-slate-800 bg-slate-900/75 px-5 py-5 shadow-soft backdrop-blur lg:flex-row lg:items-center lg:justify-between">
-                    <div class="space-y-2">
-                        <div class="flex flex-wrap items-center gap-3">
-                            <h1 class="text-2xl font-semibold tracking-tight text-white">NOAFF 补货监控助手</h1>
-                            <span id="engine-chip" class="status-chip status-chip-idle">引擎待机</span>
+        <section id="dashboard-shell" class="hidden h-screen overflow-hidden">
+            <aside class="glass-sidebar hidden h-full w-64 flex-none flex-col md:flex">
+                <div class="flex h-20 items-center border-b border-slate-800 px-6">
+                    <div class="mr-3 flex h-8 w-8 items-center justify-center">
+                        <svg viewBox="0 0 24 24" fill="none" class="h-full w-full">
+                            <defs>
+                                <linearGradient id="side-lg1" x1="0%" y1="0%" x2="100%" y2="100%">
+                                    <stop offset="0%" stop-color="#818CF8"/>
+                                    <stop offset="100%" stop-color="#38BDF8"/>
+                                </linearGradient>
+                                <linearGradient id="side-lg2" x1="0%" y1="0%" x2="100%" y2="100%">
+                                    <stop offset="0%" stop-color="#F43F5E"/>
+                                    <stop offset="100%" stop-color="#E11D48"/>
+                                </linearGradient>
+                            </defs>
+                            <circle cx="12" cy="12" r="10" stroke="url(#side-lg1)" stroke-width="2" stroke-dasharray="4 4" class="origin-center animate-[spin_6s_linear_infinite]"/>
+                            <circle cx="12" cy="12" r="3" fill="url(#side-lg1)"/>
+                            <circle cx="12" cy="12" r="5" stroke="url(#side-lg1)" stroke-width="1.5" opacity="0.5"/>
+                            <path d="M5 5L19 19" stroke="url(#side-lg2)" stroke-width="2.5" stroke-linecap="round"/>
+                        </svg>
+                    </div>
+                    <span class="text-sm font-bold tracking-widest text-slate-200">NOAFF_PANEL</span>
+                </div>
+
+                <nav class="flex-1 space-y-2 overflow-y-auto p-4">
+                    <div class="mb-3 mt-4 px-3 text-[10px] font-bold uppercase tracking-widest text-slate-500">控制台模块</div>
+                    <button id="nav-tasks" type="button" class="nav-item nav-item-active w-full">
+                        <svg class="mr-3 h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2V6zM14 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2V6zM4 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2v-2zM14 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2v-2z"/>
+                        </svg>
+                        <span>任务大厅</span>
+                    </button>
+                    <button id="nav-settings" type="button" class="nav-item w-full">
+                        <svg class="mr-3 h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/>
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/>
+                        </svg>
+                        <span>全局配置</span>
+                    </button>
+                </nav>
+
+                <div class="border-t border-slate-800 p-5">
+                    <div class="mb-4 flex items-center justify-between px-1">
+                        <div class="flex items-center">
+                            <span class="mr-2.5 h-2 w-2 rounded-full bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.8)]"></span>
+                            <span id="engine-chip" class="font-mono text-[11px] text-slate-400">System Online</span>
                         </div>
-                        <div class="flex flex-wrap items-center gap-3 text-sm text-slate-400">
-                            <span id="admin-identity">管理员</span>
-                            <span class="h-1 w-1 rounded-full bg-slate-700"></span>
-                            <span id="portal-chip" class="font-mono text-xs text-slate-500"></span>
-                            <span class="h-1 w-1 rounded-full bg-slate-700"></span>
-                            <span id="last-cycle">尚未轮询</span>
+                    </div>
+                    <button id="logout-button" type="button" class="danger-button w-full">
+                        <svg class="mr-2 h-4 w-4 transition-transform group-hover:-translate-x-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1"/>
+                        </svg>
+                        登出终端
+                    </button>
+                </div>
+            </aside>
+
+            <main class="h-full flex-1 overflow-y-auto scroll-smooth">
+                <div class="mx-auto max-w-[1600px] p-5 md:p-10 lg:p-12">
+                    <header class="reveal mb-8 flex flex-col justify-between gap-6 md:flex-row md:items-center">
+                        <div>
+                            <h2 id="view-title" class="mb-3 text-3xl font-extrabold tracking-tight text-white md:text-4xl">监控任务池</h2>
+                            <div class="flex w-fit items-center rounded-full border border-indigo-500/30 bg-indigo-900/30 px-3.5 py-1.5 font-mono text-[13px] text-indigo-300 shadow-[inset_0_1px_0_rgba(255,255,255,0.1)]">
+                                <span class="mr-2.5 h-2 w-2 rounded-full bg-indigo-400 shadow-[0_0_5px_rgba(129,140,248,0.8)]"></span>
+                                <span id="last-cycle">底层引擎数据同步中...</span>
+                            </div>
                         </div>
-                    </div>
-                    <div class="flex flex-wrap items-center gap-3">
-                        <button id="refresh-button" type="button" class="app-button-secondary">刷新</button>
-                        <button id="restart-engine-button" type="button" class="app-button-secondary">重启引擎</button>
-                        <button id="logout-button" type="button" class="app-button-secondary">退出</button>
-                    </div>
-                </header>
+                        <div class="flex flex-wrap gap-3">
+                            <button id="refresh-button" type="button" class="ghost-button">
+                                <svg class="mr-2 h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>
+                                </svg>
+                                同步
+                            </button>
+                            <button id="restart-engine-button" type="button" class="ghost-button">
+                                <svg class="mr-2 h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/>
+                                </svg>
+                                重启引擎
+                            </button>
+                            <button id="task-reset-button" type="button" class="light-button">
+                                <svg class="mr-2 h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/>
+                                </svg>
+                                新增监控节点
+                            </button>
+                        </div>
+                    </header>
 
-                <section class="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-                    <article class="metric-panel">
-                        <p class="metric-label">总任务数</p>
-                        <p id="metric-total" class="metric-value">0</p>
-                    </article>
-                    <article class="metric-panel">
-                        <p class="metric-label">有货任务</p>
-                        <p id="metric-stock" class="metric-value text-emerald-300">0</p>
-                    </article>
-                    <article class="metric-panel">
-                        <p class="metric-label">售罄任务</p>
-                        <p id="metric-soldout" class="metric-value text-rose-300">0</p>
-                    </article>
-                    <article class="metric-panel">
-                        <p class="metric-label">未知状态</p>
-                        <p id="metric-unknown" class="metric-value text-amber-200">0</p>
-                    </article>
-                </section>
+                    <section class="mb-8 grid grid-cols-2 gap-4 xl:grid-cols-4">
+                        <article class="metric-card reveal" style="animation-delay: 0ms;">
+                            <p>总任务</p>
+                            <strong id="metric-total">0</strong>
+                        </article>
+                        <article class="metric-card reveal" style="animation-delay: 70ms;">
+                            <p>有货</p>
+                            <strong id="metric-stock" class="text-emerald-300">0</strong>
+                        </article>
+                        <article class="metric-card reveal" style="animation-delay: 140ms;">
+                            <p>售罄</p>
+                            <strong id="metric-soldout" class="text-rose-300">0</strong>
+                        </article>
+                        <article class="metric-card reveal" style="animation-delay: 210ms;">
+                            <p>未知</p>
+                            <strong id="metric-unknown" class="text-amber-200">0</strong>
+                        </article>
+                    </section>
 
-                <section id="loading-skeleton" class="grid gap-6 xl:grid-cols-[1.5fr_1fr]">
-                    <div class="space-y-6">
-                        <div class="skeleton-panel h-[540px]"></div>
-                    </div>
-                    <div class="space-y-6">
-                        <div class="skeleton-panel h-[240px]"></div>
-                        <div class="skeleton-panel h-[240px]"></div>
-                    </div>
-                </section>
+                    <section id="loading-skeleton" class="grid grid-cols-1 gap-6 md:grid-cols-2 xl:grid-cols-3">
+                        <div class="skeleton-card h-[340px]"></div>
+                        <div class="skeleton-card h-[340px]"></div>
+                        <div class="skeleton-card h-[340px]"></div>
+                    </section>
 
-                <section id="dashboard-content" class="hidden grid gap-6 xl:grid-cols-[1.55fr_1fr]">
-                    <div class="space-y-6">
-                        <section class="panel">
-                            <div class="panel-header">
-                                <div>
-                                    <h2 class="panel-title">任务编排</h2>
-                                    <p class="panel-subtitle">商品名称、监控链接、精准关键词、TG 推送文案、售罄文案、双按钮配置。</p>
-                                </div>
-                                <button id="task-reset-button" type="button" class="app-button-secondary">新建任务</button>
-                            </div>
-
-                            <form id="task-form" class="grid gap-4 lg:grid-cols-2">
-                                <input id="task-id" type="hidden">
-                                <div class="space-y-2">
-                                    <label for="task-name" class="form-label">商品名称</label>
-                                    <input id="task-name" name="name" type="text" class="app-input" required>
-                                </div>
-                                <div class="space-y-2">
-                                    <label for="task-url" class="form-label">监控链接</label>
-                                    <input id="task-url" name="monitor_url" type="url" class="app-input" required>
-                                </div>
-                                <div class="space-y-2 lg:col-span-2">
-                                    <label for="task-keyword" class="form-label">精准狙击关键词</label>
-                                    <input id="task-keyword" name="target_keyword" type="text" class="app-input" required>
-                                </div>
-                                <div class="space-y-2 lg:col-span-2">
-                                    <label for="task-restock" class="form-label">TG 推送文案</label>
-                                    <textarea id="task-restock" name="restock_template" rows="4" class="app-textarea" required></textarea>
-                                </div>
-                                <div class="space-y-2 lg:col-span-2">
-                                    <label for="task-soldout" class="form-label">售罄文案</label>
-                                    <textarea id="task-soldout" name="soldout_template" rows="4" class="app-textarea" required></textarea>
-                                </div>
-                                <div class="rounded-2xl border border-slate-800 bg-slate-950/50 px-4 py-3 text-xs leading-6 text-slate-400 lg:col-span-2">
-                                    支持占位符：<code>{name}</code> <code>{stock}</code> <code>{url}</code> <code>{keyword}</code> <code>{checked_at}</code> <code>{status}</code>
-                                </div>
-                                <div class="space-y-2">
-                                    <label for="task-button-1-text" class="form-label">按钮 1 文本</label>
-                                    <input id="task-button-1-text" name="button_1_text" type="text" class="app-input">
-                                </div>
-                                <div class="space-y-2">
-                                    <label for="task-button-1-url" class="form-label">按钮 1 链接</label>
-                                    <input id="task-button-1-url" name="button_1_url" type="url" class="app-input">
-                                </div>
-                                <div class="space-y-2">
-                                    <label for="task-button-2-text" class="form-label">按钮 2 文本</label>
-                                    <input id="task-button-2-text" name="button_2_text" type="text" class="app-input">
-                                </div>
-                                <div class="space-y-2">
-                                    <label for="task-button-2-url" class="form-label">按钮 2 链接</label>
-                                    <input id="task-button-2-url" name="button_2_url" type="url" class="app-input">
-                                </div>
-                                <label class="inline-flex items-center gap-3 rounded-2xl border border-slate-800 bg-slate-950/50 px-4 py-3 text-sm text-slate-300 lg:col-span-2">
-                                    <input id="task-enabled" name="enabled" type="checkbox" class="h-4 w-4 rounded border-slate-700 bg-slate-900 text-brand-500 focus:ring-brand-500" checked>
-                                    启用该任务
-                                </label>
-                                <div class="flex flex-wrap items-center gap-3 lg:col-span-2">
-                                    <button type="submit" id="task-submit-button" class="app-button-primary">保存任务</button>
-                                    <button type="button" id="task-cancel-button" class="app-button-secondary">清空表单</button>
-                                </div>
-                            </form>
+                    <section id="dashboard-content" class="hidden">
+                        <section id="tasks-view">
+                            <div id="tasks-grid" class="grid grid-cols-1 gap-6 md:grid-cols-2 xl:grid-cols-3"></div>
                         </section>
 
-                        <section class="panel">
-                            <div class="panel-header">
-                                <div>
-                                    <h2 class="panel-title">实时任务列表</h2>
-                                    <p class="panel-subtitle">AJAX 轮询刷新，展示库存状态、上次检测、消息绑定和错误信息。</p>
-                                </div>
-                            </div>
-                            <div class="overflow-x-auto">
-                                <table class="min-w-full divide-y divide-slate-800">
-                                    <thead>
-                                        <tr class="text-left text-xs uppercase tracking-[0.14em] text-slate-500">
-                                            <th class="px-4 py-3 font-medium">任务</th>
-                                            <th class="px-4 py-3 font-medium">状态</th>
-                                            <th class="px-4 py-3 font-medium">库存</th>
-                                            <th class="px-4 py-3 font-medium">消息 ID</th>
-                                            <th class="px-4 py-3 font-medium">最近检查</th>
-                                            <th class="px-4 py-3 font-medium">操作</th>
-                                        </tr>
-                                    </thead>
-                                    <tbody id="tasks-table" class="divide-y divide-slate-900/70"></tbody>
-                                </table>
-                            </div>
-                        </section>
-                    </div>
+                        <section id="settings-view" class="hidden grid grid-cols-1 gap-6 xl:grid-cols-[1fr_0.9fr]">
+                            <div class="space-y-6">
+                                <section class="control-panel reveal">
+                                    <h3 class="panel-heading">引擎与推送设置</h3>
+                                    <form id="settings-form" class="mt-5 grid gap-4">
+                                        <div>
+                                            <label for="settings-bot-token" class="form-label">Telegram Bot Token</label>
+                                            <input id="settings-bot-token" type="text" class="input-dark" placeholder="留空保持现有 Token">
+                                            <p id="settings-bot-token-mask" class="mt-2 text-xs text-slate-500"></p>
+                                        </div>
+                                        <div>
+                                            <label for="settings-chat-id" class="form-label">Telegram Chat ID</label>
+                                            <input id="settings-chat-id" type="text" class="input-dark">
+                                        </div>
+                                        <div class="grid gap-4 sm:grid-cols-2">
+                                            <div>
+                                                <label for="settings-monitor-port" class="form-label">监控浏览器端口</label>
+                                                <input id="settings-monitor-port" type="number" min="1024" max="65535" class="input-dark">
+                                            </div>
+                                            <div>
+                                                <label for="settings-test-port" class="form-label">测试浏览器端口</label>
+                                                <input id="settings-test-port" type="number" min="1024" max="65535" class="input-dark">
+                                            </div>
+                                            <div>
+                                                <label for="settings-poll-interval" class="form-label">轮询间隔</label>
+                                                <input id="settings-poll-interval" type="number" min="15" max="3600" class="input-dark">
+                                            </div>
+                                            <div>
+                                                <label for="settings-timeout" class="form-label">请求超时</label>
+                                                <input id="settings-timeout" type="number" min="10" max="120" class="input-dark">
+                                            </div>
+                                        </div>
+                                        <button type="submit" class="primary-button">保存设置</button>
+                                    </form>
+                                </section>
 
-                    <div class="space-y-6">
-                        <section class="panel">
-                            <div class="panel-header">
-                                <div>
-                                    <h2 class="panel-title">引擎与推送设置</h2>
-                                    <p class="panel-subtitle">Telegram Token / Chat ID、轮询间隔、请求超时、监控端口、测试端口。</p>
-                                </div>
+                                <section class="control-panel reveal">
+                                    <h3 class="panel-heading">管理员凭据</h3>
+                                    <form id="profile-form" class="mt-5 grid gap-4">
+                                        <div>
+                                            <label for="profile-username" class="form-label">新用户名</label>
+                                            <input id="profile-username" type="text" class="input-dark">
+                                        </div>
+                                        <div>
+                                            <label for="profile-current-password" class="form-label">当前密码</label>
+                                            <input id="profile-current-password" type="password" class="input-dark" required>
+                                        </div>
+                                        <div class="grid gap-4 sm:grid-cols-2">
+                                            <div>
+                                                <label for="profile-new-password" class="form-label">新密码</label>
+                                                <input id="profile-new-password" type="password" class="input-dark">
+                                            </div>
+                                            <div>
+                                                <label for="profile-confirm-password" class="form-label">确认新密码</label>
+                                                <input id="profile-confirm-password" type="password" class="input-dark">
+                                            </div>
+                                        </div>
+                                        <button type="submit" class="primary-button">更新凭据</button>
+                                    </form>
+                                </section>
                             </div>
-                            <form id="settings-form" class="grid gap-4">
-                                <div class="space-y-2">
-                                    <label for="settings-bot-token" class="form-label">Telegram Bot Token</label>
-                                    <input id="settings-bot-token" name="telegram_bot_token" type="text" class="app-input" placeholder="留空表示保持现有 Token">
-                                    <p id="settings-bot-token-mask" class="text-xs text-slate-500"></p>
-                                </div>
-                                <div class="space-y-2">
-                                    <label for="settings-chat-id" class="form-label">Telegram Chat ID</label>
-                                    <input id="settings-chat-id" name="telegram_chat_id" type="text" class="app-input">
-                                </div>
-                                <div class="grid gap-4 sm:grid-cols-2">
-                                    <div class="space-y-2">
-                                        <label for="settings-monitor-port" class="form-label">监控浏览器端口</label>
-                                        <input id="settings-monitor-port" name="monitor_debug_port" type="number" min="1024" max="65535" class="app-input">
-                                    </div>
-                                    <div class="space-y-2">
-                                        <label for="settings-test-port" class="form-label">测试浏览器端口</label>
-                                        <input id="settings-test-port" name="test_debug_port" type="number" min="1024" max="65535" class="app-input">
-                                    </div>
-                                </div>
-                                <div class="grid gap-4 sm:grid-cols-2">
-                                    <div class="space-y-2">
-                                        <label for="settings-poll-interval" class="form-label">轮询间隔（秒）</label>
-                                        <input id="settings-poll-interval" name="poll_interval_seconds" type="number" min="15" max="3600" class="app-input">
-                                    </div>
-                                    <div class="space-y-2">
-                                        <label for="settings-timeout" class="form-label">请求超时（秒）</label>
-                                        <input id="settings-timeout" name="request_timeout_seconds" type="number" min="10" max="120" class="app-input">
-                                    </div>
-                                </div>
-                                <button type="submit" class="app-button-primary">保存设置</button>
-                            </form>
-                        </section>
 
-                        <section class="panel">
-                            <div class="panel-header">
-                                <div>
-                                    <h2 class="panel-title">管理员凭据</h2>
-                                    <p class="panel-subtitle">支持在线修改用户名与密码。保存前必须输入当前密码。</p>
+                            <section class="control-panel reveal">
+                                <h3 class="panel-heading">活动日志</h3>
+                                <div class="mt-5 terminal-box max-h-[620px] overflow-y-auto p-4">
+                                    <div id="log-stream" class="space-y-4"></div>
                                 </div>
-                            </div>
-                            <form id="profile-form" class="grid gap-4">
-                                <div class="space-y-2">
-                                    <label for="profile-username" class="form-label">新用户名</label>
-                                    <input id="profile-username" name="new_username" type="text" class="app-input">
+                                <div class="mt-5 space-y-2 font-mono text-xs text-slate-500">
+                                    <p id="admin-identity">管理员</p>
+                                    <p id="portal-chip"></p>
                                 </div>
-                                <div class="space-y-2">
-                                    <label for="profile-current-password" class="form-label">当前密码</label>
-                                    <input id="profile-current-password" name="current_password" type="password" class="app-input" required>
-                                </div>
-                                <div class="grid gap-4 sm:grid-cols-2">
-                                    <div class="space-y-2">
-                                        <label for="profile-new-password" class="form-label">新密码</label>
-                                        <input id="profile-new-password" name="new_password" type="password" class="app-input">
-                                    </div>
-                                    <div class="space-y-2">
-                                        <label for="profile-confirm-password" class="form-label">确认新密码</label>
-                                        <input id="profile-confirm-password" name="confirm_password" type="password" class="app-input">
-                                    </div>
-                                </div>
-                                <button type="submit" class="app-button-primary">更新凭据</button>
-                            </form>
+                            </section>
                         </section>
-
-                        <section class="panel">
-                            <div class="panel-header">
-                                <div>
-                                    <h2 class="panel-title">活动日志</h2>
-                                    <p class="panel-subtitle">最近 30 条运行记录，包含任务、引擎与鉴权事件。</p>
-                                </div>
-                            </div>
-                            <div id="log-stream" class="max-h-[420px] space-y-3 overflow-y-auto pr-1"></div>
-                        </section>
-                    </div>
-                </section>
-            </div>
+                    </section>
+                </div>
+            </main>
         </section>
+
+        <div id="task-modal" class="modal-shell hidden">
+            <div class="modal-panel">
+                <div class="mb-6 flex items-start justify-between gap-4">
+                    <div>
+                        <h3 id="task-modal-title" class="text-2xl font-extrabold tracking-tight text-white">新增监控节点</h3>
+                        <p class="mt-1 font-mono text-xs text-slate-500">Targeted slicing / Telegram state machine</p>
+                    </div>
+                    <button id="task-modal-close" type="button" class="icon-button" aria-label="关闭">
+                        <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+                        </svg>
+                    </button>
+                </div>
+
+                <form id="task-form" class="grid gap-4">
+                    <input id="task-id" type="hidden">
+                    <div class="grid gap-4 lg:grid-cols-2">
+                        <div>
+                            <label for="task-name" class="form-label">商品名称</label>
+                            <input id="task-name" type="text" class="input-dark" required>
+                        </div>
+                        <div>
+                            <label for="task-url" class="form-label">监控链接</label>
+                            <input id="task-url" type="url" class="input-dark" required>
+                        </div>
+                    </div>
+                    <div>
+                        <label for="task-keyword" class="form-label">精准狙击关键词</label>
+                        <input id="task-keyword" type="text" class="input-dark" required>
+                    </div>
+                    <div>
+                        <label for="task-restock" class="form-label">TG 推送文案</label>
+                        <textarea id="task-restock" rows="4" class="input-dark min-h-28 resize-y leading-6" required></textarea>
+                    </div>
+                    <div>
+                        <label for="task-soldout" class="form-label">售罄文案</label>
+                        <textarea id="task-soldout" rows="4" class="input-dark min-h-28 resize-y leading-6" required></textarea>
+                    </div>
+                    <div class="grid gap-4 lg:grid-cols-2">
+                        <div>
+                            <label for="task-button-1-text" class="form-label">按钮 1 文本</label>
+                            <input id="task-button-1-text" type="text" class="input-dark">
+                        </div>
+                        <div>
+                            <label for="task-button-1-url" class="form-label">按钮 1 链接</label>
+                            <input id="task-button-1-url" type="url" class="input-dark">
+                        </div>
+                        <div>
+                            <label for="task-button-2-text" class="form-label">按钮 2 文本</label>
+                            <input id="task-button-2-text" type="text" class="input-dark">
+                        </div>
+                        <div>
+                            <label for="task-button-2-url" class="form-label">按钮 2 链接</label>
+                            <input id="task-button-2-url" type="url" class="input-dark">
+                        </div>
+                    </div>
+                    <label class="flex items-center gap-3 rounded-lg border border-slate-700/60 bg-slate-950/50 px-4 py-3 text-sm text-slate-300">
+                        <input id="task-enabled" type="checkbox" class="h-4 w-4 rounded border-slate-700 bg-slate-950 text-indigo-500" checked>
+                        启用该任务
+                    </label>
+                    <div class="flex flex-wrap justify-end gap-3 pt-2">
+                        <button id="task-cancel-button" type="button" class="ghost-button">取消</button>
+                        <button id="task-submit-button" type="submit" class="primary-button">保存节点</button>
+                    </div>
+                </form>
+            </div>
+        </div>
 
         <div id="toast-stack" class="pointer-events-none fixed right-4 top-4 z-50 flex w-[min(92vw,24rem)] flex-col gap-3"></div>
     </div>

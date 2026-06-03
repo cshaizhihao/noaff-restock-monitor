@@ -1,78 +1,137 @@
 (() => {
     const context = window.APP_CONTEXT || {};
-    let csrfToken = context.csrfToken || document.querySelector('meta[name="csrf-token"]')?.content || '';
+    const root = document.getElementById("app-root");
+    const portalPath = root?.dataset.portalPath || context.portalPath || "";
+    let csrfToken = context.csrfToken || document.querySelector('meta[name="csrf-token"]')?.content || "";
     let snapshotTimer = null;
     let currentTasks = new Map();
-
-    const root = document.getElementById('app-root');
-    const loginShell = document.getElementById('login-shell');
-    const dashboardShell = document.getElementById('dashboard-shell');
-    const loadingSkeleton = document.getElementById('loading-skeleton');
-    const dashboardContent = document.getElementById('dashboard-content');
-    const toastStack = document.getElementById('toast-stack');
-    const portalPath = root?.dataset.portalPath || context.portalPath || '';
+    let currentView = "tasks";
 
     const els = {
-        loginForm: document.getElementById('login-form'),
-        loginUsername: document.getElementById('login-username'),
-        loginPassword: document.getElementById('login-password'),
-        logoutButton: document.getElementById('logout-button'),
-        refreshButton: document.getElementById('refresh-button'),
-        restartEngineButton: document.getElementById('restart-engine-button'),
-        engineChip: document.getElementById('engine-chip'),
-        adminIdentity: document.getElementById('admin-identity'),
-        portalChip: document.getElementById('portal-chip'),
-        lastCycle: document.getElementById('last-cycle'),
-        metricTotal: document.getElementById('metric-total'),
-        metricStock: document.getElementById('metric-stock'),
-        metricSoldout: document.getElementById('metric-soldout'),
-        metricUnknown: document.getElementById('metric-unknown'),
-        tasksTable: document.getElementById('tasks-table'),
-        taskForm: document.getElementById('task-form'),
-        taskResetButton: document.getElementById('task-reset-button'),
-        taskCancelButton: document.getElementById('task-cancel-button'),
-        taskSubmitButton: document.getElementById('task-submit-button'),
-        taskId: document.getElementById('task-id'),
-        taskName: document.getElementById('task-name'),
-        taskUrl: document.getElementById('task-url'),
-        taskKeyword: document.getElementById('task-keyword'),
-        taskRestock: document.getElementById('task-restock'),
-        taskSoldout: document.getElementById('task-soldout'),
-        taskButton1Text: document.getElementById('task-button-1-text'),
-        taskButton1Url: document.getElementById('task-button-1-url'),
-        taskButton2Text: document.getElementById('task-button-2-text'),
-        taskButton2Url: document.getElementById('task-button-2-url'),
-        taskEnabled: document.getElementById('task-enabled'),
-        settingsForm: document.getElementById('settings-form'),
-        settingsBotToken: document.getElementById('settings-bot-token'),
-        settingsBotTokenMask: document.getElementById('settings-bot-token-mask'),
-        settingsChatId: document.getElementById('settings-chat-id'),
-        settingsMonitorPort: document.getElementById('settings-monitor-port'),
-        settingsTestPort: document.getElementById('settings-test-port'),
-        settingsPollInterval: document.getElementById('settings-poll-interval'),
-        settingsTimeout: document.getElementById('settings-timeout'),
-        profileForm: document.getElementById('profile-form'),
-        profileUsername: document.getElementById('profile-username'),
-        profileCurrentPassword: document.getElementById('profile-current-password'),
-        profileNewPassword: document.getElementById('profile-new-password'),
-        profileConfirmPassword: document.getElementById('profile-confirm-password'),
-        logStream: document.getElementById('log-stream')
+        loginShell: document.getElementById("login-shell"),
+        dashboardShell: document.getElementById("dashboard-shell"),
+        loadingSkeleton: document.getElementById("loading-skeleton"),
+        dashboardContent: document.getElementById("dashboard-content"),
+        loginForm: document.getElementById("login-form"),
+        loginUsername: document.getElementById("login-username"),
+        loginPassword: document.getElementById("login-password"),
+        logoutButton: document.getElementById("logout-button"),
+        refreshButton: document.getElementById("refresh-button"),
+        restartEngineButton: document.getElementById("restart-engine-button"),
+        taskResetButton: document.getElementById("task-reset-button"),
+        navTasks: document.getElementById("nav-tasks"),
+        navSettings: document.getElementById("nav-settings"),
+        viewTitle: document.getElementById("view-title"),
+        lastCycle: document.getElementById("last-cycle"),
+        engineChip: document.getElementById("engine-chip"),
+        metricTotal: document.getElementById("metric-total"),
+        metricStock: document.getElementById("metric-stock"),
+        metricSoldout: document.getElementById("metric-soldout"),
+        metricUnknown: document.getElementById("metric-unknown"),
+        tasksView: document.getElementById("tasks-view"),
+        settingsView: document.getElementById("settings-view"),
+        tasksGrid: document.getElementById("tasks-grid"),
+        toastStack: document.getElementById("toast-stack"),
+        logStream: document.getElementById("log-stream"),
+        adminIdentity: document.getElementById("admin-identity"),
+        portalChip: document.getElementById("portal-chip"),
+        settingsForm: document.getElementById("settings-form"),
+        settingsBotToken: document.getElementById("settings-bot-token"),
+        settingsBotTokenMask: document.getElementById("settings-bot-token-mask"),
+        settingsChatId: document.getElementById("settings-chat-id"),
+        settingsMonitorPort: document.getElementById("settings-monitor-port"),
+        settingsTestPort: document.getElementById("settings-test-port"),
+        settingsPollInterval: document.getElementById("settings-poll-interval"),
+        settingsTimeout: document.getElementById("settings-timeout"),
+        profileForm: document.getElementById("profile-form"),
+        profileUsername: document.getElementById("profile-username"),
+        profileCurrentPassword: document.getElementById("profile-current-password"),
+        profileNewPassword: document.getElementById("profile-new-password"),
+        profileConfirmPassword: document.getElementById("profile-confirm-password"),
+        taskModal: document.getElementById("task-modal"),
+        taskModalTitle: document.getElementById("task-modal-title"),
+        taskModalClose: document.getElementById("task-modal-close"),
+        taskForm: document.getElementById("task-form"),
+        taskId: document.getElementById("task-id"),
+        taskName: document.getElementById("task-name"),
+        taskUrl: document.getElementById("task-url"),
+        taskKeyword: document.getElementById("task-keyword"),
+        taskRestock: document.getElementById("task-restock"),
+        taskSoldout: document.getElementById("task-soldout"),
+        taskButton1Text: document.getElementById("task-button-1-text"),
+        taskButton1Url: document.getElementById("task-button-1-url"),
+        taskButton2Text: document.getElementById("task-button-2-text"),
+        taskButton2Url: document.getElementById("task-button-2-url"),
+        taskEnabled: document.getElementById("task-enabled"),
+        taskCancelButton: document.getElementById("task-cancel-button"),
+        taskSubmitButton: document.getElementById("task-submit-button")
     };
 
     const defaultTemplates = {
-        restock: '<b>{name}</b>\n库存：{stock}\n链接：{url}\n检测时间：{checked_at}',
-        soldout: '<b>{name}</b>\n已售罄\n最后库存：{stock}\n检测时间：{checked_at}'
+        restock: "<b>{name}</b>\n库存：{stock}\n链接：{url}\n检测时间：{checked_at}",
+        soldout: "<b>{name}</b>\n已售罄\n最后库存：{stock}\n检测时间：{checked_at}"
     };
 
-    function setView(loggedIn) {
-        loginShell.classList.toggle('hidden', loggedIn);
-        dashboardShell.classList.toggle('hidden', !loggedIn);
-        if (loggedIn) {
-            loadSnapshot(true);
-            startPolling();
-        } else {
-            stopPolling();
+    function escapeHtml(value) {
+        return String(value ?? "")
+            .replaceAll("&", "&amp;")
+            .replaceAll("<", "&lt;")
+            .replaceAll(">", "&gt;")
+            .replaceAll('"', "&quot;")
+            .replaceAll("'", "&#39;");
+    }
+
+    function formatTime(value) {
+        if (!value) return "尚未检查";
+        const parsed = new Date(value);
+        if (Number.isNaN(parsed.getTime())) return value;
+        return parsed.toLocaleString("zh-CN", { hour12: false });
+    }
+
+    function showToast(message, type = "success") {
+        const toast = document.createElement("div");
+        toast.className = `toast ${type}`;
+        toast.textContent = message;
+        els.toastStack.appendChild(toast);
+        window.setTimeout(() => {
+            toast.style.opacity = "0";
+            toast.style.transform = "translateY(-0.35rem)";
+            window.setTimeout(() => toast.remove(), 220);
+        }, 3200);
+    }
+
+    async function apiFetch(path, options = {}) {
+        const headers = {
+            Accept: "application/json",
+            "X-Requested-With": "XMLHttpRequest",
+            ...(options.headers || {})
+        };
+        if (options.body !== undefined) {
+            headers["Content-Type"] = "application/json";
+            headers["X-CSRF-Token"] = csrfToken;
         }
+        const response = await fetch(`${portalPath}${path}`, {
+            cache: "no-store",
+            credentials: "same-origin",
+            ...options,
+            headers
+        });
+        let data = {};
+        try {
+            data = await response.json();
+        } catch (error) {
+            data = { ok: false, message: response.statusText || "请求失败。" };
+        }
+        if (data.csrf_token) {
+            csrfToken = data.csrf_token;
+            document.querySelector('meta[name="csrf-token"]')?.setAttribute("content", csrfToken);
+        }
+        if (!response.ok || data.ok === false) {
+            const err = new Error(data.message || "请求失败。");
+            err.status = response.status;
+            throw err;
+        }
+        return data;
     }
 
     function startPolling() {
@@ -87,100 +146,63 @@
         }
     }
 
-    function showToast(message, type = 'success') {
-        const toast = document.createElement('div');
-        toast.className = `toast ${type}`;
-        toast.textContent = message;
-        toastStack.appendChild(toast);
-        window.setTimeout(() => {
-            toast.style.opacity = '0';
-            toast.style.transform = 'translateY(-0.35rem)';
-            window.setTimeout(() => toast.remove(), 220);
-        }, 3600);
-    }
-
-    function escapeHtml(value) {
-        return String(value ?? '')
-            .replaceAll('&', '&amp;')
-            .replaceAll('<', '&lt;')
-            .replaceAll('>', '&gt;')
-            .replaceAll('"', '&quot;')
-            .replaceAll("'", '&#39;');
-    }
-
-    function formatTime(value) {
-        if (!value) return '尚未检查';
-        const parsed = new Date(value);
-        if (Number.isNaN(parsed.getTime())) return value;
-        return parsed.toLocaleString('zh-CN', { hour12: false });
-    }
-
-    async function apiFetch(path, options = {}) {
-        const headers = {
-            'Accept': 'application/json',
-            'X-Requested-With': 'XMLHttpRequest',
-            ...options.headers
-        };
-        if (options.body !== undefined) {
-            headers['Content-Type'] = 'application/json';
-            headers['X-CSRF-Token'] = csrfToken;
-        }
-
-        const response = await fetch(`${portalPath}${path}`, {
-            cache: 'no-store',
-            credentials: 'same-origin',
-            ...options,
-            headers
-        });
-
-        let data = {};
-        try {
-            data = await response.json();
-        } catch (error) {
-            data = { ok: false, message: response.statusText || '请求失败。' };
-        }
-
-        if (data.csrf_token) {
-            csrfToken = data.csrf_token;
-            document.querySelector('meta[name="csrf-token"]')?.setAttribute('content', csrfToken);
-        }
-
-        if (!response.ok || data.ok === false) {
-            const error = new Error(data.message || '请求失败。');
-            error.status = response.status;
-            throw error;
-        }
-        return data;
-    }
-
-    async function loadSnapshot(initial = false) {
-        try {
-            const data = await apiFetch('/api/snapshot');
-            renderSnapshot(data);
-            loadingSkeleton.classList.add('hidden');
-            dashboardContent.classList.remove('hidden');
-        } catch (error) {
-            if (error.status === 401) {
-                setView(false);
-                showToast('会话已过期，请重新登录。', 'error');
-                return;
-            }
-            if (initial) {
-                loadingSkeleton.classList.add('hidden');
-                dashboardContent.classList.remove('hidden');
-            }
-            showToast(error.message || '加载仪表盘失败。', 'error');
+    function setView(loggedIn) {
+        els.loginShell.classList.toggle("hidden", loggedIn);
+        els.dashboardShell.classList.toggle("hidden", !loggedIn);
+        if (loggedIn) {
+            loadSnapshot(true);
+            startPolling();
+        } else {
+            stopPolling();
         }
     }
 
-    function renderSnapshot(data) {
-        currentTasks = new Map((data.tasks || []).map((task) => [String(task.id), task]));
-        renderMetrics(data.metrics || {});
-        renderEngine(data.engine || {});
-        renderSettings(data.settings || {});
-        renderAdmin(data.admin || {});
-        renderTasks(data.tasks || []);
-        renderLogs(data.logs || []);
+    function setNav(view) {
+        currentView = view;
+        const tasks = view === "tasks";
+        els.tasksView.classList.toggle("hidden", !tasks);
+        els.settingsView.classList.toggle("hidden", tasks);
+        els.navTasks.classList.toggle("nav-item-active", tasks);
+        els.navSettings.classList.toggle("nav-item-active", !tasks);
+        els.viewTitle.textContent = tasks ? "监控任务池" : "全局配置";
+    }
+
+    function openTaskModal(task = null) {
+        if (task) {
+            els.taskModalTitle.textContent = "编辑监控节点";
+            els.taskId.value = task.id;
+            els.taskName.value = task.name || "";
+            els.taskUrl.value = task.monitor_url || "";
+            els.taskKeyword.value = task.target_keyword || "";
+            els.taskRestock.value = task.restock_template || defaultTemplates.restock;
+            els.taskSoldout.value = task.soldout_template || defaultTemplates.soldout;
+            els.taskButton1Text.value = task.button_1_text || "";
+            els.taskButton1Url.value = task.button_1_url || "";
+            els.taskButton2Text.value = task.button_2_text || "";
+            els.taskButton2Url.value = task.button_2_url || "";
+            els.taskEnabled.checked = Boolean(task.enabled);
+            els.taskSubmitButton.textContent = "更新节点";
+        } else {
+            resetTaskForm();
+            els.taskModalTitle.textContent = "新增监控节点";
+            els.taskSubmitButton.textContent = "保存节点";
+        }
+        els.taskModal.classList.remove("hidden");
+        document.body.style.overflow = "hidden";
+        window.setTimeout(() => els.taskName.focus(), 40);
+    }
+
+    function closeTaskModal() {
+        els.taskModal.classList.add("hidden");
+        document.body.style.overflow = "";
+    }
+
+    function resetTaskForm() {
+        els.taskForm.reset();
+        els.taskId.value = "";
+        els.taskRestock.value = defaultTemplates.restock;
+        els.taskSoldout.value = defaultTemplates.soldout;
+        els.taskEnabled.checked = true;
     }
 
     function renderMetrics(metrics) {
@@ -191,19 +213,18 @@
     }
 
     function renderEngine(engine) {
-        const running = Boolean(engine.cycle_running);
-        els.engineChip.textContent = running ? '引擎轮询中' : '引擎待机';
-        els.engineChip.className = `status-chip ${running ? 'status-chip-active' : 'status-chip-idle'}`;
-        const finished = engine.last_cycle_finished ? formatTime(engine.last_cycle_finished) : '尚未完成轮询';
-        const extra = engine.last_exception ? ` · ${engine.last_exception}` : '';
-        els.lastCycle.textContent = `上次完成：${finished}${extra}`;
+        els.engineChip.textContent = engine.cycle_running ? "System Syncing" : "System Online";
+        const finished = engine.last_cycle_finished ? formatTime(engine.last_cycle_finished) : "尚未完成轮询";
+        els.lastCycle.textContent = engine.last_exception
+            ? `最近异常：${engine.last_exception}`
+            : `上次完成：${finished}`;
     }
 
     function renderSettings(settings) {
         els.settingsBotTokenMask.textContent = settings.telegram_bot_token_masked
             ? `当前 Token：${settings.telegram_bot_token_masked}`
-            : '当前未配置 Bot Token';
-        els.settingsChatId.value = settings.telegram_chat_id || '';
+            : "当前未配置 Bot Token";
+        els.settingsChatId.value = settings.telegram_chat_id || "";
         els.settingsMonitorPort.value = settings.monitor_debug_port || 9223;
         els.settingsTestPort.value = settings.test_debug_port || 9334;
         els.settingsPollInterval.value = settings.poll_interval_seconds || 45;
@@ -211,61 +232,9 @@
     }
 
     function renderAdmin(admin) {
-        els.adminIdentity.textContent = admin.username ? `管理员：${admin.username}` : '管理员';
+        els.adminIdentity.textContent = admin.username ? `管理员：${admin.username}` : "管理员";
         els.portalChip.textContent = admin.portal_path || portalPath;
-        els.profileUsername.value = admin.username || '';
-    }
-
-    function stateMeta(task) {
-        if (!task.enabled) return ['state-disabled', '停用'];
-        if (task.last_state === 'in_stock') return ['state-in-stock', '有货'];
-        if (task.last_state === 'sold_out') return ['state-sold-out', '售罄'];
-        return ['state-unknown', '未知'];
-    }
-
-    function renderTasks(tasks) {
-        if (!tasks.length) {
-            els.tasksTable.innerHTML = `
-                <tr>
-                    <td colspan="6" class="px-4 py-10 text-center text-sm text-slate-500">
-                        暂无任务。添加第一个监控目标后，后台引擎会自动纳入轮询。
-                    </td>
-                </tr>
-            `;
-            return;
-        }
-
-        els.tasksTable.innerHTML = tasks.map((task) => {
-            const [stateClass, stateLabel] = stateMeta(task);
-            const stock = task.last_stock === null || task.last_stock === undefined ? '未知' : task.last_stock;
-            const errorHtml = task.last_error ? `<p class="mt-1 truncate-two text-xs text-rose-300">${escapeHtml(task.last_error)}</p>` : '';
-            return `
-                <tr data-task-id="${task.id}">
-                    <td class="px-4 py-4 align-top">
-                        <div class="max-w-[23rem]">
-                            <p class="font-medium text-slate-100">${escapeHtml(task.name)}</p>
-                            <p class="mt-1 truncate-two text-xs text-slate-500">${escapeHtml(task.monitor_url)}</p>
-                            <p class="mt-1 text-xs text-indigo-200">${escapeHtml(task.target_keyword)}</p>
-                            ${errorHtml}
-                        </div>
-                    </td>
-                    <td class="px-4 py-4 align-top">
-                        <span class="state-badge ${stateClass}">${stateLabel}</span>
-                    </td>
-                    <td class="px-4 py-4 align-top text-sm text-slate-300">${escapeHtml(stock)}</td>
-                    <td class="px-4 py-4 align-top text-sm text-slate-400">${task.message_id ? escapeHtml(task.message_id) : '-'}</td>
-                    <td class="px-4 py-4 align-top text-sm text-slate-400">${escapeHtml(formatTime(task.last_checked_at))}</td>
-                    <td class="px-4 py-4 align-top">
-                        <div class="flex flex-wrap gap-2">
-                            <button type="button" class="table-action" data-action="edit">编辑</button>
-                            <button type="button" class="table-action" data-action="test">测试</button>
-                            <button type="button" class="table-action" data-action="toggle">${task.enabled ? '停用' : '启用'}</button>
-                            <button type="button" class="table-action danger" data-action="delete">删除</button>
-                        </div>
-                    </td>
-                </tr>
-            `;
-        }).join('');
+        els.profileUsername.value = admin.username || "";
     }
 
     function renderLogs(logs) {
@@ -274,22 +243,143 @@
             return;
         }
         els.logStream.innerHTML = logs.map((log) => {
-            const color = log.level === 'error'
-                ? 'text-rose-300'
-                : log.level === 'warning'
-                    ? 'text-amber-200'
-                    : 'text-emerald-200';
+            const levelColor = log.level === "error"
+                ? "text-rose-300"
+                : log.level === "warning"
+                    ? "text-amber-200"
+                    : "text-emerald-300";
             return `
-                <article class="rounded-2xl border border-slate-800 bg-slate-950/40 px-4 py-3">
-                    <div class="flex items-center justify-between gap-3">
-                        <p class="text-xs font-semibold uppercase tracking-[0.14em] ${color}">${escapeHtml(log.level)}</p>
-                        <p class="text-xs text-slate-500">${escapeHtml(formatTime(log.created_at))}</p>
+                <article class="border-b border-slate-900/80 pb-4 last:border-b-0 last:pb-0">
+                    <div class="mb-2 flex items-center justify-between gap-3">
+                        <span class="font-mono text-[11px] uppercase tracking-[0.14em] ${levelColor}">${escapeHtml(log.level)}</span>
+                        <span class="font-mono text-[11px] text-slate-600">${escapeHtml(formatTime(log.created_at))}</span>
                     </div>
-                    <p class="mt-2 text-sm leading-6 text-slate-300">${escapeHtml(log.message)}</p>
-                    <p class="mt-1 text-xs text-slate-600">${escapeHtml(log.scope)}</p>
+                    <p class="text-sm leading-6 text-slate-300">${escapeHtml(log.message)}</p>
+                    <p class="mt-1 font-mono text-[11px] text-slate-600">${escapeHtml(log.scope)}</p>
                 </article>
             `;
-        }).join('');
+        }).join("");
+    }
+
+    function statusMeta(task) {
+        if (!task.enabled) return ["status-disabled", "● DISABLED", "停用中"];
+        if (task.last_state === "in_stock") return ["status-in-stock", "● IN STOCK", "补货监控命中"];
+        if (task.last_state === "sold_out") return ["status-sold-out", "○ OUT OF STOCK", "持续缺货中"];
+        return ["status-unknown", "◌ UNKNOWN", "等待首次识别"];
+    }
+
+    function renderTasks(tasks) {
+        currentTasks = new Map(tasks.map((task) => [String(task.id), task]));
+        const taskCards = tasks.map((task, index) => {
+            const [statusClass, statusText, logHint] = statusMeta(task);
+            const stockText = task.last_stock === null || task.last_stock === undefined ? "Hidden" : String(task.last_stock);
+            const logMessage = task.last_error
+                ? `> ${escapeHtml(task.last_error)}`
+                : `> ${escapeHtml(logHint)} ${escapeHtml(formatTime(task.last_checked_at))}`;
+            const lastChecked = task.last_checked_at ? escapeHtml(formatTime(task.last_checked_at)) : "尚未检查";
+            const actionLabel = task.enabled ? "停用节点" : "启用节点";
+            return `
+                <article class="task-card reveal" style="animation-delay: ${index * 80}ms;" data-task-id="${task.id}">
+                    <div class="absolute right-6 top-6">
+                        <span class="status-badge ${statusClass}">${statusText}</span>
+                    </div>
+
+                    <div class="mb-5 pr-28">
+                        <h3 class="mb-2 truncate text-xl font-bold text-white" title="${escapeHtml(task.name)}">${escapeHtml(task.name)}</h3>
+                        <p class="truncate font-mono text-[13px] text-slate-500" title="${escapeHtml(task.monitor_url)}">${escapeHtml(task.monitor_url)}</p>
+                    </div>
+
+                    <div class="keyword-chip mb-4">
+                        <svg class="mr-1.5 h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/>
+                        </svg>
+                        切片狙击: ${escapeHtml(task.target_keyword)}
+                    </div>
+
+                    <div class="terminal-box mb-5 flex flex-1 flex-col justify-center p-4 ${task.last_error ? "" : "opacity-95"}">
+                        <div class="mb-3 flex items-center justify-between border-b border-slate-800/80 pb-2">
+                            <span class="text-[10px] font-bold uppercase tracking-widest text-slate-500">Engine Log</span>
+                            <span class="rounded border border-slate-700 bg-slate-800/80 px-2 py-0.5 font-mono text-[10px] text-slate-400">
+                                库存嗅探: <span class="${task.last_stock > 0 ? "text-emerald-400" : "text-slate-300"} font-bold">${escapeHtml(stockText)}</span>
+                            </span>
+                        </div>
+                        <p class="truncate-two font-mono text-sm leading-relaxed ${task.last_error ? "text-rose-300" : "animate-pulse-soft text-emerald-400"}">${logMessage}</p>
+                        <div class="mt-3 font-mono text-[11px] text-slate-600">
+                            message_id: ${task.message_id ?? "-"} · checked: ${lastChecked}
+                        </div>
+                    </div>
+
+                    <div class="mt-auto flex items-center justify-between border-t border-slate-700/60 pt-4">
+                        <button type="button" class="ghost-button !min-h-[2.4rem] !rounded-lg !px-4 !py-2 text-[13px] font-bold text-indigo-300" data-action="test">
+                            <svg class="mr-1.5 h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8"/>
+                            </svg>
+                            探针测试
+                        </button>
+                        <div class="flex space-x-1">
+                            <button type="button" class="icon-button !h-9 !w-9" title="${escapeHtml(actionLabel)}" data-action="toggle">
+                                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>
+                                </svg>
+                            </button>
+                            <button type="button" class="icon-button !h-9 !w-9" title="编辑配置" data-action="edit">
+                                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/>
+                                </svg>
+                            </button>
+                            <button type="button" class="icon-button !h-9 !w-9" title="删除" data-action="delete">
+                                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/>
+                                </svg>
+                            </button>
+                        </div>
+                    </div>
+                </article>
+            `;
+        }).join("");
+
+        const addCard = `
+            <button type="button" id="tasks-add-card" class="add-card reveal" style="animation-delay: ${tasks.length * 80}ms;">
+                <div class="mb-4 flex h-16 w-16 items-center justify-center rounded-full bg-slate-800/80 transition-transform group-hover:scale-110">
+                    <svg class="h-8 w-8 text-slate-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/>
+                    </svg>
+                </div>
+                <p class="mb-1 font-bold text-slate-300">新增监控节点</p>
+                <p class="px-4 text-center text-[13px] text-slate-500">填入商品链接与解析参数，立即开启 24H 自动化嗅探。</p>
+            </button>
+        `;
+
+        els.tasksGrid.innerHTML = tasks.length ? `${taskCards}${addCard}` : addCard;
+    }
+
+    function renderSnapshot(data) {
+        renderMetrics(data.metrics || {});
+        renderEngine(data.engine || {});
+        renderSettings(data.settings || {});
+        renderAdmin(data.admin || {});
+        renderLogs(data.logs || []);
+        renderTasks(data.tasks || []);
+    }
+
+    async function loadSnapshot(initial = false) {
+        try {
+            const data = await apiFetch("/api/snapshot");
+            renderSnapshot(data);
+            els.loadingSkeleton.classList.add("hidden");
+            els.dashboardContent.classList.remove("hidden");
+        } catch (error) {
+            if (error.status === 401) {
+                setView(false);
+                showToast("会话已过期，请重新登录。", "error");
+                return;
+            }
+            if (initial) {
+                els.loadingSkeleton.classList.add("hidden");
+                els.dashboardContent.classList.remove("hidden");
+            }
+            showToast(error.message || "加载仪表盘失败。", "error");
+        }
     }
 
     function collectTaskPayload() {
@@ -307,147 +397,149 @@
         };
     }
 
-    function resetTaskForm() {
-        els.taskId.value = '';
-        els.taskForm.reset();
-        els.taskRestock.value = defaultTemplates.restock;
-        els.taskSoldout.value = defaultTemplates.soldout;
-        els.taskEnabled.checked = true;
-        els.taskSubmitButton.textContent = '保存任务';
-    }
-
-    function editTask(task) {
-        els.taskId.value = task.id;
-        els.taskName.value = task.name || '';
-        els.taskUrl.value = task.monitor_url || '';
-        els.taskKeyword.value = task.target_keyword || '';
-        els.taskRestock.value = task.restock_template || defaultTemplates.restock;
-        els.taskSoldout.value = task.soldout_template || defaultTemplates.soldout;
-        els.taskButton1Text.value = task.button_1_text || '';
-        els.taskButton1Url.value = task.button_1_url || '';
-        els.taskButton2Text.value = task.button_2_text || '';
-        els.taskButton2Url.value = task.button_2_url || '';
-        els.taskEnabled.checked = Boolean(task.enabled);
-        els.taskSubmitButton.textContent = '更新任务';
-        els.taskName.focus();
-        window.scrollTo({ top: 0, behavior: 'smooth' });
-    }
-
-    async function handleTaskAction(event) {
-        const button = event.target.closest('[data-action]');
-        if (!button) return;
-        const row = button.closest('tr[data-task-id]');
-        const taskId = row?.dataset.taskId;
+    async function handleTaskAction(button) {
+        const card = button.closest("[data-task-id]");
+        const taskId = card?.dataset.taskId;
         const task = currentTasks.get(String(taskId));
         if (!task) return;
-
         const action = button.dataset.action;
-        if (action === 'edit') {
-            editTask(task);
+
+        if (action === "edit") {
+            openTaskModal(task);
             return;
         }
-
-        if (action === 'delete' && !window.confirm(`确认删除任务「${task.name}」？`)) {
+        if (action === "delete" && !window.confirm(`确认删除任务「${task.name}」？`)) {
             return;
         }
 
         button.disabled = true;
         try {
-            if (action === 'test') {
-                const data = await apiFetch(`/api/test-push/${taskId}`, { method: 'POST', body: JSON.stringify({}) });
-                showToast(`测试消息已发送，库存识别：${data.result?.stock ?? '未知'}`);
-            } else if (action === 'toggle') {
+            if (action === "test") {
+                const data = await apiFetch(`/api/test-push/${taskId}`, {
+                    method: "POST",
+                    body: JSON.stringify({})
+                });
+                showToast(`测试消息已发送，库存识别：${data.result?.stock ?? "未知"}`);
+            } else if (action === "toggle") {
                 await apiFetch(`/api/tasks/${taskId}/toggle`, {
-                    method: 'POST',
+                    method: "POST",
                     body: JSON.stringify({ enabled: !task.enabled })
                 });
-                showToast(task.enabled ? '任务已停用。' : '任务已启用。');
-            } else if (action === 'delete') {
-                await apiFetch(`/api/tasks/${taskId}`, { method: 'DELETE', body: JSON.stringify({}) });
-                showToast('任务已删除。');
+                showToast(task.enabled ? "任务已停用。" : "任务已启用。");
+            } else if (action === "delete") {
+                await apiFetch(`/api/tasks/${taskId}`, {
+                    method: "DELETE",
+                    body: JSON.stringify({})
+                });
+                showToast("任务已删除。");
             }
             await loadSnapshot(false);
         } catch (error) {
-            showToast(error.message, 'error');
+            showToast(error.message, "error");
         } finally {
             button.disabled = false;
         }
     }
 
-    els.loginForm?.addEventListener('submit', async (event) => {
+    els.loginForm?.addEventListener("submit", async (event) => {
         event.preventDefault();
-        const submitButton = event.submitter;
-        submitButton.disabled = true;
+        const submit = event.submitter;
+        submit.disabled = true;
         try {
-            const data = await apiFetch('/gate', {
-                method: 'POST',
+            const data = await apiFetch("/gate", {
+                method: "POST",
                 body: JSON.stringify({
                     username: els.loginUsername.value.trim(),
                     password: els.loginPassword.value
                 })
             });
             csrfToken = data.csrf_token || csrfToken;
-            els.loginPassword.value = '';
-            showToast('登录成功。');
+            els.loginPassword.value = "";
+            showToast("登录成功。");
             setView(true);
         } catch (error) {
-            showToast(error.message, 'error');
+            showToast(error.message, "error");
         } finally {
-            submitButton.disabled = false;
+            submit.disabled = false;
         }
     });
 
-    els.logoutButton?.addEventListener('click', async () => {
+    els.logoutButton?.addEventListener("click", async () => {
         try {
-            await apiFetch('/logout', { method: 'POST', body: JSON.stringify({}) });
+            await apiFetch("/logout", { method: "POST", body: JSON.stringify({}) });
         } catch (error) {
-            showToast(error.message, 'error');
+            showToast(error.message, "error");
         } finally {
             setView(false);
         }
     });
 
-    els.refreshButton?.addEventListener('click', () => loadSnapshot(false));
-
-    els.restartEngineButton?.addEventListener('click', async () => {
+    els.refreshButton?.addEventListener("click", () => loadSnapshot(false));
+    els.restartEngineButton?.addEventListener("click", async () => {
         els.restartEngineButton.disabled = true;
         try {
-            await apiFetch('/api/engine/restart', { method: 'POST', body: JSON.stringify({}) });
-            showToast('浏览器引擎已重启。');
+            await apiFetch("/api/engine/restart", {
+                method: "POST",
+                body: JSON.stringify({})
+            });
+            showToast("浏览器引擎已重启。");
             await loadSnapshot(false);
         } catch (error) {
-            showToast(error.message, 'error');
+            showToast(error.message, "error");
         } finally {
             els.restartEngineButton.disabled = false;
         }
     });
 
-    els.taskForm?.addEventListener('submit', async (event) => {
-        event.preventDefault();
-        els.taskSubmitButton.disabled = true;
-        const taskId = els.taskId.value;
-        try {
-            const path = taskId ? `/api/tasks/${taskId}` : '/api/tasks';
-            const method = taskId ? 'PUT' : 'POST';
-            await apiFetch(path, { method, body: JSON.stringify(collectTaskPayload()) });
-            showToast(taskId ? '任务已更新。' : '任务已创建。');
-            resetTaskForm();
-            await loadSnapshot(false);
-        } catch (error) {
-            showToast(error.message, 'error');
-        } finally {
-            els.taskSubmitButton.disabled = false;
+    els.navTasks?.addEventListener("click", () => setNav("tasks"));
+    els.navSettings?.addEventListener("click", () => setNav("settings"));
+
+    els.taskResetButton?.addEventListener("click", () => openTaskModal());
+    els.taskCancelButton?.addEventListener("click", closeTaskModal);
+    els.taskModalClose?.addEventListener("click", closeTaskModal);
+    els.taskModal?.addEventListener("click", (event) => {
+        if (event.target === els.taskModal) {
+            closeTaskModal();
         }
     });
 
-    els.taskResetButton?.addEventListener('click', resetTaskForm);
-    els.taskCancelButton?.addEventListener('click', resetTaskForm);
-    els.tasksTable?.addEventListener('click', handleTaskAction);
+    els.tasksGrid?.addEventListener("click", (event) => {
+        const addCard = event.target.closest("#tasks-add-card");
+        if (addCard) {
+            openTaskModal();
+            return;
+        }
+        const actionButton = event.target.closest("[data-action]");
+        if (actionButton) {
+            handleTaskAction(actionButton);
+        }
+    });
 
-    els.settingsForm?.addEventListener('submit', async (event) => {
+    els.taskForm?.addEventListener("submit", async (event) => {
         event.preventDefault();
-        const submitButton = event.submitter;
-        submitButton.disabled = true;
+        const submit = els.taskSubmitButton;
+        const taskId = els.taskId.value;
+        submit.disabled = true;
+        try {
+            await apiFetch(taskId ? `/api/tasks/${taskId}` : "/api/tasks", {
+                method: taskId ? "PUT" : "POST",
+                body: JSON.stringify(collectTaskPayload())
+            });
+            showToast(taskId ? "任务已更新。" : "任务已创建。");
+            closeTaskModal();
+            resetTaskForm();
+            await loadSnapshot(false);
+        } catch (error) {
+            showToast(error.message, "error");
+        } finally {
+            submit.disabled = false;
+        }
+    });
+
+    els.settingsForm?.addEventListener("submit", async (event) => {
+        event.preventDefault();
+        const submit = event.submitter;
+        submit.disabled = true;
         const payload = {
             telegram_chat_id: els.settingsChatId.value.trim(),
             monitor_debug_port: Number(els.settingsMonitorPort.value),
@@ -458,26 +550,28 @@
         if (els.settingsBotToken.value.trim()) {
             payload.telegram_bot_token = els.settingsBotToken.value.trim();
         }
-
         try {
-            await apiFetch('/api/settings/telegram', { method: 'POST', body: JSON.stringify(payload) });
-            els.settingsBotToken.value = '';
-            showToast('设置已保存。');
+            await apiFetch("/api/settings/telegram", {
+                method: "POST",
+                body: JSON.stringify(payload)
+            });
+            els.settingsBotToken.value = "";
+            showToast("设置已保存。");
             await loadSnapshot(false);
         } catch (error) {
-            showToast(error.message, 'error');
+            showToast(error.message, "error");
         } finally {
-            submitButton.disabled = false;
+            submit.disabled = false;
         }
     });
 
-    els.profileForm?.addEventListener('submit', async (event) => {
+    els.profileForm?.addEventListener("submit", async (event) => {
         event.preventDefault();
-        const submitButton = event.submitter;
-        submitButton.disabled = true;
+        const submit = event.submitter;
+        submit.disabled = true;
         try {
-            const data = await apiFetch('/api/settings/profile', {
-                method: 'POST',
+            const data = await apiFetch("/api/settings/profile", {
+                method: "POST",
                 body: JSON.stringify({
                     new_username: els.profileUsername.value.trim(),
                     current_password: els.profileCurrentPassword.value,
@@ -486,18 +580,25 @@
                 })
             });
             csrfToken = data.csrf_token || csrfToken;
-            els.profileCurrentPassword.value = '';
-            els.profileNewPassword.value = '';
-            els.profileConfirmPassword.value = '';
-            showToast('管理员凭据已更新。');
+            els.profileCurrentPassword.value = "";
+            els.profileNewPassword.value = "";
+            els.profileConfirmPassword.value = "";
+            showToast("管理员凭据已更新。");
             await loadSnapshot(false);
         } catch (error) {
-            showToast(error.message, 'error');
+            showToast(error.message, "error");
         } finally {
-            submitButton.disabled = false;
+            submit.disabled = false;
+        }
+    });
+
+    window.addEventListener("keydown", (event) => {
+        if (event.key === "Escape" && !els.taskModal.classList.contains("hidden")) {
+            closeTaskModal();
         }
     });
 
     resetTaskForm();
-    setView(context.loggedIn === true || root?.dataset.loggedIn === 'true');
+    setNav("tasks");
+    setView(context.loggedIn === true || root?.dataset.loggedIn === "true");
 })();
