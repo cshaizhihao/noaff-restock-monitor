@@ -7,4 +7,5 @@ data/
 *.log
 .pytest_cache/
 .ruff_cache/
+.test-bin/
 node_modules/

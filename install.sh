@@ -352,9 +352,9 @@ resolve_zone_id() {
   encoded_zone="$(urlencode "$CF_ZONE_NAME")"
   local response
   response="$(cf_api GET "/zones?name=${encoded_zone}&status=active&per_page=1")"
-  CF_ZONE_ID="$(printf '%s' "$response" | python3 - <<'PY'
+  CF_ZONE_ID="$(python3 - "$response" <<'PY'
 import json, sys
-data = json.load(sys.stdin)
+data = json.loads(sys.argv[1])
 result = data.get("result") or []
 print(result[0]["id"] if result else "")
 PY
@@ -374,9 +374,9 @@ upsert_dns_record() {
   local lookup
   lookup="$(cf_api GET "/zones/${CF_ZONE_ID}/dns_records?type=${record_type}&name=${encoded_name}&per_page=1")"
   local record_id
-  record_id="$(printf '%s' "$lookup" | python3 - <<'PY'
+  record_id="$(python3 - "$lookup" <<'PY'
 import json, sys
-data = json.load(sys.stdin)
+data = json.loads(sys.argv[1])
 result = data.get("result") or []
 print(result[0]["id"] if result else "")
 PY
@@ -508,12 +508,12 @@ write_cloudflare_nginx_snippets() {
   ip_json="$(fetch_cloudflare_ips)"
   mkdir -p /etc/nginx/snippets
 
-  printf '%s' "$ip_json" | python3 - "$CF_REALIP_SNIPPET" "$CF_ALLOW_SNIPPET" <<'PY'
+  python3 - "$CF_REALIP_SNIPPET" "$CF_ALLOW_SNIPPET" "$ip_json" <<'PY'
 import json
 import sys
 
-realip_path, allow_path = sys.argv[1:]
-payload = json.load(sys.stdin)
+realip_path, allow_path, raw_payload = sys.argv[1:]
+payload = json.loads(raw_payload)
 result = payload.get("result") or {}
 cidrs = list(result.get("ipv4_cidrs") or []) + list(result.get("ipv6_cidrs") or [])
 
@@ -801,4 +801,6 @@ main() {
   final_summary
 }
 
-main "$@"
+if ! bool_is_true "${NOAFF_INSTALL_LIBRARY_MODE:-false}"; then
+  main "$@"
+fi

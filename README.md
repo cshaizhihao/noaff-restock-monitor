@@ -90,7 +90,7 @@ python -m py_compile app.py tests/test_app.py
 bash -n install.sh
 ```
 
-测试覆盖隐藏入口、浏览器 UA 校验、CSRF / AJAX 写操作拦截、登录限流、任务创建、端口隔离校验、管理员重名处理、精准切片和库存解析。
+测试覆盖隐藏入口、浏览器 UA 校验、CSRF / AJAX 写操作拦截、登录限流、任务创建、端口隔离校验、管理员重名处理、精准切片、库存解析，以及安装脚本的 Cloudflare JSON 解析和代理端口校验。
 
 ## 生产部署说明
 
