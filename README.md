@@ -58,6 +58,7 @@ http://127.0.0.1:7777/<你的 PORTAL_PATH>
 注意：
 
 - `http://127.0.0.1:7777/` 返回 `404` 是设计行为，不是故障
+- `.env.example` 默认保留 `SESSION_COOKIE_SECURE=false`，方便本地 HTTP 调试；生产安装脚本会默认写成 `true`
 - 如果没有手动设置 `ADMIN_PASSWORD`，系统会把一次性初始凭据写到 `data/bootstrap_admin.txt`
 - 首次登录后请立刻在面板里修改密码，并删除 `data/bootstrap_admin.txt`
 
@@ -80,6 +81,16 @@ http://127.0.0.1:7777/<你的 PORTAL_PATH>
 链接：{url}
 检测时间：{checked_at}
 ```
+
+## 自动化验证
+
+```bash
+python -m unittest discover -s tests -v
+python -m py_compile app.py tests/test_app.py
+bash -n install.sh
+```
+
+测试覆盖隐藏入口、浏览器 UA 校验、CSRF / AJAX 写操作拦截、登录限流、任务创建、端口隔离校验、管理员重名处理、精准切片和库存解析。
 
 ## 生产部署说明
 

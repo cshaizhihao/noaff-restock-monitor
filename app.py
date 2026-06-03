@@ -11,6 +11,7 @@ import sqlite3
 import subprocess
 import threading
 import time
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from functools import wraps
@@ -229,8 +230,17 @@ def get_connection() -> sqlite3.Connection:
     return connection
 
 
+@contextmanager
+def open_connection():
+    connection = get_connection()
+    try:
+        yield connection
+    finally:
+        connection.close()
+
+
 def log_activity(level: str, scope: str, message: str) -> None:
-    with get_connection() as connection:
+    with open_connection() as connection:
         connection.execute(
             """
             INSERT INTO activity_logs (level, scope, message, created_at)
@@ -287,7 +297,7 @@ def save_settings(connection: sqlite3.Connection, updates: dict[str, str]) -> No
 
 
 def initialize_database() -> None:
-    with get_connection() as connection:
+    with open_connection() as connection:
         connection.executescript(
             """
             PRAGMA journal_mode=WAL;
@@ -604,7 +614,7 @@ class MonitoringEngine:
         self.cycle_running = False
 
     def get_runtime_settings(self) -> dict[str, Any]:
-        with get_connection() as connection:
+        with open_connection() as connection:
             raw = load_settings(connection)
         return normalize_settings(raw)
 
@@ -649,7 +659,7 @@ class MonitoringEngine:
             self._mark_cycle_start()
             successful = 0
             try:
-                with get_connection() as connection:
+                with open_connection() as connection:
                     tasks = connection.execute(
                         """
                         SELECT * FROM tasks
@@ -703,7 +713,7 @@ class MonitoringEngine:
         if use_test_browser:
             raise RuntimeError("测试推送不应进入 process_task 常规流程。")
 
-        with get_connection() as connection:
+        with open_connection() as connection:
             timestamp = now_iso()
             if result.stock is None:
                 connection.execute(
@@ -782,7 +792,7 @@ class MonitoringEngine:
         if not settings_payload["telegram_bot_token"] or not settings_payload["telegram_chat_id"]:
             raise RuntimeError("请先配置 Telegram Bot Token 和 Chat ID。")
 
-        with get_connection() as connection:
+        with open_connection() as connection:
             task = connection.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()
             if not task:
                 raise RuntimeError("任务不存在。")
@@ -987,7 +997,7 @@ def make_app() -> Flask:
         payload = read_json()
         username = str(payload.get("username", "")).strip()
         password = str(payload.get("password", "")).strip()
-        with get_connection() as connection:
+        with open_connection() as connection:
             admin = connection.execute(
                 "SELECT * FROM admins WHERE username = ?",
                 (username,),
@@ -1016,7 +1026,7 @@ def make_app() -> Flask:
     @app.route(f"{PORTAL_PATH}/api/snapshot", methods=["GET"])
     @login_required
     def dashboard_snapshot():
-        with get_connection() as connection:
+        with open_connection() as connection:
             settings_payload = normalize_settings(load_settings(connection))
             tasks = connection.execute("SELECT * FROM tasks ORDER BY id DESC").fetchall()
             admin = connection.execute("SELECT username FROM admins LIMIT 1").fetchone()
@@ -1089,7 +1099,7 @@ def make_app() -> Flask:
             timestamp,
             timestamp,
         )
-        with get_connection() as connection:
+        with open_connection() as connection:
             cursor = connection.execute(
                 """
                 INSERT INTO tasks (
@@ -1115,7 +1125,7 @@ def make_app() -> Flask:
             return jsonify({"ok": False, "message": message}), 400
 
         timestamp = now_iso()
-        with get_connection() as connection:
+        with open_connection() as connection:
             existing = connection.execute("SELECT id FROM tasks WHERE id = ?", (task_id,)).fetchone()
             if not existing:
                 return jsonify({"ok": False, "message": "任务不存在。"}), 404
@@ -1150,7 +1160,7 @@ def make_app() -> Flask:
     @login_required
     @limiter.limit(GENERAL_MUTATION_LIMIT)
     def delete_task(task_id: int):
-        with get_connection() as connection:
+        with open_connection() as connection:
             task = connection.execute("SELECT name FROM tasks WHERE id = ?", (task_id,)).fetchone()
             if not task:
                 return jsonify({"ok": False, "message": "任务不存在。"}), 404
@@ -1165,7 +1175,7 @@ def make_app() -> Flask:
     def toggle_task(task_id: int):
         payload = read_json()
         enabled = bool(payload.get("enabled", True))
-        with get_connection() as connection:
+        with open_connection() as connection:
             task = connection.execute("SELECT name FROM tasks WHERE id = ?", (task_id,)).fetchone()
             if not task:
                 return jsonify({"ok": False, "message": "任务不存在。"}), 404
@@ -1193,6 +1203,7 @@ def make_app() -> Flask:
     def update_settings():
         payload = read_json()
         updates: dict[str, str] = {}
+        current_settings = app.extensions["monitor_engine"].get_runtime_settings()
 
         bot_token = str(payload.get("telegram_bot_token", "")).strip()
         if bot_token:
@@ -1212,6 +1223,13 @@ def make_app() -> Flask:
                     return jsonify({"ok": False, "message": "端口必须位于 1024-65535。"}), 400
                 updates[key] = str(port)
 
+        monitor_port = int(updates.get("monitor_debug_port", current_settings["monitor_debug_port"]))
+        test_port = int(updates.get("test_debug_port", current_settings["test_debug_port"]))
+        if monitor_port == test_port:
+            return jsonify({"ok": False, "message": "主监控端口和测试推送端口不能相同。"}), 400
+        if monitor_port == DEFAULT_APP_PORT or test_port == DEFAULT_APP_PORT:
+            return jsonify({"ok": False, "message": "浏览器调试端口不能与面板监听端口相同。"}), 400
+
         for key, minimum, maximum in (
             ("poll_interval_seconds", 15, 3600),
             ("request_timeout_seconds", 10, 120),
@@ -1228,7 +1246,7 @@ def make_app() -> Flask:
         if not updates:
             return jsonify({"ok": False, "message": "没有可更新的设置。"}), 400
 
-        with get_connection() as connection:
+        with open_connection() as connection:
             save_settings(connection, updates)
 
         app.extensions["monitor_engine"].configure_browsers(app.extensions["monitor_engine"].get_runtime_settings())
@@ -1245,7 +1263,7 @@ def make_app() -> Flask:
         new_password = str(payload.get("new_password", "")).strip()
         confirm_password = str(payload.get("confirm_password", "")).strip()
 
-        with get_connection() as connection:
+        with open_connection() as connection:
             admin = connection.execute("SELECT * FROM admins WHERE id = ?", (session["admin_id"],)).fetchone()
             if not admin or not check_password_hash(admin["password_hash"], current_password):
                 return jsonify({"ok": False, "message": "当前密码错误。"}), 400
@@ -1254,20 +1272,23 @@ def make_app() -> Flask:
                     return jsonify({"ok": False, "message": "新密码至少需要 10 位。"}), 400
                 if new_password != confirm_password:
                     return jsonify({"ok": False, "message": "两次输入的新密码不一致。"}), 400
-            connection.execute(
-                """
-                UPDATE admins
-                SET username = ?, password_hash = ?, updated_at = ?
-                WHERE id = ?
-                """,
-                (
-                    new_username,
-                    generate_password_hash(new_password) if new_password else admin["password_hash"],
-                    now_iso(),
-                    admin["id"],
-                ),
-            )
-            connection.commit()
+            try:
+                connection.execute(
+                    """
+                    UPDATE admins
+                    SET username = ?, password_hash = ?, updated_at = ?
+                    WHERE id = ?
+                    """,
+                    (
+                        new_username,
+                        generate_password_hash(new_password) if new_password else admin["password_hash"],
+                        now_iso(),
+                        admin["id"],
+                    ),
+                )
+                connection.commit()
+            except sqlite3.IntegrityError:
+                return jsonify({"ok": False, "message": "用户名已存在，请更换一个新的用户名。"}), 400
 
         session["admin_username"] = new_username
         issue_csrf_token()
