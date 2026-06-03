@@ -281,6 +281,38 @@ class InstallScriptTestCase(unittest.TestCase):
         self.assertIn("http2 on;", output)
         self.assertNotIn("ssl http2", output)
 
+    def test_nginx_tls_config_keeps_acme_challenge_locations(self) -> None:
+        output = self.assert_shell_ok(
+            textwrap.dedent(
+                r"""
+                set -Eeuo pipefail
+                export NOAFF_INSTALL_LIBRARY_MODE=true
+                source ./install.sh
+                printf '%s\n' "$(declare -f configure_nginx)"
+                """
+            )
+        )
+        self.assertGreaterEqual(output.count("location /.well-known/acme-challenge/"), 2)
+        self.assertIn('root ${ACME_WEBROOT};', output)
+
+    def test_nginx_restart_can_reclaim_only_stale_nginx_ports(self) -> None:
+        output = self.assert_shell_ok(
+            textwrap.dedent(
+                r"""
+                set -Eeuo pipefail
+                export NOAFF_INSTALL_LIBRARY_MODE=true
+                source ./install.sh
+                printf '%s\n' "$(declare -f restart_nginx_safely)"
+                printf '%s\n' "$(declare -f nginx_managed_ports_held_only_by_nginx)"
+                printf '%s\n' "$(declare -f stop_stale_nginx_processes)"
+                """
+            )
+        )
+        self.assertIn("nginx_managed_ports_held_only_by_nginx", output)
+        self.assertIn("stop_stale_nginx_processes", output)
+        self.assertIn("pkill -TERM nginx", output)
+        self.assertIn("安装脚本不会杀掉其他服务", output)
+
     def test_domain_modes_force_standard_public_ports_and_clean_url(self) -> None:
         output = self.assert_shell_ok(
             textwrap.dedent(
@@ -309,9 +341,10 @@ class InstallScriptTestCase(unittest.TestCase):
 
     def test_installer_does_not_destroy_existing_nginx(self) -> None:
         script = (ROOT_DIR / "install.sh").read_text(encoding="utf-8")
-        self.assertNotIn("pkill", script)
         self.assertNotIn("killall", script)
         self.assertNotIn("rm -f /etc/nginx/sites-enabled/default", script)
+        self.assertIn("pkill -TERM nginx", script)
+        self.assertIn("nginx_managed_ports_held_only_by_nginx", script)
 
     def test_installer_does_not_restart_existing_docker_daemon(self) -> None:
         script = (ROOT_DIR / "install.sh").read_text(encoding="utf-8")

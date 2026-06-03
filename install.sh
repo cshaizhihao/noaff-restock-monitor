@@ -1695,9 +1695,14 @@ restart_nginx_safely() {
   fi
 
   if nginx_managed_ports_are_busy; then
-    warn "检测到 80/443 等公网端口已被现有进程占用，安装脚本不会杀掉或重启它们。"
-    print_nginx_port_listeners
-    die "请改用 IP + 高位端口 / Docker 高位端口模式，或手动把现有 Nginx 反代到 ${APP_HOST}:${APP_PORT} 后重试。"
+    if nginx_managed_ports_held_only_by_nginx; then
+      warn "检测到旧 Nginx 进程占用 80/443，但 systemd 未接管；正在优雅退出旧进程后重新启动。"
+      stop_stale_nginx_processes
+    else
+      warn "检测到 80/443 等公网端口已被非 Nginx 进程占用，安装脚本不会杀掉其他服务。"
+      print_nginx_port_listeners
+      die "请改用 IP + 高位端口 / Docker 高位端口模式，或手动把现有反代服务指向 ${APP_HOST}:${APP_PORT} 后重试。"
+    fi
   fi
 
   if systemctl start nginx; then
@@ -1708,20 +1713,7 @@ restart_nginx_safely() {
   die "Nginx 启动失败。请根据上方日志处理服务错误后重试。"
 }
 
-nginx_managed_ports_are_busy() {
-  local ports=()
-  ports+=("$PUBLIC_HTTP_PORT")
-  bool_is_true "$ENABLE_TLS" && ports+=("$PUBLIC_HTTPS_PORT")
-  local port
-  for port in "${ports[@]}"; do
-    if ss -ltn "( sport = :${port} )" 2>/dev/null | grep -q LISTEN; then
-      return 0
-    fi
-  done
-  return 1
-}
-
-print_nginx_port_listeners() {
+nginx_managed_port_expression() {
   local ports=()
   ports+=("$PUBLIC_HTTP_PORT")
   bool_is_true "$ENABLE_TLS" && ports+=("$PUBLIC_HTTPS_PORT")
@@ -1734,7 +1726,36 @@ print_nginx_port_listeners() {
       expression="${expression} or sport = :${port}"
     fi
   done
-  ss -ltnp "( ${expression} )" 2>/dev/null || true
+  printf '%s' "$expression"
+}
+
+nginx_managed_ports_are_busy() {
+  ss -ltn "( $(nginx_managed_port_expression) )" 2>/dev/null | grep -q LISTEN
+}
+
+nginx_managed_ports_held_only_by_nginx() {
+  local listeners
+  listeners="$(ss -ltnp "( $(nginx_managed_port_expression) )" 2>/dev/null | awk 'NR > 1')"
+  [[ -n "$listeners" ]] || return 1
+  printf '%s\n' "$listeners" | grep -q 'nginx' || return 1
+  ! printf '%s\n' "$listeners" | grep -v 'nginx' | grep -q .
+}
+
+stop_stale_nginx_processes() {
+  nginx -s quit >/dev/null 2>&1 || true
+  sleep 2
+  if nginx_managed_ports_are_busy && nginx_managed_ports_held_only_by_nginx; then
+    pkill -TERM nginx >/dev/null 2>&1 || true
+    sleep 2
+  fi
+  if nginx_managed_ports_are_busy && nginx_managed_ports_held_only_by_nginx; then
+    pkill -KILL nginx >/dev/null 2>&1 || true
+    sleep 1
+  fi
+}
+
+print_nginx_port_listeners() {
+  ss -ltnp "( $(nginx_managed_port_expression) )" 2>/dev/null || true
 }
 
 write_ssl_nginx_snippet() {
@@ -1837,6 +1858,11 @@ server {
 $(bool_is_true "$ORIGIN_LOCKDOWN_TO_CLOUDFLARE" && printf '    include %s;\n' "$CF_REALIP_SNIPPET")
 $(bool_is_true "$ORIGIN_LOCKDOWN_TO_CLOUDFLARE" && printf '    include %s;\n' "$CF_ALLOW_SNIPPET")
 
+    location /.well-known/acme-challenge/ {
+        root ${ACME_WEBROOT};
+        try_files \$uri =404;
+    }
+
     location / {
         return 301 ${redirect_target}\$request_uri;
     }
@@ -1855,6 +1881,11 @@ $(bool_is_true "$ORIGIN_LOCKDOWN_TO_CLOUDFLARE" && printf '    include %s;\n' "$
 $(bool_is_true "$ORIGIN_LOCKDOWN_TO_CLOUDFLARE" && printf '    include %s;\n' "$CF_ALLOW_SNIPPET")
 
     client_max_body_size 2m;
+
+    location /.well-known/acme-challenge/ {
+        root ${ACME_WEBROOT};
+        try_files \$uri =404;
+    }
 
     location / {
         proxy_pass http://${APP_HOST}:${APP_PORT};
