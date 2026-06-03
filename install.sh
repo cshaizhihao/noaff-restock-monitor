@@ -897,7 +897,9 @@ deploy_docker_stack() {
   mkdir -p data
   chmod 755 "$APP_DIR"
   chmod 777 data
-  docker_compose up -d --build
+  docker_compose up -d redis
+  DOCKER_BUILDKIT="${DOCKER_BUILDKIT:-0}" docker build --pull=false -t "${APP_NAME}-noaff:latest" .
+  docker_compose up -d --no-build --force-recreate noaff
 }
 
 probe_local_panel() {
@@ -1630,7 +1632,7 @@ final_summary() {
   bool_is_true "$ENABLE_NGINX" && echo "Nginx 状态: systemctl status nginx --no-pager"
   bool_is_true "$ENABLE_TLS" && echo "证书续期:  systemctl list-timers | grep ${APP_NAME}"
   if [[ "$DEPLOY_MODE" == "docker" ]]; then
-    echo "升级命令:  cd ${APP_DIR} && git pull --ff-only origin ${REPO_REF} && docker compose up -d --build"
+    echo "升级命令:  cd ${APP_DIR} && bash install.sh --docker-upgrade"
   else
     echo "升级命令:  systemctl start ${APP_NAME}-upgrade.service"
   fi

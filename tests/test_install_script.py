@@ -247,6 +247,12 @@ class InstallScriptTestCase(unittest.TestCase):
         self.assertIn("APP_BRANCH=", script)
         self.assertIn("--docker-upgrade", script)
 
+    def test_docker_deploy_avoids_compose_bake_builds(self) -> None:
+        script = (ROOT_DIR / "install.sh").read_text(encoding="utf-8")
+        self.assertNotIn("docker_compose up -d --build", script)
+        self.assertIn('docker build --pull=false -t "${APP_NAME}-noaff:latest" .', script)
+        self.assertIn("docker_compose up -d --no-build --force-recreate noaff", script)
+
     def test_docker_publish_port_conflict_is_reported_cleanly(self) -> None:
         result = self.run_bash(
             textwrap.dedent(

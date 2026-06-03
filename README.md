@@ -169,7 +169,7 @@ Docker 模式：
 cd /opt/noaff-monitor
 docker compose ps
 docker compose logs -f noaff
-docker compose up -d --build
+bash install.sh --docker-upgrade
 ```
 
 首次引导凭据：
