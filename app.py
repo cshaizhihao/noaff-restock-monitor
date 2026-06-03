@@ -580,7 +580,7 @@ def to_task_payload(row: sqlite3.Row) -> dict[str, Any]:
         "last_state": row["last_state"],
         "message_id": row["message_id"],
         "last_checked_at": row["last_checked_at"] or "",
-        "last_error": row["last_error"] or "",
+        "last_error": sanitize_telegram_error(row["last_error"] or ""),
         "created_at": row["created_at"],
         "updated_at": row["updated_at"],
     }
@@ -1331,7 +1331,15 @@ def make_app() -> Flask:
                 },
                 "engine": app.extensions["monitor_engine"].get_status(),
                 "system": system_payload(),
-                "logs": [dict(row) for row in logs],
+                "logs": [
+                    {
+                        "level": row["level"],
+                        "scope": row["scope"],
+                        "message": sanitize_telegram_error(row["message"], settings_payload["telegram_bot_token"]),
+                        "created_at": row["created_at"],
+                    }
+                    for row in logs
+                ],
                 "csrf_token": ensure_csrf_token(),
             }
         )

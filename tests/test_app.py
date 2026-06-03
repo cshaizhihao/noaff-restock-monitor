@@ -522,6 +522,37 @@ class PortalAppTestCase(unittest.TestCase):
         self.assertEqual(values["keyword"], "Sonic &amp; Kawasaki")
         self.assertEqual(values["stock"], "28")
 
+    def test_task_payload_masks_stored_telegram_token_errors(self) -> None:
+        token = "8839205541:AAFCQmQOEQaVerySecretToken"
+        timestamp = app_module.now_iso()
+        with app_module.open_connection() as connection:
+            cursor = connection.execute(
+                """
+                INSERT INTO tasks (
+                    name, monitor_url, target_keyword, restock_template, soldout_template,
+                    enabled, last_error, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    "Sonic",
+                    "https://example.com/cart?fid=6&gid=12",
+                    "Sonic",
+                    "{name}",
+                    "{name} sold out",
+                    1,
+                    f"400 Client Error for url: https://api.telegram.org/bot{token}/sendMessage",
+                    timestamp,
+                    timestamp,
+                ),
+            )
+            connection.commit()
+            row = connection.execute("SELECT * FROM tasks WHERE id = ?", (cursor.lastrowid,)).fetchone()
+
+        payload = app_module.to_task_payload(row)
+        self.assertNotIn(token, payload["last_error"])
+        self.assertNotIn("api.telegram.org/bot883", payload["last_error"])
+        self.assertIn("bot<hidden-token>", payload["last_error"])
+
     def test_update_settings_rejects_debug_port_collisions(self) -> None:
         _, headers = self.login()
 
