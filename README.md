@@ -28,7 +28,7 @@ curl -H 'Cache-Control: no-cache' -fsSL https://raw.githubusercontent.com/cshaiz
 脚本会自动进入 **全中文交互向导**，一步一步完成：
 
 - 部署方式选择：`Docker 隔离` 或 `原生安装`
-- 端口设置
+- 端口设置（IP / Docker 模式可用高位端口；域名模式固定使用标准 80/443）
 - `IP + 端口`、`域名直连`、`Cloudflare 小黄云`
 - HTTPS 证书方式
 - Telegram 配置
@@ -49,7 +49,7 @@ curl -H 'Cache-Control: no-cache' -fsSL https://raw.githubusercontent.com/cshaiz
 curl -H 'Cache-Control: no-cache' -fsSL https://raw.githubusercontent.com/cshaizhihao/noaff-restock-monitor/master/install.sh -o install.sh && DEPLOY_MODE=docker PUBLIC_APP_PORT=7777 bash install.sh
 ```
 
-Docker + 已解析域名 + 高位端口：
+Docker + 已解析域名（需要已有 Nginx / Caddy 手动反代）：
 
 ```bash
 curl -H 'Cache-Control: no-cache' -fsSL https://raw.githubusercontent.com/cshaizhihao/noaff-restock-monitor/master/install.sh -o install.sh && DEPLOY_MODE=docker FQDN=monitor.example.com PUBLIC_APP_PORT=7777 bash install.sh
@@ -156,6 +156,8 @@ ACCESS_MODE=domain-direct FQDN=monitor.example.com CERTBOT_EMAIL=your-real-email
 | `CERTBOT_EMAIL` | 启用 HTTPS 时需要 | 空 |
 | `MONITOR_DEBUG_PORT` | 主监控浏览器端口 | `9223` |
 | `TEST_DEBUG_PORT` | 测试推送浏览器端口 | `9334` |
+
+域名模式会自动清理用户输入中的协议、端口和路径，例如 `https://monitor.example.com:20443/xxx` 会归一化为 `monitor.example.com`，最终面板地址固定输出为 `https://monitor.example.com`。
 
 ## 🛠️ 运维命令
 

@@ -221,26 +221,31 @@ class InstallScriptTestCase(unittest.TestCase):
         self.assertIn("write_ssl_nginx_snippet", output)
         self.assertIn('cat > "$SSL_SNIPPET"', output)
 
-    def test_runtime_config_rejects_unsupported_cloudflare_ports(self) -> None:
-        result = self.run_bash(
+    def test_domain_modes_force_standard_public_ports_and_clean_url(self) -> None:
+        output = self.assert_shell_ok(
             textwrap.dedent(
                 r"""
                 set -Eeuo pipefail
                 export NOAFF_INSTALL_LIBRARY_MODE=true
                 export ACCESS_MODE=domain-cf
-                export FQDN=monitor.example.com
+                export FQDN=https://monitor.example.com:20443/portal_old
                 export CERT_MODE=dns
                 export CF_ZONE_NAME=example.com
                 export CF_API_TOKEN=test-token
                 export CERTBOT_EMAIL=ops@noaff.dev
                 export PUBLIC_HTTP_PORT=81
+                export PUBLIC_HTTPS_PORT=20443
+                export TLS_DOMAINS=https://monitor.example.com:20443/portal_old,www.example.com:9443
                 source ./install.sh
                 validate_runtime_config
+                printf 'ports=%s/%s url=%s tls=%s\n' "$PUBLIC_HTTP_PORT" "$PUBLIC_HTTPS_PORT" "$(build_public_url)" "$TLS_DOMAINS"
                 """
             )
         )
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn("not supported by Cloudflare orange-cloud proxy", result.stderr)
+        self.assertIn("ports=80/443 url=https://monitor.example.com", output)
+        self.assertIn("tls=monitor.example.com,www.example.com", output)
+        self.assertNotIn("20443", output)
+        self.assertNotIn("portal_old", output)
 
     def test_installer_does_not_destroy_existing_nginx(self) -> None:
         script = (ROOT_DIR / "install.sh").read_text(encoding="utf-8")

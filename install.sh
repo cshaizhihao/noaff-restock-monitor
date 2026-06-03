@@ -333,6 +333,27 @@ print((host or "").strip().strip("."))
 PY
 }
 
+normalize_domain_list() {
+  python3 - "$1" <<'PY'
+import sys
+from urllib.parse import urlsplit
+
+seen = set()
+result = []
+for raw in sys.argv[1].split(","):
+    value = raw.strip()
+    if not value:
+        continue
+    candidate = value if "://" in value else f"http://{value}"
+    parsed = urlsplit(candidate)
+    host = (parsed.hostname or value.split("/", 1)[0].split(":", 1)[0]).strip().strip(".")
+    if host and host not in seen:
+        seen.add(host)
+        result.append(host)
+print(",".join(result))
+PY
+}
+
 random_token() {
   python3 - <<'PY'
 import secrets
@@ -467,6 +488,15 @@ normalize_access_mode() {
       ;;
   esac
 
+  if [[ -n "$FQDN" ]]; then
+    FQDN="$(normalize_domain_input "$FQDN")"
+    if [[ -n "$TLS_DOMAINS" ]]; then
+      TLS_DOMAINS="$(normalize_domain_list "$TLS_DOMAINS")"
+    else
+      TLS_DOMAINS="$FQDN"
+    fi
+  fi
+
   if [[ "$DEPLOY_MODE" == "docker" ]]; then
     ACCESS_MODE="ip"
     ENABLE_NGINX="false"
@@ -508,12 +538,16 @@ normalize_access_mode() {
       CF_RECORD_PROXIED="false"
       ORIGIN_LOCKDOWN_TO_CLOUDFLARE="false"
       APP_HOST="127.0.0.1"
+      PUBLIC_HTTP_PORT="80"
+      PUBLIC_HTTPS_PORT="443"
       CERT_MODE="${CERT_MODE:-auto}"
       ;;
     domain-cf)
       ENABLE_NGINX="true"
       CF_RECORD_PROXIED="${CF_RECORD_PROXIED:-true}"
       APP_HOST="127.0.0.1"
+      PUBLIC_HTTP_PORT="80"
+      PUBLIC_HTTPS_PORT="443"
       CERT_MODE="${CERT_MODE:-auto}"
       ;;
     *)
@@ -667,10 +701,8 @@ build_public_url() {
 
   if bool_is_true "$ENABLE_TLS"; then
     public_url="https://${FQDN}"
-    [[ "$PUBLIC_HTTPS_PORT" != "443" ]] && public_url="${public_url}:${PUBLIC_HTTPS_PORT}"
   else
     public_url="http://${FQDN}"
-    [[ "$PUBLIC_HTTP_PORT" != "80" ]] && public_url="${public_url}:${PUBLIC_HTTP_PORT}"
   fi
   printf '%s' "$public_url"
 }
@@ -829,8 +861,9 @@ interactive_wizard() {
       APP_HOST="127.0.0.1"
       prompt_domain
       PUBLIC_HTTP_PORT="80"
-      PUBLIC_HTTPS_PORT="$(prompt_default "[3/8] 请输入 HTTPS 公网端口" "$PUBLIC_HTTPS_PORT")"
-      if prompt_yes_no "[4/8] 是否自动申请 Let's Encrypt HTTPS 证书？证书验证需要 80 端口可访问" "Y"; then
+      PUBLIC_HTTPS_PORT="443"
+      echo "${C_DIM}域名模式固定使用标准公网端口 80/443，面板地址不会带端口。${C_RESET}"
+      if prompt_yes_no "[3/8] 是否自动申请 Let's Encrypt HTTPS 证书？证书验证需要 80 端口可访问" "Y"; then
         ENABLE_TLS="true"
         CERT_MODE="http"
         prompt_certbot_email "请输入 Let's Encrypt 邮箱"
@@ -845,8 +878,9 @@ interactive_wizard() {
       APP_HOST="127.0.0.1"
       prompt_domain
       PUBLIC_HTTP_PORT="80"
-      PUBLIC_HTTPS_PORT="$(prompt_default "[3/8] 请输入 HTTPS 公网端口，Cloudflare 小黄云推荐 443" "$PUBLIC_HTTPS_PORT")"
-      if prompt_yes_no "[4/8] 你是否已经在 Cloudflare 开启或准备开启小黄云？" "Y"; then
+      PUBLIC_HTTPS_PORT="443"
+      echo "${C_DIM}域名模式固定使用标准公网端口 80/443，面板地址不会带端口。${C_RESET}"
+      if prompt_yes_no "[3/8] 你是否已经在 Cloudflare 开启或准备开启小黄云？" "Y"; then
         CF_RECORD_PROXIED="true"
         ORIGIN_LOCKDOWN_TO_CLOUDFLARE="true"
       else
@@ -854,7 +888,7 @@ interactive_wizard() {
         ORIGIN_LOCKDOWN_TO_CLOUDFLARE="false"
         ACCESS_MODE="domain-direct"
       fi
-      if prompt_yes_no "[5/8] 是否提供 Cloudflare API Token 以启用 DNS-01 全自动证书？普通用户可选 n" "n"; then
+      if prompt_yes_no "[4/8] 是否提供 Cloudflare API Token 以启用 DNS-01 全自动证书？普通用户可选 n" "n"; then
         CF_API_TOKEN="$(prompt_secret_optional "请输入 Cloudflare API Token（输入时不显示）：")"
         CF_ZONE_NAME="$(prompt_default "请输入 Cloudflare Zone 名称，例如 example.com" "$CF_ZONE_NAME")"
         CERT_MODE="dns"
@@ -862,7 +896,7 @@ interactive_wizard() {
         CERT_MODE="http"
       fi
       ENABLE_TLS="true"
-      prompt_certbot_email "[6/8] 请输入 Let's Encrypt 邮箱"
+      prompt_certbot_email "[5/8] 请输入 Let's Encrypt 邮箱"
       ;;
     *)
       die "访问方式只能选择 1、2 或 3。"
@@ -1696,9 +1730,6 @@ configure_nginx() {
   local server_names
   server_names="$(printf '%s' "$domains_csv" | tr ',' ' ')"
   local redirect_target="https://\$host"
-  if [[ "$PUBLIC_HTTPS_PORT" != "443" ]]; then
-    redirect_target="${redirect_target}:${PUBLIC_HTTPS_PORT}"
-  fi
 
   mkdir -p /var/www/html
 
