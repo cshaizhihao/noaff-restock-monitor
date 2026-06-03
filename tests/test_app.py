@@ -499,6 +499,90 @@ class PortalAppTestCase(unittest.TestCase):
         self.assertEqual(app_port_collision.status_code, 400)
         self.assertIn("面板监听端口", app_port_collision.get_json()["message"])
 
+    def test_browser_auto_heal_recognizes_chinese_connection_failure(self) -> None:
+        self.assertTrue(
+            app_module.should_auto_heal(
+                RuntimeError("浏览器连接失败。地址：127.0.0.1:9223 提示：用户文件夹和已打开的浏览器冲突")
+            )
+        )
+
+    def test_browser_profile_lock_cleanup_removes_stale_chrome_locks(self) -> None:
+        harness = app_module.BrowserHarness("unit", 9444, True, "")
+        try:
+            for filename in app_module.BROWSER_LOCK_FILENAMES:
+                path = harness.profile_dir / filename
+                path.write_text("stale", encoding="utf-8")
+
+            harness._clear_profile_locks()
+
+            for filename in app_module.BROWSER_LOCK_FILENAMES:
+                self.assertFalse((harness.profile_dir / filename).exists())
+        finally:
+            harness.shutdown()
+
+    def test_scrape_task_auto_heals_browser_connection_failure(self) -> None:
+        timestamp = app_module.now_iso()
+        with app_module.open_connection() as connection:
+            cursor = connection.execute(
+                """
+                INSERT INTO tasks (
+                    name, monitor_url, target_keyword, restock_template, soldout_template,
+                    enabled, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    "Kawasaki",
+                    "https://example.com/cart.php?gid=12",
+                    "Kawasaki",
+                    "{name} {stock}",
+                    "{name} sold out",
+                    1,
+                    timestamp,
+                    timestamp,
+                ),
+            )
+            connection.commit()
+            task = connection.execute("SELECT * FROM tasks WHERE id = ?", (cursor.lastrowid,)).fetchone()
+
+        class FlakyBrowser:
+            def __init__(self) -> None:
+                self.calls = 0
+                self.rebuilds: list[str] = []
+
+            def fetch_html(self, url, timeout_seconds):
+                self.calls += 1
+                if self.calls == 1:
+                    raise RuntimeError(
+                        "浏览器连接失败。地址：127.0.0.1:9223 提示：用户文件夹和已打开的浏览器冲突"
+                    )
+                return "Kawasaki <section>Available</section><span hidden>x</span><strong>17</strong>"
+
+            def rebuild(self, reason):
+                self.rebuilds.append(reason)
+
+        engine = self.app.extensions["monitor_engine"]
+        original_browser = engine.monitor_browser
+        flaky_browser = FlakyBrowser()
+        try:
+            engine.monitor_browser = flaky_browser
+            result = engine.scrape_task(
+                task,
+                {
+                    "monitor_debug_port": 9223,
+                    "test_debug_port": 9334,
+                    "poll_interval_seconds": 45,
+                    "request_timeout_seconds": 25,
+                },
+                use_test_browser=False,
+            )
+        finally:
+            engine.monitor_browser = original_browser
+
+        self.assertEqual(flaky_browser.calls, 2)
+        self.assertEqual(len(flaky_browser.rebuilds), 1)
+        self.assertEqual(result.stock, 17)
+        self.assertIn("Available", result.fragment)
+
     def test_update_profile_duplicate_username_returns_400(self) -> None:
         bootstrap, headers = self.login()
         self.insert_admin("duplicate-admin", "AnotherStrongPass123")

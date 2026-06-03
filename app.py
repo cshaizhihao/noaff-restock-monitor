@@ -105,6 +105,31 @@ LIMITER_STORAGE_URI = os.getenv("LIMITER_STORAGE_URI", "memory://")
 ALLOWED_BROWSER_HINTS = ("mozilla", "chrome", "safari", "firefox", "edg", "applewebkit")
 SOLD_OUT_MARKERS = ("sold out", "out of stock", "暂无库存", "缺货", "售罄", "无货")
 
+BROWSER_RECOVERY_MARKERS = (
+    "browserconnecterror",
+    "browser connect",
+    "browser connection",
+    "cannot connect",
+    "connection refused",
+    "devtoolsactiveport",
+    "disconnected",
+    "remote debugging",
+    "timeout",
+    "timed out",
+    "user data directory",
+    "user-data-dir",
+    "浏览器连接失败",
+    "用户文件夹",
+    "无界面系统",
+    "调试端口",
+)
+BROWSER_LOCK_FILENAMES = (
+    "DevToolsActivePort",
+    "SingletonCookie",
+    "SingletonLock",
+    "SingletonSocket",
+)
+
 SETTINGS_DEFAULTS = {
     "telegram_bot_token": os.getenv("TELEGRAM_BOT_TOKEN", "").strip(),
     "telegram_chat_id": os.getenv("TELEGRAM_CHAT_ID", "").strip(),
@@ -722,12 +747,14 @@ class BrowserHarness:
         with self.lock:
             self._shutdown_page()
             self._kill_zombies()
+            self._clear_profile_locks()
         log_activity("warning", f"browser:{self.role}", f"浏览器已重建，原因：{reason}")
 
     def shutdown(self) -> None:
         with self.lock:
             self._shutdown_page()
             self._kill_zombies()
+            self._clear_profile_locks()
 
     def _shutdown_page(self) -> None:
         if self.page is not None:
@@ -740,15 +767,46 @@ class BrowserHarness:
     def _kill_zombies(self) -> None:
         marker = str(self.profile_dir).lower()
         port_flag = f"--remote-debugging-port={self.port}"
+        port_value = str(self.port)
+        victims: list[psutil.Process] = []
         for process in psutil.process_iter(["pid", "name", "cmdline"]):
             try:
                 name = (process.info["name"] or "").lower()
                 cmdline = " ".join(process.info["cmdline"] or []).lower()
+                if process.pid == os.getpid():
+                    continue
                 if not any(token in name for token in ("chrome", "chromium", "edge")):
                     continue
-                if port_flag in cmdline or marker in cmdline:
-                    process.kill()
+                owns_debug_port = port_flag in cmdline or f"remote-debugging-port {port_value}" in cmdline
+                owns_profile = marker in cmdline
+                if owns_debug_port or owns_profile:
+                    victims.append(process)
             except (psutil.NoSuchProcess, psutil.AccessDenied):
+                continue
+        for process in victims:
+            try:
+                process.terminate()
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                continue
+        _, alive = psutil.wait_procs(victims, timeout=3)
+        for process in alive:
+            try:
+                process.kill()
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                continue
+        if alive:
+            psutil.wait_procs(alive, timeout=2)
+
+    def _clear_profile_locks(self) -> None:
+        self.profile_dir.mkdir(parents=True, exist_ok=True)
+        for filename in BROWSER_LOCK_FILENAMES:
+            path = self.profile_dir / filename
+            try:
+                if path.is_dir() and not path.is_symlink():
+                    shutil.rmtree(path)
+                elif path.exists() or path.is_symlink():
+                    path.unlink()
+            except OSError:
                 continue
 
 
@@ -849,7 +907,7 @@ class MonitoringEngine:
     def scrape_task(self, task: sqlite3.Row, settings_payload: dict[str, Any], use_test_browser: bool) -> ScrapeResult:
         browser = self.test_browser if use_test_browser else self.monitor_browser
         last_error = ""
-        for attempt in range(2):
+        for attempt in range(3):
             try:
                 html_text = browser.fetch_html(task["monitor_url"], settings_payload["request_timeout_seconds"])
                 fragment = slice_fragment(html_text, task["target_keyword"])
@@ -857,8 +915,9 @@ class MonitoringEngine:
                 return ScrapeResult(stock=stock, fragment=fragment, detail=detail, used_test_browser=use_test_browser)
             except Exception as exc:
                 last_error = str(exc)
-                if should_auto_heal(exc) and attempt == 0:
+                if should_auto_heal(exc) and attempt < 2:
                     browser.rebuild(last_error)
+                    time.sleep(0.6)
                     continue
                 break
         return ScrapeResult(stock=None, fragment="", detail=last_error or "抓取失败", used_test_browser=use_test_browser)
@@ -1007,7 +1066,7 @@ def message_template_values(task: sqlite3.Row, stock: int | None) -> dict[str, s
 
 def should_auto_heal(exc: Exception) -> bool:
     message = str(exc).lower()
-    return any(token in message for token in ("disconnected", "timeout", "timed out", "browserconnecterror"))
+    return any(token.lower() in message for token in BROWSER_RECOVERY_MARKERS)
 
 
 def slice_fragment(html_text: str, keyword: str) -> str:
