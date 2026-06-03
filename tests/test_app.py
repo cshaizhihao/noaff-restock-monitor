@@ -126,6 +126,13 @@ class PortalAppTestCase(unittest.TestCase):
         root_response = self.client.get("/", headers={"User-Agent": BROWSER_UA}, base_url=BASE_URL)
         self.assertEqual(root_response.status_code, 200)
 
+        health_response = self.client.get("/healthz", headers={"User-Agent": BROWSER_UA}, base_url=BASE_URL)
+        self.assertEqual(health_response.status_code, 200)
+        self.assertEqual(health_response.get_json()["ok"], True)
+
+        blocked_health_response = self.client.get("/healthz", base_url=BASE_URL)
+        self.assertEqual(blocked_health_response.status_code, 404)
+
         blocked_response = self.client.get("/", base_url=BASE_URL)
         self.assertEqual(blocked_response.status_code, 404)
 

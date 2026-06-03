@@ -1065,6 +1065,10 @@ def make_app() -> Flask:
             masked_bot_token="",
         )
 
+    @app.route("/healthz", methods=["GET"])
+    def healthz():
+        return jsonify({"ok": True, "service": "noaff-monitor"})
+
     @app.route("/gate", methods=["POST"])
     @limiter.limit(LOGIN_RATE_LIMIT)
     def login_gate():

@@ -4,6 +4,9 @@ set -Eeuo pipefail
 APP_NAME="${APP_NAME:-noaff-monitor}"
 SERVICE_USER="${SERVICE_USER:-noaffmon}"
 APP_DIR="${APP_DIR:-/opt/noaff-monitor}"
+if [[ "$APP_DIR" == "/opt/noaff-monitor" && ! -e "$APP_DIR" && -e "/opt/noaff_monitor" ]]; then
+  APP_DIR="/opt/noaff_monitor"
+fi
 REPO_URL="${REPO_URL:-https://github.com/cshaizhihao/noaff-restock-monitor.git}"
 REPO_REF="${REPO_REF:-master}"
 GIT_AUTH_TOKEN="${GIT_AUTH_TOKEN:-${GH_TOKEN:-}}"
@@ -84,6 +87,9 @@ CF_SUPPORTED_HTTP_PORTS=(80 8080 8880 2052 2082 2086 2095)
 CF_SUPPORTED_HTTPS_PORTS=(443 2053 2083 2087 2096 8443)
 CURRENT_STEP=0
 TOTAL_STEPS=1
+HEALTHCHECK_LAST_URL=""
+HEALTHCHECK_LAST_STATUS=""
+HEALTHCHECK_LAST_BODY=""
 
 if [[ -t 1 ]]; then
   C_RESET=$'\033[0m'
@@ -916,7 +922,7 @@ print_install_summary() {
 ensure_packages() {
   export DEBIAN_FRONTEND=noninteractive
   apt-get update
-  apt_install git curl ca-certificates nginx redis-server xvfb xauth procps python3 python3-venv python3-pip python3-dev build-essential libssl-dev libffi-dev
+  apt_install git curl ca-certificates nginx redis-server xvfb xauth procps iproute2 lsof python3 python3-venv python3-pip python3-dev build-essential libssl-dev libffi-dev
   apt_install fonts-noto-cjk fonts-noto-color-emoji || true
 }
 
@@ -981,6 +987,98 @@ print_host_tcp_port_listeners() {
   fi
 }
 
+host_tcp_port_listener_pids() {
+  local port="$1"
+  if command_exists lsof; then
+    lsof -nP -tiTCP:"${port}" -sTCP:LISTEN 2>/dev/null | sort -u
+    return
+  fi
+  if command_exists ss; then
+    ss -ltnp "( sport = :${port} )" 2>/dev/null \
+      | sed -nE 's/.*pid=([0-9]+).*/\1/p' \
+      | sort -u
+  fi
+}
+
+process_is_noaff_runtime() {
+  local pid="$1"
+  local args
+  args="$(ps -p "$pid" -o args= 2>/dev/null || true)"
+  [[ -n "$args" ]] || return 1
+  [[ "$args" == *"${APP_DIR}/app.py"* || "$args" == *"/opt/noaff-monitor/app.py"* || "$args" == *"/opt/noaff_monitor/app.py"* ]]
+}
+
+stop_existing_noaff_container() {
+  if ! command_exists docker; then
+    return 0
+  fi
+  if docker inspect noaff-monitor >/dev/null 2>&1; then
+    warn "检测到旧 NOAFF Docker 容器，正在停止并移除，避免占用端口 ${APP_PORT}。"
+    docker rm -f noaff-monitor >/dev/null 2>&1 || true
+  fi
+}
+
+release_native_app_port() {
+  local port="$APP_PORT"
+  local attempt pid pids unknown_owner saw_noaff
+
+  systemctl stop "${APP_NAME}" >/dev/null 2>&1 || true
+  systemctl reset-failed "${APP_NAME}" >/dev/null 2>&1 || true
+  stop_existing_noaff_container
+
+  for attempt in 1 2 3; do
+    if ! host_tcp_port_is_busy "$port"; then
+      return 0
+    fi
+
+    pids="$(host_tcp_port_listener_pids "$port" | xargs || true)"
+    unknown_owner=false
+    saw_noaff=false
+
+    if [[ -z "$pids" ]]; then
+      warn "检测到端口 ${port} 已被占用，但无法识别进程。"
+      print_host_tcp_port_listeners "$port"
+      die "APP_PORT=${port} 已被占用。请重新运行安装脚本并选择其他端口，例如 7788。"
+    fi
+
+    for pid in $pids; do
+      if process_is_noaff_runtime "$pid"; then
+        saw_noaff=true
+        warn "端口 ${port} 被 NOAFF 残留进程 PID ${pid} 占用，正在停止。"
+        kill "$pid" >/dev/null 2>&1 || true
+      else
+        unknown_owner=true
+      fi
+    done
+
+    if bool_is_true "$unknown_owner"; then
+      warn "端口 ${port} 已被其他服务占用，安装器不会误杀非 NOAFF 进程。"
+      print_host_tcp_port_listeners "$port"
+      die "APP_PORT=${port} 已被占用。请重新运行安装脚本并选择其他端口，例如 7788。"
+    fi
+
+    bool_is_true "$saw_noaff" || break
+    sleep 2
+  done
+
+  if host_tcp_port_is_busy "$port"; then
+    pids="$(host_tcp_port_listener_pids "$port" | xargs || true)"
+    for pid in $pids; do
+      if process_is_noaff_runtime "$pid"; then
+        warn "NOAFF 残留进程 PID ${pid} 未正常退出，正在强制停止。"
+        kill -9 "$pid" >/dev/null 2>&1 || true
+      fi
+    done
+    sleep 1
+  fi
+
+  if host_tcp_port_is_busy "$port"; then
+    warn "端口 ${port} 仍然被占用。"
+    print_host_tcp_port_listeners "$port"
+    die "APP_PORT=${port} 无法释放。请换一个未占用端口后重试。"
+  fi
+}
+
 docker_noaff_container_running() {
   if ! command_exists docker; then
     return 1
@@ -988,12 +1086,18 @@ docker_noaff_container_running() {
   docker inspect -f '{{.State.Running}}' noaff-monitor 2>/dev/null | grep -qx 'true'
 }
 
+docker_noaff_container_publishes_port() {
+  local port="$1"
+  command_exists docker || return 1
+  docker port noaff-monitor 2>/dev/null | grep -Eq "(:|\\])${port}$"
+}
+
 ensure_docker_publish_port_available() {
-  if docker_noaff_container_running; then
-    log "Detected existing noaff container on port ${PUBLIC_APP_PORT}; continuing with in-place Docker update."
-    return
-  fi
   if host_tcp_port_is_busy "$PUBLIC_APP_PORT"; then
+    if docker_noaff_container_running && docker_noaff_container_publishes_port "$PUBLIC_APP_PORT"; then
+      log "Detected existing NOAFF container on port ${PUBLIC_APP_PORT}; continuing with in-place Docker update."
+      return
+    fi
     warn "Detected an existing listener on Docker publish port ${PUBLIC_APP_PORT}."
     print_host_tcp_port_listeners "$PUBLIC_APP_PORT"
     die "PUBLIC_APP_PORT=${PUBLIC_APP_PORT} is already in use. Rerun the installer and choose another high port, such as 7788."
@@ -1078,17 +1182,80 @@ deploy_docker_stack() {
 }
 
 probe_local_panel() {
-  local url
+  local url tmp_file err_file status host_header forwarded_proto forwarded_port
   if [[ "$DEPLOY_MODE" == "docker" ]]; then
-    url="http://127.0.0.1:${PUBLIC_APP_PORT}/"
+    url="http://127.0.0.1:${PUBLIC_APP_PORT}/healthz"
+    forwarded_port="$PUBLIC_APP_PORT"
   else
-    url="http://127.0.0.1:${APP_PORT}/"
+    url="http://127.0.0.1:${APP_PORT}/healthz"
+    forwarded_port="$APP_PORT"
   fi
-  curl -fsS -o /dev/null \
-    -A "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/137 Safari/537.36" \
-    --connect-timeout 3 \
-    --max-time 8 \
-    "$url"
+  if bool_is_true "$ENABLE_TLS"; then
+    forwarded_proto="https"
+    forwarded_port="$PUBLIC_HTTPS_PORT"
+  else
+    forwarded_proto="http"
+    bool_is_true "$ENABLE_NGINX" && forwarded_port="$PUBLIC_HTTP_PORT"
+  fi
+
+  host_header="${FQDN:-localhost}"
+  host_header="$(normalize_domain_input "$host_header")"
+  [[ -n "$host_header" ]] || host_header="localhost"
+
+  tmp_file="$(mktemp)"
+  err_file="$(mktemp)"
+  HEALTHCHECK_LAST_URL="$url"
+  HEALTHCHECK_LAST_STATUS=""
+  HEALTHCHECK_LAST_BODY=""
+
+  status="$(
+    curl -sS -o "$tmp_file" -w "%{http_code}" \
+      -A "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/137 Safari/537.36" \
+      -H "Accept: application/json,text/plain,*/*" \
+      -H "Host: ${host_header}" \
+      -H "X-Forwarded-Proto: ${forwarded_proto}" \
+      -H "X-Forwarded-Host: ${host_header}" \
+      -H "X-Forwarded-Port: ${forwarded_port}" \
+      --connect-timeout 3 \
+      --max-time 8 \
+      "$url" 2>"$err_file" || true
+  )"
+  HEALTHCHECK_LAST_STATUS="${status:-000}"
+  HEALTHCHECK_LAST_BODY="$(
+    if [[ -s "$tmp_file" ]]; then
+      head -c 1200 "$tmp_file"
+    fi
+    if [[ -s "$err_file" ]]; then
+      printf '\n[curl] '
+      head -c 600 "$err_file"
+    fi
+  )"
+  rm -f "$tmp_file" "$err_file"
+
+  [[ "$HEALTHCHECK_LAST_STATUS" =~ ^2[0-9][0-9]$ ]]
+}
+
+print_healthcheck_diagnostics() {
+  local port
+  if [[ "$DEPLOY_MODE" == "docker" ]]; then
+    port="$PUBLIC_APP_PORT"
+  else
+    port="$APP_PORT"
+  fi
+
+  echo
+  echo "${C_YELLOW}${C_BOLD}健康检查诊断${C_RESET}"
+  echo "探测地址: ${HEALTHCHECK_LAST_URL:-未执行}"
+  echo "HTTP 状态: ${HEALTHCHECK_LAST_STATUS:-无响应}"
+  if [[ -n "$HEALTHCHECK_LAST_BODY" ]]; then
+    echo "返回内容:"
+    printf '%s\n' "$HEALTHCHECK_LAST_BODY"
+  fi
+  if host_tcp_port_is_busy "$port"; then
+    echo
+    echo "端口 ${port} 当前监听进程:"
+    print_host_tcp_port_listeners "$port"
+  fi
 }
 
 wait_for_application_ready() {
@@ -1110,6 +1277,7 @@ wait_for_application_ready() {
   done
 
   warn "Application health check failed after ${APP_STARTUP_TIMEOUT_SECONDS} seconds."
+  print_healthcheck_diagnostics
   if [[ "$DEPLOY_MODE" == "docker" ]]; then
     docker_compose ps || true
     docker_compose logs --tail=120 noaff || true
@@ -2101,6 +2269,7 @@ EOF
 
 enable_services() {
   systemctl daemon-reload
+  release_native_app_port
   systemctl enable redis-server
   systemctl restart redis-server
   systemctl enable "${APP_NAME}"

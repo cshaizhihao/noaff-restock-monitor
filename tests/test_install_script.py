@@ -284,6 +284,19 @@ class InstallScriptTestCase(unittest.TestCase):
         script = (ROOT_DIR / "install.sh").read_text(encoding="utf-8")
         self.assertIn('run_step "验证 Docker 面板启动状态" wait_for_application_ready', script)
         self.assertIn('run_step "验证应用启动状态" wait_for_application_ready', script)
+        self.assertIn("/healthz", script)
+        self.assertIn("HEALTHCHECK_LAST_STATUS", script)
+        self.assertIn("print_healthcheck_diagnostics", script)
+
+    def test_native_install_releases_only_noaff_owned_port_before_start(self) -> None:
+        script = (ROOT_DIR / "install.sh").read_text(encoding="utf-8")
+        self.assertIn("release_native_app_port", script)
+        self.assertIn('systemctl stop "${APP_NAME}"', script)
+        self.assertIn("stop_existing_noaff_container", script)
+        self.assertIn('-e "/opt/noaff_monitor"', script)
+        self.assertIn('"/opt/noaff_monitor/app.py"', script)
+        self.assertIn("安装器不会误杀非 NOAFF 进程", script)
+        self.assertIn("iproute2 lsof", script)
 
     def test_xauth_is_installed_for_xvfb_runtime(self) -> None:
         script = (ROOT_DIR / "install.sh").read_text(encoding="utf-8")
@@ -343,6 +356,8 @@ class InstallScriptTestCase(unittest.TestCase):
         )
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("PUBLIC_APP_PORT=7777 is already in use", result.stderr)
+        script = (ROOT_DIR / "install.sh").read_text(encoding="utf-8")
+        self.assertIn("docker_noaff_container_publishes_port", script)
 
     def test_docker_health_check_failure_stops_installer(self) -> None:
         result = self.run_bash(
