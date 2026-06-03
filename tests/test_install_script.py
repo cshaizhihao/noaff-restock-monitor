@@ -222,6 +222,29 @@ class InstallScriptTestCase(unittest.TestCase):
         script = (ROOT_DIR / "install.sh").read_text(encoding="utf-8")
         self.assertNotIn("systemctl restart docker", script)
 
+    def test_management_cli_contains_safe_uninstall_menu(self) -> None:
+        output = self.assert_shell_ok(
+            textwrap.dedent(
+                r"""
+                set -Eeuo pipefail
+                temp_dir="$(mktemp -d)"
+                export NOAFF_INSTALL_LIBRARY_MODE=true
+                export APP_DIR="${temp_dir}/app"
+                export CLI_SCRIPT="${temp_dir}/noaff"
+                mkdir -p "$APP_DIR"
+                source ./install.sh
+                write_management_cli
+                test -x "$CLI_SCRIPT"
+                grep -F '清理/卸载 NOAFF' "$CLI_SCRIPT"
+                grep -F 'docker_compose down --remove-orphans' "$CLI_SCRIPT"
+                grep -F 'rm -f "$NGINX_SITE_LINK" "$NGINX_SITE_PATH"' "$CLI_SCRIPT"
+                grep -F '用法: noaff [status|logs|restart|upgrade|reset-password|uninstall]' "$CLI_SCRIPT"
+                """
+            )
+        )
+        self.assertIn("清理/卸载 NOAFF", output)
+        self.assertIn("docker_compose down --remove-orphans", output)
+
     def test_installer_marks_existing_checkout_as_safe_directory(self) -> None:
         script = (ROOT_DIR / "install.sh").read_text(encoding="utf-8")
         self.assertIn("safe.directory", script)

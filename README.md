@@ -159,6 +159,14 @@ ACCESS_MODE=domain-direct FQDN=monitor.example.com CERTBOT_EMAIL=ops@example.com
 
 ## 🛠️ 运维命令
 
+快捷菜单：
+
+```bash
+noaff
+```
+
+菜单中包含状态、日志、重启、升级、重置后台密码，以及 **清理/卸载 NOAFF**。卸载会二次确认，默认保留 `/opt/noaff-monitor` 数据。
+
 原生模式：
 
 ```bash

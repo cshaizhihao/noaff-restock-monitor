@@ -77,6 +77,7 @@ CERTBOT_RENEW_TIMER="/etc/systemd/system/${APP_NAME}-cert-renew.timer"
 UPGRADE_SCRIPT="/usr/local/bin/${APP_NAME}-upgrade.sh"
 UPGRADE_SERVICE="/etc/systemd/system/${APP_NAME}-upgrade.service"
 UPGRADE_LOG="/var/log/${APP_NAME}-upgrade.log"
+CLI_SCRIPT="${CLI_SCRIPT:-/usr/local/bin/noaff}"
 ACME_WEBROOT="/var/www/${APP_NAME}-acme"
 INSTALL_LOG="/var/log/${APP_NAME}-install.log"
 CF_SUPPORTED_HTTP_PORTS=(80 8080 8880 2052 2082 2086 2095)
@@ -1085,12 +1086,13 @@ wait_for_application_ready() {
 }
 
 run_docker_deploy_flow() {
-  TOTAL_STEPS=6
+  TOTAL_STEPS=7
   run_step "安装 Docker 运行环境" ensure_docker
   run_step "拉取或更新应用源码" clone_or_update_repo
   load_existing_env_defaults
   normalize_access_mode
   run_step "写入 Docker 应用环境配置" write_env_file
+  run_step "安装 noaff 快捷管理命令" write_management_cli
   run_step "构建并启动 Docker Compose 服务" deploy_docker_stack
   run_step "验证 Docker 面板启动状态" wait_for_application_ready
   run_step "调整防火墙放行高位端口" adjust_firewall
@@ -1796,6 +1798,233 @@ write_systemd_units() {
   fi
 }
 
+write_management_cli() {
+  cat > "$CLI_SCRIPT" <<EOF
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+APP_NAME="${APP_NAME}"
+APP_DIR="${APP_DIR}"
+SERVICE_USER="${SERVICE_USER}"
+INSTALL_SH="\${APP_DIR}/install.sh"
+UPGRADE_SERVICE="${APP_NAME}-upgrade.service"
+CERT_RENEW_TIMER="${APP_NAME}-cert-renew.timer"
+CERT_RENEW_SERVICE="${APP_NAME}-cert-renew.service"
+UPGRADE_SCRIPT="${UPGRADE_SCRIPT}"
+CERT_RENEW_SCRIPT="${CERTBOT_RENEW_SCRIPT}"
+NGINX_SITE_PATH="${NGINX_SITE_PATH}"
+NGINX_SITE_LINK="${NGINX_SITE_LINK}"
+CLI_SCRIPT="${CLI_SCRIPT}"
+
+if [[ -t 1 ]]; then
+  C_RESET=\$'\\033[0m'
+  C_BOLD=\$'\\033[1m'
+  C_RED=\$'\\033[31m'
+  C_GREEN=\$'\\033[32m'
+  C_YELLOW=\$'\\033[33m'
+  C_CYAN=\$'\\033[36m'
+else
+  C_RESET=""
+  C_BOLD=""
+  C_RED=""
+  C_GREEN=""
+  C_YELLOW=""
+  C_CYAN=""
+fi
+
+command_exists() {
+  command -v "\$1" >/dev/null 2>&1
+}
+
+need_root() {
+  if [[ "\$(id -u)" != "0" ]]; then
+    echo "\${C_RED}请使用 root 执行：sudo noaff\${C_RESET}" >&2
+    return 1
+  fi
+}
+
+read_env_value() {
+  local key="\$1"
+  local env_file="\${APP_DIR}/.env"
+  [[ -f "\$env_file" ]] || return 0
+  awk -F= -v key="\$key" '\$1 == key { sub(/^[^=]*=/, ""); print; exit }' "\$env_file"
+}
+
+deploy_mode() {
+  local mode
+  mode="\$(read_env_value DEPLOY_MODE || true)"
+  printf '%s' "\${mode:-native}"
+}
+
+docker_compose() {
+  if docker compose version >/dev/null 2>&1; then
+    docker compose "\$@"
+  else
+    docker-compose "\$@"
+  fi
+}
+
+pause() {
+  read -r -p "按回车返回菜单..." _ </dev/tty || true
+}
+
+header() {
+  clear 2>/dev/null || true
+  echo "\${C_CYAN}\${C_BOLD}NOAFF 补货监控助手\${C_RESET}"
+  echo "应用目录: \${APP_DIR}"
+  echo
+}
+
+show_status() {
+  header
+  local mode
+  mode="\$(deploy_mode)"
+  echo "部署模式: \${mode}"
+  if [[ "\$mode" == "docker" && -f "\${APP_DIR}/docker-compose.yml" ]]; then
+    (cd "\$APP_DIR" && docker_compose ps) || true
+  else
+    systemctl status "\$APP_NAME" --no-pager || true
+  fi
+}
+
+show_logs() {
+  local mode
+  mode="\$(deploy_mode)"
+  if [[ "\$mode" == "docker" && -f "\${APP_DIR}/docker-compose.yml" ]]; then
+    cd "\$APP_DIR"
+    docker_compose logs -f noaff
+  else
+    journalctl -u "\$APP_NAME" -f
+  fi
+}
+
+restart_service() {
+  need_root || return 1
+  local mode
+  mode="\$(deploy_mode)"
+  if [[ "\$mode" == "docker" && -f "\${APP_DIR}/docker-compose.yml" ]]; then
+    (cd "\$APP_DIR" && docker_compose restart noaff)
+  else
+    systemctl restart "\$APP_NAME"
+  fi
+  echo "\${C_GREEN}已发送重启命令。\${C_RESET}"
+}
+
+run_upgrade() {
+  need_root || return 1
+  [[ -f "\$INSTALL_SH" ]] || { echo "\${C_RED}未找到 \${INSTALL_SH}\${C_RESET}" >&2; return 1; }
+  local mode
+  mode="\$(deploy_mode)"
+  if [[ "\$mode" == "docker" ]]; then
+    cd "\$APP_DIR"
+    bash "\$INSTALL_SH" --docker-upgrade
+  else
+    systemctl start "\$UPGRADE_SERVICE"
+    echo "\${C_GREEN}已启动升级服务，可使用 noaff logs 查看应用日志。\${C_RESET}"
+  fi
+}
+
+reset_password() {
+  need_root || return 1
+  [[ -f "\$INSTALL_SH" ]] || { echo "\${C_RED}未找到 \${INSTALL_SH}\${C_RESET}" >&2; return 1; }
+  bash "\$INSTALL_SH" --reset-password
+}
+
+uninstall_noaff() {
+  need_root || return 1
+  header
+  echo "\${C_YELLOW}清理/卸载只会处理 NOAFF 自己创建的服务、容器、Nginx 配置和快捷命令。\${C_RESET}"
+  echo "\${C_YELLOW}不会删除系统 Docker、不会删除已有 Nginx 站点、不会清空其他服务。\${C_RESET}"
+  echo
+  read -r -p "确认卸载请输入 NOAFF: " confirm </dev/tty
+  if [[ "\$confirm" != "NOAFF" ]]; then
+    echo "已取消。"
+    return 0
+  fi
+
+  local mode
+  mode="\$(deploy_mode)"
+  if [[ "\$mode" == "docker" && -f "\${APP_DIR}/docker-compose.yml" ]]; then
+    echo "停止并移除 NOAFF Docker 容器..."
+    (cd "\$APP_DIR" && docker_compose down --remove-orphans) || true
+  fi
+
+  echo "停止并移除 NOAFF systemd 单元..."
+  systemctl stop "\$APP_NAME" "\$UPGRADE_SERVICE" "\$CERT_RENEW_SERVICE" "\$CERT_RENEW_TIMER" 2>/dev/null || true
+  systemctl disable "\$APP_NAME" "\$CERT_RENEW_TIMER" 2>/dev/null || true
+  rm -f "/etc/systemd/system/\${APP_NAME}.service" "/etc/systemd/system/\${UPGRADE_SERVICE}" \
+        "/etc/systemd/system/\${CERT_RENEW_SERVICE}" "/etc/systemd/system/\${CERT_RENEW_TIMER}"
+  rm -f "\$UPGRADE_SCRIPT" "\$CERT_RENEW_SCRIPT"
+  systemctl daemon-reload 2>/dev/null || true
+
+  echo "移除 NOAFF Nginx 独立站点配置..."
+  rm -f "\$NGINX_SITE_LINK" "\$NGINX_SITE_PATH"
+  if command_exists nginx && command_exists systemctl; then
+    if nginx -t >/dev/null 2>&1; then
+      systemctl reload nginx 2>/dev/null || true
+    else
+      echo "\${C_YELLOW}Nginx 配置检测未通过，已跳过 reload，请手动检查 nginx -t。\${C_RESET}"
+    fi
+  fi
+
+  echo
+  read -r -p "是否完全删除 \${APP_DIR}（包含数据库和任务）？[y/N]: " delete_app </dev/tty
+  case "\${delete_app,,}" in
+    y|yes)
+      rm -rf "\$APP_DIR"
+      echo "已删除应用目录。"
+      ;;
+    *)
+      echo "已保留应用目录和数据：\${APP_DIR}"
+      ;;
+  esac
+
+  rm -f "\$CLI_SCRIPT"
+  echo "\${C_GREEN}NOAFF 清理/卸载完成。\${C_RESET}"
+}
+
+menu() {
+  while true; do
+    header
+    echo "  1) 查看状态"
+    echo "  2) 查看日志"
+    echo "  3) 重启服务"
+    echo "  4) 升级程序"
+    echo "  5) 重置后台密码"
+    echo "  6) 清理/卸载 NOAFF"
+    echo "  0) 退出"
+    echo
+    read -r -p "请选择: " choice </dev/tty
+    case "\$choice" in
+      1) show_status; pause ;;
+      2) show_logs ;;
+      3) restart_service; pause ;;
+      4) run_upgrade; pause ;;
+      5) reset_password; pause ;;
+      6) uninstall_noaff; break ;;
+      0) exit 0 ;;
+      *) echo "无效选项。"; sleep 1 ;;
+    esac
+  done
+}
+
+case "\${1:-menu}" in
+  status) show_status ;;
+  logs) show_logs ;;
+  restart) restart_service ;;
+  upgrade) run_upgrade ;;
+  reset-password) reset_password ;;
+  uninstall|clean) uninstall_noaff ;;
+  menu) menu ;;
+  *)
+    echo "用法: noaff [status|logs|restart|upgrade|reset-password|uninstall]"
+    exit 1
+    ;;
+esac
+EOF
+  chmod 755 "$CLI_SCRIPT"
+}
+
 write_certbot_renewal_units() {
   cat > "$CERTBOT_RENEW_SCRIPT" <<EOF
 #!/usr/bin/env bash
@@ -1873,6 +2102,7 @@ final_summary() {
   else
     echo "升级命令:  systemctl start ${APP_NAME}-upgrade.service"
   fi
+  echo "快捷命令:  noaff"
   echo "面板地址:  ${public_url}"
   echo "管理员:    ${ADMIN_USERNAME}"
   if [[ -f "${APP_DIR}/data/bootstrap_admin.txt" ]]; then
@@ -1888,7 +2118,7 @@ final_summary() {
 }
 
 set_total_steps() {
-  TOTAL_STEPS=9
+  TOTAL_STEPS=10
   bool_is_true "$ENABLE_TLS" && TOTAL_STEPS=$((TOTAL_STEPS + 2))
   [[ "$CERT_MODE" == "dns" ]] && TOTAL_STEPS=$((TOTAL_STEPS + 1))
   bool_is_true "$ORIGIN_LOCKDOWN_TO_CLOUDFLARE" && TOTAL_STEPS=$((TOTAL_STEPS + 1))
@@ -1968,6 +2198,7 @@ main() {
   run_step "写入应用环境配置" write_env_file
 
   run_step "写入 systemd 服务与升级服务" write_systemd_units
+  run_step "安装 noaff 快捷管理命令" write_management_cli
 
   mkdir -p "${APP_DIR}/data"
   chown -R "${SERVICE_USER}:${SERVICE_USER}" "${APP_DIR}"
