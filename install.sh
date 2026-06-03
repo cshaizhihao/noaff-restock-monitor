@@ -1530,35 +1530,35 @@ final_summary() {
   fi
 
   echo
-  echo "${C_GREEN}${C_BOLD}NOAFF monitor is installed.${C_RESET}"
-  echo "Service:   systemctl status ${APP_NAME} --no-pager"
+  echo "${C_GREEN}${C_BOLD}NOAFF 补货监控已安装完成。${C_RESET}"
+  echo "服务状态:  systemctl status ${APP_NAME} --no-pager"
   if [[ "$DEPLOY_MODE" == "docker" ]]; then
-    echo "Docker:    cd ${APP_DIR} && docker compose ps"
-    echo "Logs:      cd ${APP_DIR} && docker compose logs -f noaff"
-    echo "Proxy:     existing Nginx can proxy to http://127.0.0.1:${PUBLIC_APP_PORT}"
+    echo "容器状态:  cd ${APP_DIR} && docker compose ps"
+    echo "容器日志:  cd ${APP_DIR} && docker compose logs -f noaff"
+    echo "反代提示:  现有 Nginx 可反代到 http://127.0.0.1:${PUBLIC_APP_PORT}"
   else
-    echo "Logs:      journalctl -u ${APP_NAME} -f"
+    echo "服务日志:  journalctl -u ${APP_NAME} -f"
   fi
-  bool_is_true "$ENABLE_NGINX" && echo "Nginx:     systemctl status nginx --no-pager"
-  bool_is_true "$ENABLE_TLS" && echo "Cert renew: systemctl list-timers | grep ${APP_NAME}"
+  bool_is_true "$ENABLE_NGINX" && echo "Nginx 状态: systemctl status nginx --no-pager"
+  bool_is_true "$ENABLE_TLS" && echo "证书续期:  systemctl list-timers | grep ${APP_NAME}"
   if [[ "$DEPLOY_MODE" == "docker" ]]; then
-    echo "Upgrade:   cd ${APP_DIR} && git pull --ff-only origin ${REPO_REF} && docker compose up -d --build"
+    echo "升级命令:  cd ${APP_DIR} && git pull --ff-only origin ${REPO_REF} && docker compose up -d --build"
   else
-    echo "Upgrade:   systemctl start ${APP_NAME}-upgrade.service"
+    echo "升级命令:  systemctl start ${APP_NAME}-upgrade.service"
   fi
-  echo "Panel:     ${public_url}${PORTAL_PATH}"
-  echo "Admin:     ${ADMIN_USERNAME}"
+  echo "面板地址:  ${public_url}${PORTAL_PATH}"
+  echo "管理员:    ${ADMIN_USERNAME}"
   if [[ -f "${APP_DIR}/data/bootstrap_admin.txt" ]]; then
-    echo "Password:  ${ADMIN_PASSWORD}"
+    echo "初始密码:  ${ADMIN_PASSWORD}"
   else
-    echo "Password:  unchanged (use the current panel password)"
+    echo "初始密码:  保持不变（沿用当前面板密码）"
   fi
-  echo "Portal:    ${PORTAL_PATH}"
+  echo "隐藏入口:  ${PORTAL_PATH}"
   echo
   if [[ "$ACCESS_MODE" == "domain-cf" ]]; then
-    echo "If Cloudflare SSL mode was not switched automatically, set it to Full (strict)."
+    echo "提示:      如果 Cloudflare SSL 模式未自动切换，请手动设为 Full (strict)。"
   fi
-  echo "Delete ${APP_DIR}/data/bootstrap_admin.txt after first password change."
+  echo "提示:      首次修改密码后，请删除 ${APP_DIR}/data/bootstrap_admin.txt。"
 }
 
 set_total_steps() {
