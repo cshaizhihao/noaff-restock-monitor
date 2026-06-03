@@ -217,6 +217,11 @@ class InstallScriptTestCase(unittest.TestCase):
         self.assertNotIn("killall", script)
         self.assertNotIn("rm -f /etc/nginx/sites-enabled/default", script)
 
+    def test_installer_marks_existing_checkout_as_safe_directory(self) -> None:
+        script = (ROOT_DIR / "install.sh").read_text(encoding="utf-8")
+        self.assertIn("safe.directory", script)
+        self.assertIn("prepare_git_checkout_permissions", script)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

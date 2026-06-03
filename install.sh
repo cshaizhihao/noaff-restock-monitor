@@ -386,6 +386,20 @@ sanitize_git_remote() {
   printf '%s' "$url"
 }
 
+mark_git_safe_directory() {
+  local directory="$1"
+  git config --global --add safe.directory "$directory" >/dev/null 2>&1 || true
+}
+
+prepare_git_checkout_permissions() {
+  [[ -d "$APP_DIR/.git" ]] || return 0
+  mark_git_safe_directory "$APP_DIR"
+  if [[ "$(id -u)" == "0" ]]; then
+    chown -R root:root "$APP_DIR/.git" || true
+    chown root:root "$APP_DIR" || true
+  fi
+}
+
 apt_install() {
   apt-get install -y "$@"
 }
@@ -781,6 +795,7 @@ clone_or_update_repo() {
 
   if [[ -d "$APP_DIR/.git" ]]; then
     log "Updating existing checkout in $APP_DIR"
+    prepare_git_checkout_permissions
     if [[ -n "$GIT_AUTH_TOKEN" ]]; then
       git -C "$APP_DIR" remote set-url origin "$clone_url"
     fi
@@ -800,6 +815,7 @@ clone_or_update_repo() {
   fi
 
   if [[ -d "$APP_DIR/.git" && -n "$clean_url" ]]; then
+    prepare_git_checkout_permissions
     git -C "$APP_DIR" remote set-url origin "$clean_url"
   fi
 }
@@ -814,6 +830,8 @@ setup_python_env() {
 deploy_docker_stack() {
   cd "$APP_DIR"
   mkdir -p data
+  chmod 755 "$APP_DIR"
+  chmod 777 data
   docker_compose up -d --build
 }
 
