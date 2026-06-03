@@ -19,35 +19,55 @@
 
 ## 🚀 一键安装
 
-推荐已有网站 / 已安装 Nginx 的机器使用 Docker 隔离模式，不接管宿主机 Nginx：
+普通用户只需要执行下面这一条命令：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/cshaizhihao/noaff-restock-monitor/v1.0.6/install.sh -o install.sh && DEPLOY_MODE=docker PUBLIC_APP_PORT=7777 bash install.sh
+curl -H 'Cache-Control: no-cache' -fsSL https://raw.githubusercontent.com/cshaizhihao/noaff-restock-monitor/master/install.sh -o install.sh && bash install.sh
 ```
 
-想使用中文交互向导：
+脚本会自动进入 **全中文交互向导**，一步一步完成：
+
+- 部署方式选择：`Docker 隔离` 或 `原生安装`
+- 端口设置
+- `IP + 端口`、`域名直连`、`Cloudflare 小黄云`
+- HTTPS 证书方式
+- Telegram 配置
+- 安装摘要确认
+
+默认推荐思路：
+
+- 机器已经有网站 / 已经装了 Nginx：优先选 **Docker 隔离模式**
+- 干净机器：可选 **原生安装**
+- 没有域名：直接走 **IP + 端口**
+
+<details>
+<summary><strong>高级用法（可选）</strong></summary>
+
+静默 Docker 安装：
 
 ```bash
-curl -fsSL "https://raw.githubusercontent.com/cshaizhihao/noaff-restock-monitor/master/install.sh?$(date +%s)" -o install.sh && bash install.sh
+curl -H 'Cache-Control: no-cache' -fsSL https://raw.githubusercontent.com/cshaizhihao/noaff-restock-monitor/master/install.sh -o install.sh && DEPLOY_MODE=docker PUBLIC_APP_PORT=7777 bash install.sh
 ```
 
-域名直连原生安装：
+原生域名直连安装：
 
 ```bash
-curl -fsSL "https://raw.githubusercontent.com/cshaizhihao/noaff-restock-monitor/master/install.sh?$(date +%s)" | ACCESS_MODE=domain-direct FQDN=monitor.example.com CERTBOT_EMAIL=ops@example.com bash
+curl -H 'Cache-Control: no-cache' -fsSL https://raw.githubusercontent.com/cshaizhihao/noaff-restock-monitor/master/install.sh -o install.sh && ACCESS_MODE=domain-direct FQDN=monitor.example.com CERTBOT_EMAIL=ops@example.com bash install.sh
 ```
 
-Cloudflare 小黄云 + Token 全自动安装：
+Cloudflare 小黄云 + Token 自动安装：
 
 ```bash
-curl -fsSL "https://raw.githubusercontent.com/cshaizhihao/noaff-restock-monitor/master/install.sh?$(date +%s)" | ACCESS_MODE=domain-cf FQDN=monitor.example.com CF_ZONE_NAME=example.com CF_API_TOKEN=cf_xxx CERTBOT_EMAIL=ops@example.com bash
+curl -H 'Cache-Control: no-cache' -fsSL https://raw.githubusercontent.com/cshaizhihao/noaff-restock-monitor/master/install.sh -o install.sh && ACCESS_MODE=domain-cf FQDN=monitor.example.com CF_ZONE_NAME=example.com CF_API_TOKEN=cf_xxx CERTBOT_EMAIL=ops@example.com bash install.sh
 ```
 
-预检模式，不安装依赖、不写系统服务：
+预检模式：
 
 ```bash
 ACCESS_MODE=domain-direct FQDN=monitor.example.com CERTBOT_EMAIL=ops@example.com bash install.sh --validate-only
 ```
+
+</details>
 
 ## ✨ 核心能力
 
@@ -63,10 +83,10 @@ ACCESS_MODE=domain-direct FQDN=monitor.example.com CERTBOT_EMAIL=ops@example.com
 
 | 模式 | 适合场景 | 是否接管 Nginx |
 | --- | --- | --- |
-| `DEPLOY_MODE=docker` | 机器已有网站、已有 Nginx、只想暴露高位端口 | 否 |
-| `ACCESS_MODE=ip` | 临时测试，直接 IP + 端口访问 | 否 |
-| `ACCESS_MODE=domain-direct` | 域名灰云直连源站，自动 HTTP-01 证书 | 写入独立 noaff 站点 |
-| `ACCESS_MODE=domain-cf` | Cloudflare 小黄云，Token 可选，高级模式支持 DNS-01 | 写入独立 noaff 站点 |
+| `Docker 隔离` | 机器已有网站、已有 Nginx、只想暴露高位端口 | 否 |
+| `IP + 端口` | 临时测试，直接访问服务器 IP | 否 |
+| `域名直连` | 域名灰云直连源站，自动 HTTP-01 证书 | 写入独立 noaff 站点 |
+| `Cloudflare 小黄云` | 走 Cloudflare 代理，可选 Token 自动化 | 写入独立 noaff 站点 |
 
 ⚠️ 原生 Nginx 模式只写入：
 
