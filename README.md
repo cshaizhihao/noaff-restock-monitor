@@ -159,6 +159,8 @@ ACCESS_MODE=domain-direct FQDN=monitor.example.com CERTBOT_EMAIL=your-real-email
 
 域名模式会自动清理用户输入中的协议、端口和路径，例如 `https://monitor.example.com:20443/xxx` 会归一化为 `monitor.example.com`，最终面板地址固定输出为 `https://monitor.example.com`。
 
+使用 `CERT_MODE=http` 时，Let's Encrypt 需要公网能访问域名的 `80/TCP`。如果验证失败，安装器会打印中文诊断，并可先关闭 HTTPS 继续完成 HTTP 安装；修复解析、防火墙或 Cloudflare 回源后重新运行脚本即可再次申请证书。
+
 ## 🛠️ 运维命令
 
 快捷菜单：

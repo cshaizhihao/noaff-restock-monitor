@@ -221,6 +221,46 @@ class InstallScriptTestCase(unittest.TestCase):
         self.assertIn("write_ssl_nginx_snippet", output)
         self.assertIn('cat > "$SSL_SNIPPET"', output)
 
+    def test_http_certificate_failure_can_fallback_to_http_install(self) -> None:
+        output = self.assert_shell_ok(
+            textwrap.dedent(
+                r"""
+                set -Eeuo pipefail
+                export NOAFF_INSTALL_LIBRARY_MODE=true
+                export ACCESS_MODE=domain-direct
+                export FQDN=monitor.example.com
+                export CERT_MODE=http
+                export ENABLE_TLS=true
+                export CERTBOT_EMAIL=ops@noaff.dev
+                export CERTBOT_BIN=fake_certbot
+                source ./install.sh
+                write_acme_challenge_nginx() { :; }
+                fake_certbot() { return 1; }
+                detect_origin_ips() { ORIGIN_IPV4=203.0.113.10; }
+                has_tty() { return 0; }
+                prompt_yes_no() { return 0; }
+                issue_certificate_http
+                printf 'tls=%s cert=%s secure=%s\n' "$ENABLE_TLS" "$CERT_MODE" "$SESSION_COOKIE_SECURE"
+                """
+            )
+        )
+        self.assertIn("HTTPS 证书申请失败：公网 HTTP-01 验证没有通过", output)
+        self.assertIn("tls=false cert=none secure=false", output)
+
+    def test_nginx_tls_config_uses_modern_http2_directive(self) -> None:
+        output = self.assert_shell_ok(
+            textwrap.dedent(
+                r"""
+                set -Eeuo pipefail
+                export NOAFF_INSTALL_LIBRARY_MODE=true
+                source ./install.sh
+                printf '%s\n' "$(declare -f configure_nginx)"
+                """
+            )
+        )
+        self.assertIn("http2 on;", output)
+        self.assertNotIn("ssl http2", output)
+
     def test_domain_modes_force_standard_public_ports_and_clean_url(self) -> None:
         output = self.assert_shell_ok(
             textwrap.dedent(

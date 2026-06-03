@@ -1583,7 +1583,7 @@ issue_certificate_http() {
   local extra_flags=()
   bool_is_true "$LETSENCRYPT_STAGING" && extra_flags+=(--staging)
 
-  "$CERTBOT_BIN" certonly \
+  if "$CERTBOT_BIN" certonly \
     --webroot \
     --webroot-path "$ACME_WEBROOT" \
     --agree-tos \
@@ -1591,7 +1591,64 @@ issue_certificate_http() {
     --keep-until-expiring \
     -m "$CERTBOT_EMAIL" \
     "${extra_flags[@]}" \
-    "${args[@]}"
+    "${args[@]}"; then
+    return 0
+  fi
+
+  print_http_certificate_failure_help
+  if offer_http_fallback_after_certificate_failure; then
+    return 0
+  fi
+  die "HTTPS 证书申请失败。请按上方提示修复 80 端口公网访问，或改用 Cloudflare DNS-01 后重新运行安装脚本。"
+}
+
+print_http_certificate_failure_help() {
+  local domains_csv
+  domains_csv="$(build_tls_domains)"
+
+  echo
+  echo "${C_YELLOW}${C_BOLD}HTTPS 证书申请失败：公网 HTTP-01 验证没有通过${C_RESET}"
+  echo "验证域名:      ${domains_csv}"
+  echo "验证地址:      http://<你的域名>/.well-known/acme-challenge/<token>"
+  echo "必须满足:      外网可以访问服务器 80/TCP，并且该路径由 Nginx 返回 Certbot 临时文件。"
+  echo
+  echo "常见原因:"
+  echo "  1. 域名没有解析到当前服务器。"
+  echo "  2. 云厂商安全组、防火墙或机房策略没有放行 80/TCP。"
+  echo "  3. Cloudflare 小黄云开启后，源站 80 端口无法正常回源。"
+  echo "  4. 机器上已有 Nginx/面板规则拦截了 /.well-known/acme-challenge/。"
+  echo
+  detect_origin_ips >/dev/null 2>&1 || true
+  echo "当前服务器 IPv4: ${ORIGIN_IPV4:-未检测到}"
+  if command_exists getent; then
+    echo "域名解析结果:"
+    while IFS= read -r domain; do
+      printf '  %s -> ' "$domain"
+      getent ahosts "$domain" 2>/dev/null | awk '{print $1}' | sort -u | xargs || true
+    done < <(iter_tls_domains)
+  fi
+  if command_exists ss; then
+    echo
+    echo "当前 80 端口监听:"
+    ss -ltnp "( sport = :80 )" 2>/dev/null || true
+  fi
+  if [[ -f /var/log/letsencrypt/letsencrypt.log ]]; then
+    echo
+    echo "Let's Encrypt 最近日志:"
+    tail -n 25 /var/log/letsencrypt/letsencrypt.log || true
+  fi
+}
+
+offer_http_fallback_after_certificate_failure() {
+  has_tty || return 1
+  if prompt_yes_no "是否先关闭 HTTPS，继续完成 HTTP 版本安装？修复 80 端口后可重新运行脚本申请证书" "Y"; then
+    ENABLE_TLS="false"
+    CERT_MODE="none"
+    SESSION_COOKIE_SECURE="false"
+    warn "已临时切换为 HTTP 安装。请修复 80 端口公网访问后重新运行脚本启用 HTTPS。"
+    return 0
+  fi
+  return 1
 }
 
 issue_certificate() {
@@ -1778,8 +1835,9 @@ $(bool_is_true "$ORIGIN_LOCKDOWN_TO_CLOUDFLARE" && printf '    include %s;\n' "$
 }
 
 server {
-    listen ${PUBLIC_HTTPS_PORT} ssl http2;
-    listen [::]:${PUBLIC_HTTPS_PORT} ssl http2;
+    listen ${PUBLIC_HTTPS_PORT} ssl;
+    listen [::]:${PUBLIC_HTTPS_PORT} ssl;
+    http2 on;
     server_name ${server_names};
 
     ssl_certificate /etc/letsencrypt/live/${primary_domain}/fullchain.pem;
