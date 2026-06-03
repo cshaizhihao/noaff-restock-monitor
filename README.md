@@ -119,6 +119,20 @@ bash install.sh --help
 
 在 Linux VDS 上以 `root` 运行：
 
+一行安装版：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/cshaizhihao/noaff-restock-monitor/master/install.sh | FQDN=monitor.example.com CF_ZONE_NAME=example.com CF_API_TOKEN=cf_xxx CERTBOT_EMAIL=ops@example.com bash
+```
+
+一行预检版，不会安装依赖或写系统服务：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/cshaizhihao/noaff-restock-monitor/master/install.sh | FQDN=monitor.example.com CF_ZONE_NAME=example.com CF_API_TOKEN=cf_xxx CERTBOT_EMAIL=ops@example.com bash -s -- --validate-only
+```
+
+如果你想先保存脚本再运行：
+
 ```bash
 curl -fsSL https://raw.githubusercontent.com/cshaizhihao/noaff-restock-monitor/master/install.sh -o install.sh
 chmod +x install.sh
