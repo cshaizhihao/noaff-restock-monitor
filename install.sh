@@ -63,6 +63,7 @@ PROXY_FIX_X_PORT="${PROXY_FIX_X_PORT:-1}"
 INSTALL_VALIDATE_ONLY=false
 DOCKER_UPGRADE_ONLY=false
 PASSWORD_RESET_ONLY=false
+UNINSTALL_ONLY=false
 SKIP_INTERACTIVE_WIZARD=false
 RECONFIGURE_EXISTING_INSTALL=false
 
@@ -167,6 +168,7 @@ Usage:
   bash install.sh [--validate-only]
   bash install.sh --docker-upgrade
   bash install.sh --reset-password
+  bash install.sh --uninstall
   bash install.sh --help
 
 Interactive mode:
@@ -204,6 +206,7 @@ Modes:
   --validate-only  Validate required variables and Cloudflare-compatible ports without installing.
   --docker-upgrade Pull latest code, refresh Docker env, rebuild containers, and verify health.
   --reset-password Reset the panel administrator password in the local SQLite database.
+  --uninstall      Stop services and clean NOAFF-managed system files; data deletion is confirmed separately.
   --help           Show this help.
 EOF
 }
@@ -223,6 +226,11 @@ parse_args() {
         ;;
       --reset-password)
         PASSWORD_RESET_ONLY=true
+        INTERACTIVE_INSTALL=false
+        shift
+        ;;
+      --uninstall|--clean)
+        UNINSTALL_ONLY=true
         INTERACTIVE_INSTALL=false
         shift
         ;;
@@ -1868,6 +1876,75 @@ EOF
   restart_nginx_safely
 }
 
+should_delete_app_dir() {
+  local answer normalized
+  case "${DELETE_APP_DIR:-ask}" in
+    1|true|TRUE|yes|YES|y|Y)
+      return 0
+      ;;
+    0|false|FALSE|no|NO|n|N)
+      return 1
+      ;;
+  esac
+  has_tty || return 1
+  read -r -p "是否完全删除 ${APP_DIR}（包含数据库、任务和配置）？[y/N]: " answer </dev/tty
+  normalized="${answer,,}"
+  [[ "$normalized" == "y" || "$normalized" == "yes" || "$normalized" == "1" || "$normalized" == "true" ]]
+}
+
+uninstall_noaff_installation() {
+  [[ -n "$APP_DIR" && "$APP_DIR" != "/" ]] || die "APP_DIR 不安全，拒绝卸载。"
+
+  log "开始清理 NOAFF 补货监控助手。"
+
+  if command_exists systemctl; then
+    systemctl stop "${APP_NAME}" >/dev/null 2>&1 || true
+    systemctl disable "${APP_NAME}" >/dev/null 2>&1 || true
+    systemctl stop "${APP_NAME}-upgrade.service" >/dev/null 2>&1 || true
+    systemctl disable "${APP_NAME}-upgrade.service" >/dev/null 2>&1 || true
+    systemctl stop "$(basename "$CERTBOT_RENEW_TIMER")" >/dev/null 2>&1 || true
+    systemctl disable "$(basename "$CERTBOT_RENEW_TIMER")" >/dev/null 2>&1 || true
+  fi
+
+  if command_exists docker; then
+    if [[ -f "${APP_DIR}/docker-compose.yml" ]]; then
+      (cd "$APP_DIR" && docker_compose down --remove-orphans) || true
+    fi
+    docker rm -f noaff-monitor noaff-redis >/dev/null 2>&1 || true
+  fi
+
+  rm -f \
+    "/etc/systemd/system/${APP_NAME}.service" \
+    "$UPGRADE_SERVICE" \
+    "$CERTBOT_RENEW_SERVICE" \
+    "$CERTBOT_RENEW_TIMER" \
+    "$UPGRADE_SCRIPT" \
+    "$CERTBOT_RENEW_SCRIPT"
+
+  if command_exists systemctl; then
+    systemctl daemon-reload >/dev/null 2>&1 || true
+  fi
+
+  rm -f "$NGINX_SITE_LINK" "$NGINX_SITE_PATH"
+  if command_exists nginx && command_exists systemctl; then
+    if nginx -t >/dev/null 2>&1; then
+      systemctl reload nginx >/dev/null 2>&1 || true
+    else
+      warn "Nginx 配置检测未通过，已跳过 reload；请手动检查 nginx -t。"
+    fi
+  fi
+
+  if should_delete_app_dir; then
+    rm -rf "$APP_DIR"
+    log "已删除应用目录：${APP_DIR}"
+  else
+    log "已保留应用目录和数据：${APP_DIR}"
+  fi
+
+  rm -f "$CLI_SCRIPT"
+  log "NOAFF 清理/卸载完成。"
+}
+
 reset_admin_password() {
   load_existing_env_defaults
   local db_path="${APP_DIR}/data/monitor.db"
@@ -2435,6 +2512,10 @@ main() {
     exec > >(tee -a "$INSTALL_LOG") 2>&1
   fi
   load_existing_env_defaults
+  if bool_is_true "$UNINSTALL_ONLY"; then
+    uninstall_noaff_installation
+    return
+  fi
   if bool_is_true "$PASSWORD_RESET_ONLY"; then
     reset_admin_password
     return
@@ -2477,6 +2558,7 @@ main() {
   load_existing_env_defaults
   validate_required_inputs
   validate_runtime_config
+  run_step "安装 noaff 快捷管理命令" write_management_cli
 
   run_step "安装 Python 虚拟环境依赖" setup_python_env
 
@@ -2499,7 +2581,6 @@ main() {
   run_step "写入应用环境配置" write_env_file
 
   run_step "写入 systemd 服务与升级服务" write_systemd_units
-  run_step "安装 noaff 快捷管理命令" write_management_cli
 
   mkdir -p "${APP_DIR}/data"
   chown -R "${SERVICE_USER}:${SERVICE_USER}" "${APP_DIR}"

@@ -196,6 +196,12 @@ cd /opt/noaff-monitor
 bash install.sh --reset-password
 ```
 
+如果安装中途失败导致 `noaff` 快捷命令还不可用，也可以直接用安装脚本清理：
+
+```bash
+bash install.sh --uninstall
+```
+
 也可以静默重置：
 
 ```bash

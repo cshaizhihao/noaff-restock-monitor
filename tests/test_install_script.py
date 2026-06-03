@@ -71,6 +71,7 @@ class InstallScriptTestCase(unittest.TestCase):
         self.assertIn("NOAFF Restock Monitor installer", output)
         self.assertIn("--validate-only", output)
         self.assertIn("--reset-password", output)
+        self.assertIn("--uninstall", output)
 
     def test_validate_only_accepts_complete_configuration(self) -> None:
         output = self.assert_shell_ok(
@@ -319,6 +320,38 @@ class InstallScriptTestCase(unittest.TestCase):
         )
         self.assertIn("清理/卸载 NOAFF", output)
         self.assertIn("docker_compose down --remove-orphans", output)
+
+    def test_install_script_can_uninstall_without_management_cli(self) -> None:
+        output = self.assert_shell_ok(
+            textwrap.dedent(
+                r"""
+                set -Eeuo pipefail
+                temp_dir="$(mktemp -d)"
+                export NOAFF_INSTALL_LIBRARY_MODE=true
+                export APP_DIR="${temp_dir}/app"
+                export CLI_SCRIPT="${temp_dir}/noaff"
+                export DELETE_APP_DIR=true
+                mkdir -p "$APP_DIR/data"
+                printf 'db' > "$APP_DIR/data/monitor.db"
+                printf 'shortcut' > "$CLI_SCRIPT"
+                source ./install.sh
+                command_exists() { return 1; }
+                uninstall_noaff_installation
+                test ! -e "$APP_DIR"
+                test ! -e "$CLI_SCRIPT"
+                printf 'uninstalled\n'
+                """
+            )
+        )
+        self.assertIn("uninstalled", output)
+
+    def test_native_installs_management_cli_before_certificate_steps(self) -> None:
+        script = (ROOT_DIR / "install.sh").read_text(encoding="utf-8")
+        clone_step = 'run_step "拉取或更新应用源码" clone_or_update_repo'
+        cli_step = 'run_step "安装 noaff 快捷管理命令" write_management_cli'
+        certbot_step = 'run_step "安装 Certbot 证书运行环境" setup_certbot_env'
+        self.assertLess(script.rindex(clone_step), script.rindex(cli_step))
+        self.assertLess(script.rindex(cli_step), script.rindex(certbot_step))
 
     def test_installer_marks_existing_checkout_as_safe_directory(self) -> None:
         script = (ROOT_DIR / "install.sh").read_text(encoding="utf-8")
