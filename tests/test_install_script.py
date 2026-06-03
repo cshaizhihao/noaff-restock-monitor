@@ -222,6 +222,34 @@ class InstallScriptTestCase(unittest.TestCase):
         self.assertIn("safe.directory", script)
         self.assertIn("prepare_git_checkout_permissions", script)
 
+    def test_docker_publish_port_conflict_is_reported_cleanly(self) -> None:
+        result = self.run_bash(
+            textwrap.dedent(
+                r"""
+                set -Eeuo pipefail
+                export NOAFF_INSTALL_LIBRARY_MODE=true
+                export PUBLIC_APP_PORT=7777
+                source ./install.sh
+                command_exists() {
+                  [[ "$1" == "ss" || "$1" == "docker" ]]
+                }
+                ss() {
+                  printf '%s\n' 'State  Recv-Q Send-Q Local Address:Port Peer Address:Port Process'
+                  printf '%s\n' 'LISTEN 0      4096         0.0.0.0:7777      0.0.0.0:*'
+                }
+                docker() {
+                  if [[ "$1" == "inspect" ]]; then
+                    return 1
+                  fi
+                  return 0
+                }
+                ensure_docker_publish_port_available
+                """
+            )
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("PUBLIC_APP_PORT=7777 is already in use", result.stderr)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

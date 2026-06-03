@@ -775,6 +775,49 @@ docker_compose() {
   fi
 }
 
+host_tcp_port_is_busy() {
+  local port="$1"
+  if command_exists ss; then
+    ss -ltn "( sport = :${port} )" 2>/dev/null | grep -q LISTEN
+    return
+  fi
+  if command_exists lsof; then
+    lsof -nP -iTCP:"${port}" -sTCP:LISTEN >/dev/null 2>&1
+    return
+  fi
+  return 1
+}
+
+print_host_tcp_port_listeners() {
+  local port="$1"
+  if command_exists ss; then
+    ss -ltnp "( sport = :${port} )" 2>/dev/null || true
+    return
+  fi
+  if command_exists lsof; then
+    lsof -nP -iTCP:"${port}" -sTCP:LISTEN || true
+  fi
+}
+
+docker_noaff_container_running() {
+  if ! command_exists docker; then
+    return 1
+  fi
+  docker inspect -f '{{.State.Running}}' noaff-monitor 2>/dev/null | grep -qx 'true'
+}
+
+ensure_docker_publish_port_available() {
+  if docker_noaff_container_running; then
+    log "Detected existing noaff container on port ${PUBLIC_APP_PORT}; continuing with in-place Docker update."
+    return
+  fi
+  if host_tcp_port_is_busy "$PUBLIC_APP_PORT"; then
+    warn "Detected an existing listener on Docker publish port ${PUBLIC_APP_PORT}."
+    print_host_tcp_port_listeners "$PUBLIC_APP_PORT"
+    die "PUBLIC_APP_PORT=${PUBLIC_APP_PORT} is already in use. Rerun the installer and choose another high port, such as 7788."
+  fi
+}
+
 ensure_service_user() {
   if ! id "$SERVICE_USER" >/dev/null 2>&1; then
     useradd --system --home "$APP_DIR" --shell /usr/sbin/nologin "$SERVICE_USER"
@@ -829,6 +872,7 @@ setup_python_env() {
 
 deploy_docker_stack() {
   cd "$APP_DIR"
+  ensure_docker_publish_port_available
   mkdir -p data
   chmod 755 "$APP_DIR"
   chmod 777 data
