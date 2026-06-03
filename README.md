@@ -124,6 +124,22 @@ curl -fsSL https://raw.githubusercontent.com/cshaizhihao/noaff-restock-monitor/m
 chmod +x install.sh
 ```
 
+也可以使用复制粘贴版引导脚本。它会用 `cat << 'EOF'` 在当前目录生成 `noaff-install.sh`，再从公开仓库拉取最新 `install.sh` 并执行：
+
+```bash
+cat > noaff-install.sh << 'EOF'
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+INSTALL_URL="${INSTALL_URL:-https://raw.githubusercontent.com/cshaizhihao/noaff-restock-monitor/master/install.sh}"
+curl -fsSL "$INSTALL_URL" -o install.sh
+chmod +x install.sh
+exec bash install.sh "$@"
+EOF
+
+chmod +x noaff-install.sh
+```
+
 最小示例：
 
 ```bash
@@ -132,6 +148,12 @@ CF_ZONE_NAME=example.com \
 CF_API_TOKEN=cf_xxx \
 CERTBOT_EMAIL=ops@example.com \
 bash install.sh
+```
+
+使用引导脚本时，把最后一行换成：
+
+```bash
+./noaff-install.sh
 ```
 
 正式安装前可以先跑预检模式。它只校验必要变量、TLS 域名和 Cloudflare 小黄云可代理端口，不会安装 apt 依赖、写入 Nginx 或注册 systemd：

@@ -217,6 +217,116 @@ class PortalAppTestCase(unittest.TestCase):
         self.assertEqual(payload["metrics"]["total"], 1)
         self.assertEqual(len(payload["tasks"]), 1)
 
+    def test_telegram_state_machine_sends_edits_and_clears_message_id(self) -> None:
+        _, headers = self.login()
+        create = self.client.post(
+            f"{app_module.PORTAL_PATH}/api/tasks",
+            headers=headers,
+            base_url=BASE_URL,
+            json={
+                "name": "HK VM",
+                "monitor_url": "https://example.com/cart.php?gid=1",
+                "target_keyword": "HK-CMI",
+                "restock_template": "<b>{name}</b> stock={stock}",
+                "soldout_template": "<b>{name}</b> sold out",
+                "button_1_text": "Open",
+                "button_1_url": "https://example.com/order",
+                "button_2_text": "",
+                "button_2_url": "",
+                "enabled": True,
+            },
+        )
+        self.assertEqual(create.status_code, 200)
+        task_id = create.get_json()["task_id"]
+
+        class FakeTelegram:
+            def __init__(self) -> None:
+                self.sent: list[dict[str, object]] = []
+                self.edited: list[dict[str, object]] = []
+
+            def send_message(self, token, chat_id, text, buttons=None) -> int:
+                self.sent.append({"token": token, "chat_id": chat_id, "text": text, "buttons": buttons})
+                return 901
+
+            def edit_message(self, token, chat_id, message_id, text, buttons=None) -> None:
+                self.edited.append(
+                    {"token": token, "chat_id": chat_id, "message_id": message_id, "text": text, "buttons": buttons}
+                )
+
+        engine = self.app.extensions["monitor_engine"]
+        original_telegram = engine.telegram
+        original_scrape_task = engine.scrape_task
+        fake_telegram = FakeTelegram()
+        stock_box = {"value": 5}
+        settings_payload = {
+            "telegram_bot_token": "token",
+            "telegram_chat_id": "chat",
+            "monitor_debug_port": 9223,
+            "test_debug_port": 9334,
+            "poll_interval_seconds": 45,
+            "request_timeout_seconds": 25,
+        }
+
+        def fetch_task() -> sqlite3.Row:
+            with app_module.open_connection() as connection:
+                return connection.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()
+
+        def fake_scrape_task(task, settings, use_test_browser):
+            return app_module.ScrapeResult(
+                stock=stock_box["value"],
+                fragment="<html></html>",
+                detail="ok",
+                used_test_browser=use_test_browser,
+            )
+
+        try:
+            engine.telegram = fake_telegram
+            engine.scrape_task = fake_scrape_task
+
+            self.assertTrue(engine.process_task(fetch_task(), settings_payload, use_test_browser=False))
+            with app_module.open_connection() as connection:
+                row = connection.execute(
+                    "SELECT last_stock, last_state, message_id FROM tasks WHERE id = ?",
+                    (task_id,),
+                ).fetchone()
+            self.assertEqual(row["last_stock"], 5)
+            self.assertEqual(row["last_state"], "in_stock")
+            self.assertEqual(row["message_id"], 901)
+            self.assertEqual(len(fake_telegram.sent), 1)
+            self.assertEqual(len(fake_telegram.edited), 0)
+
+            stock_box["value"] = 7
+            self.assertTrue(engine.process_task(fetch_task(), settings_payload, use_test_browser=False))
+            with app_module.open_connection() as connection:
+                row = connection.execute(
+                    "SELECT last_stock, last_state, message_id FROM tasks WHERE id = ?",
+                    (task_id,),
+                ).fetchone()
+            self.assertEqual(row["last_stock"], 7)
+            self.assertEqual(row["last_state"], "in_stock")
+            self.assertEqual(row["message_id"], 901)
+            self.assertEqual(len(fake_telegram.sent), 1)
+            self.assertEqual(len(fake_telegram.edited), 1)
+            self.assertEqual(fake_telegram.edited[-1]["message_id"], 901)
+            self.assertIn("stock=7", fake_telegram.edited[-1]["text"])
+
+            stock_box["value"] = 0
+            self.assertTrue(engine.process_task(fetch_task(), settings_payload, use_test_browser=False))
+            with app_module.open_connection() as connection:
+                row = connection.execute(
+                    "SELECT last_stock, last_state, message_id FROM tasks WHERE id = ?",
+                    (task_id,),
+                ).fetchone()
+            self.assertEqual(row["last_stock"], 0)
+            self.assertEqual(row["last_state"], "sold_out")
+            self.assertIsNone(row["message_id"])
+            self.assertEqual(len(fake_telegram.sent), 1)
+            self.assertEqual(len(fake_telegram.edited), 2)
+            self.assertIn("sold out", fake_telegram.edited[-1]["text"])
+        finally:
+            engine.telegram = original_telegram
+            engine.scrape_task = original_scrape_task
+
     def test_update_settings_rejects_debug_port_collisions(self) -> None:
         _, headers = self.login()
 
