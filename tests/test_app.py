@@ -551,7 +551,9 @@ class PortalAppTestCase(unittest.TestCase):
         payload = app_module.to_task_payload(row)
         self.assertNotIn(token, payload["last_error"])
         self.assertNotIn("api.telegram.org/bot883", payload["last_error"])
-        self.assertIn("bot<hidden-token>", payload["last_error"])
+        self.assertNotIn("bot<hidden-token>", payload["last_error"])
+        self.assertIn("Telegram sendMessage 失败", payload["last_error"])
+        self.assertIn("Chat ID", payload["last_error"])
 
     def test_update_settings_rejects_debug_port_collisions(self) -> None:
         _, headers = self.login()

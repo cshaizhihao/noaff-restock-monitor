@@ -632,6 +632,16 @@ def sanitize_telegram_error(value: str, token: str = "") -> str:
     if token:
         text = text.replace(token, "<hidden-token>")
     text = re.sub(r"bot\d+:[A-Za-z0-9_-]+", "bot<hidden-token>", text)
+    normalized = text.lower()
+    if "client error" in normalized and "api.telegram.org/bot<hidden-token>" in normalized:
+        method_match = re.search(r"/([A-Za-z]+)(?:\s|$)", text)
+        status_match = re.search(r"(\d{3})\s+Client Error", text, re.IGNORECASE)
+        method = method_match.group(1) if method_match else "Telegram"
+        status = status_match.group(1) if status_match else "400"
+        return (
+            f"Telegram {method} 失败（HTTP {status}）："
+            "请检查 Chat ID、机器人是否已加入群组/频道，以及推送文案 HTML。"
+        )
     return text
 
 
