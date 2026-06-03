@@ -176,6 +176,36 @@ class PortalAppTestCase(unittest.TestCase):
         )
         self.assertEqual(missing_csrf.status_code, 404)
 
+    def test_login_accepts_forwarded_https_origin(self) -> None:
+        bootstrap = self.read_bootstrap_credentials()
+        root_response = self.client.get(
+            "/",
+            headers={"User-Agent": BROWSER_UA, "Host": "monitor.example.com"},
+            base_url="http://monitor.example.com",
+        )
+        self.assertEqual(root_response.status_code, 200)
+        match = re.search(r'<meta name="csrf-token" content="([^"]+)"', root_response.get_data(as_text=True))
+        self.assertIsNotNone(match)
+        csrf_token = match.group(1)
+        headers = self.ajax_headers(csrf_token)
+        headers.update(
+            {
+                "Origin": "https://monitor.example.com",
+                "Host": "monitor.example.com",
+                "X-Forwarded-Proto": "https",
+                "X-Forwarded-Host": "monitor.example.com",
+                "X-Forwarded-Port": "443",
+            }
+        )
+        response = self.client.post(
+            f"{app_module.PORTAL_PATH}/gate",
+            headers=headers,
+            base_url="http://monitor.example.com",
+            json={"username": bootstrap["username"], "password": bootstrap["password"]},
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.get_json()["ok"])
+
     def test_login_rate_limit_blocks_sixth_failed_attempt(self) -> None:
         bootstrap = self.read_bootstrap_credentials()
         csrf_token = self.get_portal_csrf()

@@ -157,8 +157,18 @@ def is_same_origin(req) -> bool:
     origin = req.headers.get("Origin", "").strip()
     if not origin:
         return True
-    expected = req.host_url.rstrip("/")
-    return origin == expected
+    expected_origins = {req.host_url.rstrip("/")}
+    forwarded_proto = req.headers.get("X-Forwarded-Proto", "").split(",", 1)[0].strip()
+    forwarded_host = req.headers.get("X-Forwarded-Host", "").split(",", 1)[0].strip()
+    forwarded_port = req.headers.get("X-Forwarded-Port", "").split(",", 1)[0].strip()
+    if forwarded_proto and forwarded_host:
+        host = forwarded_host
+        if forwarded_port and ":" not in forwarded_host:
+            default_port = "443" if forwarded_proto == "https" else "80"
+            if forwarded_port != default_port:
+                host = f"{forwarded_host}:{forwarded_port}"
+        expected_origins.add(f"{forwarded_proto}://{host}".rstrip("/"))
+    return origin in expected_origins
 
 
 def issue_csrf_token() -> str:

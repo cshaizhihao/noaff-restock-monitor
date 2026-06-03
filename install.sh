@@ -512,8 +512,13 @@ normalize_access_mode() {
     CERT_MODE="none"
     CF_RECORD_PROXIED="false"
     ORIGIN_LOCKDOWN_TO_CLOUDFLARE="false"
-    SESSION_COOKIE_SECURE="false"
-    ENABLE_PROXY_FIX="false"
+    if [[ -n "$FQDN" ]]; then
+      SESSION_COOKIE_SECURE="true"
+      ENABLE_PROXY_FIX="true"
+    else
+      SESSION_COOKIE_SECURE="false"
+      ENABLE_PROXY_FIX="false"
+    fi
     APP_HOST="0.0.0.0"
     LIMITER_STORAGE_URI="redis://redis:6379/0"
   fi
