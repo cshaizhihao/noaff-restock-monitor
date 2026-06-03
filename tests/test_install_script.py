@@ -233,6 +233,15 @@ class InstallScriptTestCase(unittest.TestCase):
         self.assertIn("xauth", script)
         self.assertIn("xauth", dockerfile)
 
+    def test_docker_image_keeps_git_metadata_for_version_reporting(self) -> None:
+        dockerignore = (ROOT_DIR / ".dockerignore").read_text(encoding="utf-8")
+        dockerfile = (ROOT_DIR / "Dockerfile").read_text(encoding="utf-8")
+        script = (ROOT_DIR / "install.sh").read_text(encoding="utf-8")
+        self.assertNotIn(".git", dockerignore)
+        self.assertIn("git", dockerfile)
+        self.assertIn("APP_VERSION=", script)
+        self.assertIn("APP_BRANCH=", script)
+
     def test_docker_publish_port_conflict_is_reported_cleanly(self) -> None:
         result = self.run_bash(
             textwrap.dedent(

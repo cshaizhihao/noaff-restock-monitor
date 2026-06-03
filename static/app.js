@@ -5,6 +5,7 @@
     let csrfToken = context.csrfToken || document.querySelector('meta[name="csrf-token"]')?.content || "";
     let snapshotTimer = null;
     let currentTasks = new Map();
+    let currentSystem = null;
     let currentView = "tasks";
 
     const els = {
@@ -49,7 +50,9 @@
         systemVersion: document.getElementById("system-version"),
         systemBranch: document.getElementById("system-branch"),
         upgradeServiceState: document.getElementById("upgrade-service-state"),
+        upgradeButtonLabel: document.getElementById("upgrade-button-label"),
         upgradeButton: document.getElementById("upgrade-button"),
+        upgradeHelp: document.getElementById("upgrade-help"),
         upgradeLog: document.getElementById("upgrade-log"),
         profileForm: document.getElementById("profile-form"),
         profileUsername: document.getElementById("profile-username"),
@@ -106,6 +109,27 @@
             toast.style.transform = "translateY(-0.35rem)";
             window.setTimeout(() => toast.remove(), 220);
         }, 3200);
+    }
+
+    async function copyText(value) {
+        const text = String(value ?? "");
+        if (!text) {
+            return false;
+        }
+        if (navigator.clipboard?.writeText) {
+            await navigator.clipboard.writeText(text);
+            return true;
+        }
+        const textarea = document.createElement("textarea");
+        textarea.value = text;
+        textarea.setAttribute("readonly", "true");
+        textarea.style.position = "fixed";
+        textarea.style.opacity = "0";
+        document.body.appendChild(textarea);
+        textarea.select();
+        const ok = document.execCommand("copy");
+        textarea.remove();
+        return ok;
     }
 
     async function apiFetch(path, options = {}) {
@@ -242,12 +266,32 @@
     }
 
     function renderSystem(system) {
+        currentSystem = system || null;
+        const lineBreak = String.fromCharCode(10);
         els.systemVersion.textContent = system.version || "-";
         els.systemBranch.textContent = system.branch || "-";
-        els.upgradeServiceState.textContent = system.upgrade_supported ? "可用" : "未安装";
-        els.upgradeButton.disabled = !system.upgrade_supported;
+        els.upgradeServiceState.textContent = system.upgrade_state || (system.upgrade_supported ? "??" : "???");
+        const mode = system.upgrade_mode || (system.upgrade_supported ? "panel" : "unsupported");
+        if (mode === "panel") {
+            els.upgradeButton.disabled = false;
+            els.upgradeButtonLabel.textContent = "????";
+            els.upgradeHelp.textContent = system.upgrade_hint || "???????????????????";
+            const logLines = system.upgrade_log || [];
+            els.upgradeLog.textContent = logLines.length ? logLines.join(lineBreak) : "???????";
+            return;
+        }
+        if (mode === "manual") {
+            els.upgradeButton.disabled = false;
+            els.upgradeButtonLabel.textContent = "??????";
+            els.upgradeHelp.textContent = system.upgrade_hint || "??????????????";
+            els.upgradeLog.textContent = system.upgrade_command || "???????";
+            return;
+        }
+        els.upgradeButton.disabled = true;
+        els.upgradeButtonLabel.textContent = "???????";
+        els.upgradeHelp.textContent = system.upgrade_hint || "????????????";
         const logLines = system.upgrade_log || [];
-        els.upgradeLog.textContent = logLines.length ? logLines.join("\n") : "暂无升级日志。";
+        els.upgradeLog.textContent = logLines.length ? logLines.join(lineBreak) : "???????";
     }
 
     function renderAdmin(admin) {
@@ -515,7 +559,17 @@
     });
 
     els.upgradeButton?.addEventListener("click", async () => {
-        if (!window.confirm("确认启动系统升级？升级完成后服务会自动重启。")) {
+        const system = currentSystem || {};
+        if (system.upgrade_mode === "manual") {
+            try {
+                const copied = await copyText(system.upgrade_command || "");
+                showToast(copied ? "????????" : "???????????", copied ? "success" : "error");
+            } catch (error) {
+                showToast(error.message, "error");
+            }
+            return;
+        }
+        if (!window.confirm("??????????????????????")) {
             return;
         }
         els.upgradeButton.disabled = true;
@@ -524,7 +578,7 @@
                 method: "POST",
                 body: JSON.stringify({})
             });
-            showToast(data.message || "升级任务已启动。");
+            showToast(data.message || "????????", "success");
             await loadSnapshot(false);
         } catch (error) {
             showToast(error.message, "error");

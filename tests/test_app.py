@@ -30,6 +30,11 @@ class PortalAppTestCase(unittest.TestCase):
             "LIMITER_STORAGE_URI": app_module.LIMITER_STORAGE_URI,
             "ENABLE_PROXY_FIX": app_module.ENABLE_PROXY_FIX,
             "DEFAULT_APP_PORT": app_module.DEFAULT_APP_PORT,
+            "DEPLOY_MODE": app_module.DEPLOY_MODE,
+            "INSTALL_APP_DIR": app_module.INSTALL_APP_DIR,
+            "REPO_REF": app_module.REPO_REF,
+            "APP_VERSION_OVERRIDE": app_module.APP_VERSION_OVERRIDE,
+            "APP_BRANCH_OVERRIDE": app_module.APP_BRANCH_OVERRIDE,
             "UPGRADE_SERVICE_NAME": app_module.UPGRADE_SERVICE_NAME,
         }
 
@@ -44,6 +49,11 @@ class PortalAppTestCase(unittest.TestCase):
         app_module.LIMITER_STORAGE_URI = "memory://"
         app_module.ENABLE_PROXY_FIX = False
         app_module.DEFAULT_APP_PORT = 7777
+        app_module.DEPLOY_MODE = "native"
+        app_module.INSTALL_APP_DIR = "/opt/noaff-monitor"
+        app_module.REPO_REF = "master"
+        app_module.APP_VERSION_OVERRIDE = ""
+        app_module.APP_BRANCH_OVERRIDE = ""
 
         app_module.initialize_database()
         self.app = app_module.make_app()
@@ -230,7 +240,40 @@ class PortalAppTestCase(unittest.TestCase):
             json={},
         )
         self.assertEqual(response.status_code, 400)
-        self.assertIn("暂不支持", response.get_json()["message"])
+        payload = response.get_json()
+        self.assertEqual(payload["system"]["upgrade_mode"], "unsupported")
+        self.assertFalse(payload["system"]["upgrade_supported"])
+
+    def test_system_payload_reports_docker_manual_upgrade_mode(self) -> None:
+        app_module.DEPLOY_MODE = "docker"
+        app_module.INSTALL_APP_DIR = "/srv/noaff"
+        app_module.REPO_REF = "master"
+        app_module.APP_VERSION_OVERRIDE = "v1.2.3"
+        app_module.APP_BRANCH_OVERRIDE = "main"
+        original_run_short_command = app_module.run_short_command
+        app_module.run_short_command = lambda args, timeout=4: ""
+        payload = app_module.system_payload()
+        app_module.run_short_command = original_run_short_command
+        self.assertEqual(payload["upgrade_mode"], "manual")
+        self.assertFalse(payload["upgrade_supported"])
+        self.assertEqual(payload["version"], "v1.2.3")
+        self.assertEqual(payload["branch"], "main")
+        self.assertIn("docker compose up -d --build", payload["upgrade_command"])
+
+    def test_system_upgrade_endpoint_reports_docker_manual_command(self) -> None:
+        app_module.DEPLOY_MODE = "docker"
+        _, headers = self.login()
+        response = self.client.post(
+            f"{app_module.PORTAL_PATH}/api/system/upgrade",
+            headers=headers,
+            base_url=BASE_URL,
+            json={},
+        )
+        self.assertEqual(response.status_code, 400)
+        payload = response.get_json()
+        self.assertIn("Docker", payload["message"])
+        self.assertEqual(payload["system"]["upgrade_mode"], "manual")
+        self.assertIn("docker compose up -d --build", payload["system"]["upgrade_command"])
 
     def test_telegram_state_machine_sends_edits_and_clears_message_id(self) -> None:
         _, headers = self.login()

@@ -1402,12 +1402,22 @@ import secrets
 print(secrets.token_urlsafe(18))
 PY
 )"
+  local app_version app_branch
+  app_version="$(git -C "$APP_DIR" describe --tags --exact-match HEAD 2>/dev/null || git -C "$APP_DIR" rev-parse --short HEAD 2>/dev/null || echo unknown)"
+  app_branch="$(git -C "$APP_DIR" rev-parse --abbrev-ref HEAD 2>/dev/null || echo "$REPO_REF")"
 
   cat > "$APP_DIR/.env" <<EOF
 APP_HOST=${APP_HOST}
 APP_PORT=${APP_PORT}
 PUBLIC_APP_PORT=${PUBLIC_APP_PORT}
 DOCKER_BIND_HOST=${DOCKER_BIND_HOST}
+DEPLOY_MODE=${DEPLOY_MODE}
+INSTALL_APP_DIR=${APP_DIR}
+REPO_REF=${REPO_REF}
+APP_VERSION=${app_version}
+APP_BRANCH=${app_branch}
+UPGRADE_SERVICE_NAME=${APP_NAME}-upgrade.service
+UPGRADE_LOG_PATH=${UPGRADE_LOG}
 PORTAL_PATH=${PORTAL_PATH}
 SECRET_KEY=${SECRET_KEY}
 ADMIN_USERNAME=${ADMIN_USERNAME}

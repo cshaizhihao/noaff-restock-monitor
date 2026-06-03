@@ -92,6 +92,11 @@ PROXY_FIX_X_FOR = int(os.getenv("PROXY_FIX_X_FOR", "1"))
 PROXY_FIX_X_PROTO = int(os.getenv("PROXY_FIX_X_PROTO", "1"))
 PROXY_FIX_X_HOST = int(os.getenv("PROXY_FIX_X_HOST", "1"))
 PROXY_FIX_X_PORT = int(os.getenv("PROXY_FIX_X_PORT", "1"))
+DEPLOY_MODE = (os.getenv("DEPLOY_MODE", "").strip() or "native").lower()
+INSTALL_APP_DIR = os.getenv("INSTALL_APP_DIR", "/opt/noaff-monitor").strip() or "/opt/noaff-monitor"
+REPO_REF = os.getenv("REPO_REF", "master").strip() or "master"
+APP_VERSION_OVERRIDE = os.getenv("APP_VERSION", "").strip()
+APP_BRANCH_OVERRIDE = os.getenv("APP_BRANCH", "").strip()
 UPGRADE_SERVICE_NAME = os.getenv("UPGRADE_SERVICE_NAME", "noaff-monitor-upgrade.service")
 UPGRADE_LOG_PATH = Path(os.getenv("UPGRADE_LOG_PATH", "/var/log/noaff-monitor-upgrade.log"))
 
@@ -222,18 +227,50 @@ def upgrade_service_exists() -> bool:
     )
 
 
+def docker_upgrade_command() -> str:
+    return f"cd {INSTALL_APP_DIR} && git pull --ff-only origin {REPO_REF} && docker compose up -d --build"
+
+
+def upgrade_mode_payload() -> dict[str, str | bool]:
+    if shutil.which("systemctl") and upgrade_service_exists():
+        return {
+            "upgrade_mode": "panel",
+            "upgrade_supported": True,
+            "upgrade_state": "一键升级可用",
+            "upgrade_hint": "将通过 systemd 在后台拉取最新代码并自动重启服务。",
+            "upgrade_command": f"systemctl start {UPGRADE_SERVICE_NAME}",
+        }
+    if DEPLOY_MODE == "docker":
+        return {
+            "upgrade_mode": "manual",
+            "upgrade_supported": False,
+            "upgrade_state": "Docker 手动升级",
+            "upgrade_hint": "Docker 隔离部署为了安全起见，不直接从面板接管宿主机 Docker。请复制命令到服务器执行。",
+            "upgrade_command": docker_upgrade_command(),
+        }
+    return {
+        "upgrade_mode": "unsupported",
+        "upgrade_supported": False,
+        "upgrade_state": "当前环境不支持",
+        "upgrade_hint": "未检测到安装脚本注册的升级服务。",
+        "upgrade_command": "",
+    }
+
+
 def system_payload() -> dict[str, Any]:
     commit = run_short_command(["git", "rev-parse", "--short", "HEAD"])
     branch = run_short_command(["git", "rev-parse", "--abbrev-ref", "HEAD"])
     tag = run_short_command(["git", "describe", "--tags", "--exact-match", "HEAD"])
-    return {
-        "version": tag or commit or "unknown",
-        "branch": branch or "",
+    payload = {
+        "version": tag or commit or APP_VERSION_OVERRIDE or "unknown",
+        "branch": branch or APP_BRANCH_OVERRIDE or "",
         "commit": commit or "",
+        "deploy_mode": DEPLOY_MODE,
         "upgrade_service": UPGRADE_SERVICE_NAME,
-        "upgrade_supported": bool(shutil.which("systemctl") and upgrade_service_exists()),
         "upgrade_log": tail_file(UPGRADE_LOG_PATH),
     }
+    payload.update(upgrade_mode_payload())
+    return payload
 
 
 def validate_http_url(candidate: str) -> bool:
@@ -1357,8 +1394,17 @@ def make_app() -> Flask:
     @login_required
     @limiter.limit("3 per hour")
     def start_system_upgrade():
-        if not shutil.which("systemctl") or not upgrade_service_exists():
-            return jsonify({"ok": False, "message": "当前环境不是安装脚本部署版，暂不支持面板内升级。"}), 400
+        system = system_payload()
+        if system["upgrade_mode"] == "manual":
+            return jsonify(
+                {
+                    "ok": False,
+                    "message": "Docker ??????????????????????????? Docker?",
+                    "system": system,
+                }
+            ), 400
+        if not system["upgrade_supported"]:
+            return jsonify({"ok": False, "message": "????????????????", "system": system}), 400
         try:
             completed = subprocess.run(
                 ["systemctl", "start", UPGRADE_SERVICE_NAME],
@@ -1368,12 +1414,12 @@ def make_app() -> Flask:
                 check=False,
             )
         except Exception as exc:
-            return jsonify({"ok": False, "message": f"升级服务启动失败：{exc}"}), 500
+            return jsonify({"ok": False, "message": f"?????????{exc}"}), 500
         if completed.returncode != 0:
-            message = (completed.stderr or completed.stdout or "升级服务启动失败。").strip()
+            message = (completed.stderr or completed.stdout or "?????????").strip()
             return jsonify({"ok": False, "message": message}), 500
-        log_activity("warning", "system", f"管理员 {session.get('admin_username', '')} 已启动系统升级。")
-        return jsonify({"ok": True, "message": "升级任务已启动，请稍后查看升级日志。", "system": system_payload()})
+        log_activity("warning", "system", f"??? {session.get('admin_username', '')} ????????")
+        return jsonify({"ok": True, "message": "??????????????????", "system": system_payload()})
 
     return app
 
