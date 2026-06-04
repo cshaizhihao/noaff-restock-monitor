@@ -8,12 +8,7 @@
   <strong>IDC / WHMCS 补货监控 + Telegram 状态机推送 + 安全 SaaS 面板</strong>
 </p>
 
-<p align="center">
-  <img alt="Python" src="https://img.shields.io/badge/Python-3.x-3776AB?style=for-the-badge&logo=python&logoColor=white">
-  <img alt="Flask" src="https://img.shields.io/badge/Flask-SaaS%20Panel-111827?style=for-the-badge&logo=flask&logoColor=white">
-  <img alt="Docker" src="https://img.shields.io/badge/Docker-Ready-2496ED?style=for-the-badge&logo=docker&logoColor=white">
-  <img alt="NOAFF" src="https://img.shields.io/badge/NOAFF-Public%20Good-10B981?style=for-the-badge">
-</p>
+<p align="center">🐍 Python 3.x · ⚗️ Flask · 🗄️ SQLite · 🐳 Docker · 📬 Telegram</p>
 
 > 🛰️ 面向公益无 AFF 补货提醒场景，专注精准切片、库存识别、Telegram 静默更新和高防护后台。
 
