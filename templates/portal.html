@@ -22,7 +22,7 @@
                 <div class="absolute left-0 top-0 h-1 w-full bg-gradient-to-r from-indigo-500 via-cyan-400 to-indigo-500"></div>
 
                 <div class="mb-8 flex flex-col items-center text-center">
-                    <div class="mb-4 flex h-12 w-12 items-center justify-center">
+                    <div class="brand-logo mb-4 flex h-12 w-12 items-center justify-center">
                         <svg viewBox="0 0 24 24" fill="none" class="h-full w-full">
                             <defs>
                                 <linearGradient id="login-lg1" x1="0%" y1="0%" x2="100%" y2="100%">
@@ -66,7 +66,7 @@
         <section id="dashboard-shell" class="hidden flex h-screen flex-col overflow-hidden md:flex-row">
             <aside class="glass-sidebar hidden h-full w-64 flex-none flex-col md:flex">
                 <div class="flex h-20 items-center border-b border-slate-800 px-6">
-                    <div class="mr-3 flex h-8 w-8 items-center justify-center">
+                    <div class="brand-logo mr-3 flex h-8 w-8 items-center justify-center">
                         <svg viewBox="0 0 24 24" fill="none" class="h-full w-full">
                             <defs>
                                 <linearGradient id="side-lg1" x1="0%" y1="0%" x2="100%" y2="100%">
@@ -123,7 +123,8 @@
             <header class="glass-sidebar flex flex-none flex-col gap-3 border-b border-slate-800 px-4 py-3 md:hidden">
                 <div class="flex items-center justify-between gap-3">
                     <div class="flex items-center gap-3">
-                        <svg viewBox="0 0 24 24" fill="none" class="h-8 w-8">
+                        <div class="brand-logo h-8 w-8">
+                            <svg viewBox="0 0 24 24" fill="none" class="h-8 w-8">
                             <defs>
                                 <linearGradient id="mobile-lg1" x1="0%" y1="0%" x2="100%" y2="100%">
                                     <stop offset="0%" stop-color="#818CF8"/>
@@ -138,7 +139,8 @@
                             <circle cx="12" cy="12" r="3" fill="url(#mobile-lg1)"/>
                             <circle cx="12" cy="12" r="5" stroke="url(#mobile-lg1)" stroke-width="1.5" opacity="0.5"/>
                             <path d="M5 5L19 19" stroke="url(#mobile-lg2)" stroke-width="2.5" stroke-linecap="round"/>
-                        </svg>
+                            </svg>
+                        </div>
                         <span class="text-sm font-bold tracking-widest text-slate-200">NOAFF_PANEL</span>
                     </div>
                     <button id="mobile-logout-button" type="button" class="danger-button !min-h-10 !rounded-lg !px-3 !py-2 text-xs">退出</button>

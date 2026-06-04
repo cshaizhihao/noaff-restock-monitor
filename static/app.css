@@ -138,6 +138,14 @@ code {
     -webkit-text-fill-color: transparent;
 }
 
+.brand-logo {
+    background: center / cover no-repeat url("/assets/noaff-logo.svg");
+}
+
+.brand-logo svg {
+    display: none;
+}
+
 .form-label {
     display: block;
     margin-bottom: 0.45rem;

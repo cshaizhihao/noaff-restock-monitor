@@ -81,6 +81,15 @@ class PortalAppTestCase(unittest.TestCase):
         self.assertIn("password=", text)
         self.assertNotIn("panel_path=", text)
 
+    def test_asset_route_serves_logo_for_browser_requests(self) -> None:
+        response = self.client.get("/assets/noaff-logo.svg", headers={"User-Agent": BROWSER_UA}, base_url=BASE_URL)
+        try:
+            self.assertEqual(response.status_code, 200)
+            self.assertIn("image/svg+xml", response.headers["Content-Type"])
+            self.assertIn("<svg", response.get_data(as_text=True))
+        finally:
+            response.close()
+
     def get_portal_csrf(self) -> str:
         response = self.client.get("/", headers={"User-Agent": BROWSER_UA}, base_url=BASE_URL)
         self.assertEqual(response.status_code, 200)

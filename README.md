@@ -17,6 +17,11 @@
 
 > 🛰️ 面向公益无 AFF 补货提醒场景，专注精准切片、库存识别、Telegram 静默更新和高防护后台。
 
+<p align="center">
+  <img src="ui-check/login-fresh-desktop.png" width="47%" alt="NOAFF 登录页预览">
+  <img src="ui-check/dashboard-fresh-desktop.png" width="47%" alt="NOAFF 后台预览">
+</p>
+
 ## 🚀 一键安装
 
 普通用户只需要执行下面这一条命令：
@@ -41,6 +46,8 @@ curl -H 'Cache-Control: no-cache' -fsSL https://raw.githubusercontent.com/cshaiz
 - 没有域名：直接走 **IP + 端口**
 
 安装器会根据机器环境和你的输入自动完成 Docker / 原生 / 域名 / Cloudflare 分流；如果系统尚未安装 Python 3，也会先自动补齐基础运行时。平时只保留上面的主命令即可，想改成无人值守时再用下方环境变量表覆盖默认值。
+
+如果 Docker 模式填写域名，安装器会把公网地址输出为 `https://域名`，容器回源仍然是 `http://127.0.0.1:PUBLIC_APP_PORT`。
 
 ## ✨ 核心能力
 

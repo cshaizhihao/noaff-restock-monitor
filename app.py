@@ -24,7 +24,7 @@ from urllib.parse import urljoin, urlparse, urldefrag
 import psutil
 import requests
 from dotenv import load_dotenv
-from flask import Flask, jsonify, redirect, render_template, request, session, url_for
+from flask import Flask, jsonify, redirect, render_template, request, send_from_directory, session, url_for
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
 from requests import Response
@@ -41,6 +41,7 @@ except Exception:  # pragma: no cover - runtime dependency may be absent during 
 
 
 BASE_DIR = Path(__file__).resolve().parent
+ASSETS_DIR = BASE_DIR / "assets"
 DATA_DIR = BASE_DIR / "data"
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 DB_PATH = DATA_DIR / "monitor.db"
@@ -2797,6 +2798,10 @@ def make_app() -> Flask:
             "base-uri 'self'; form-action 'self'; frame-ancestors 'none'"
         )
         return response
+
+    @app.route("/assets/<path:filename>", methods=["GET"])
+    def asset_file(filename: str):
+        return send_from_directory(ASSETS_DIR, filename)
 
     @app.errorhandler(429)
     def rate_limited(error):

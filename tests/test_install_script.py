@@ -672,7 +672,7 @@ class InstallScriptTestCase(unittest.TestCase):
                 """
             )
         )
-        self.assertIn("http://monitor.example.com", output)
+        self.assertIn("https://monitor.example.com", output)
         self.assertNotIn("should-not-detect", output)
         self.assertNotIn("monitor.example.com:8787", output)
         self.assertNotIn("/portal_test", output)

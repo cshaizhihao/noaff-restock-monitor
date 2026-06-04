@@ -710,7 +710,7 @@ build_public_url() {
   if [[ "$DEPLOY_MODE" == "docker" ]]; then
     if [[ -n "$FQDN" ]]; then
       public_host="$(normalize_domain_input "$FQDN")"
-      printf 'http://%s' "$public_host"
+      printf 'https://%s' "$public_host"
       return
     else
       detect_origin_ips
