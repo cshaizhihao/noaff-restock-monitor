@@ -542,10 +542,25 @@ class InstallScriptTestCase(unittest.TestCase):
         app_js = (ROOT_DIR / "static" / "app.js").read_text(encoding="utf-8")
         self.assertIn("function syncInputValue", app_js)
         self.assertIn("document.activeElement === input || hasLocalEdit", app_js)
+        self.assertIn("wireDirtyTracking(input)", app_js)
+        self.assertIn("input.dataset.inputDirty", app_js)
         self.assertIn("syncInputValue(els.settingsChatId", app_js)
         self.assertIn("syncInputValue(els.settingsMonitorPort", app_js)
         self.assertIn("syncInputValue(els.profileUsername", app_js)
         self.assertNotIn("els.profileUsername.value = admin.username", app_js)
+
+    def test_dashboard_polling_updates_task_cards_in_place(self) -> None:
+        app_js = (ROOT_DIR / "static" / "app.js").read_text(encoding="utf-8")
+        self.assertIn("let taskStateSignature = \"\"", app_js)
+        self.assertIn("function updateTaskCard(task)", app_js)
+        self.assertIn("data-task-status", app_js)
+        self.assertIn("data-task-stock", app_js)
+        self.assertIn("data-task-log", app_js)
+        self.assertIn("data-task-meta", app_js)
+        self.assertIn("data-task-toggle", app_js)
+        self.assertIn("data-task-keyword-text", app_js)
+        self.assertIn("data-task-group-section", app_js)
+        self.assertIn("data-task-group-error", app_js)
 
     def test_dashboard_polling_does_not_replay_task_reveal_animation(self) -> None:
         app_js = (ROOT_DIR / "static" / "app.js").read_text(encoding="utf-8")
@@ -562,6 +577,18 @@ class InstallScriptTestCase(unittest.TestCase):
         self.assertIn("if (logsSignature !== null && nextLogsSignature === logsSignature) {", app_js)
         self.assertIn("const nextMerchantSignature = [", app_js)
         self.assertIn("if (merchantSignature !== null && nextMerchantSignature === merchantSignature) {", app_js)
+
+    def test_dashboard_backup_controls_are_wired(self) -> None:
+        app_js = (ROOT_DIR / "static" / "app.js").read_text(encoding="utf-8")
+        portal_html = (ROOT_DIR / "templates" / "portal.html").read_text(encoding="utf-8")
+        self.assertIn("backupExportButton", app_js)
+        self.assertIn("backupRestoreButton", app_js)
+        self.assertIn("backupFileInput", app_js)
+        self.assertIn("exportBackup", app_js)
+        self.assertIn("restoreBackup", app_js)
+        self.assertIn('id="backup-export-button"', portal_html)
+        self.assertIn('id="backup-file-input"', portal_html)
+        self.assertIn('id="backup-restore-button"', portal_html)
 
     def test_dashboard_supports_collapsible_task_groups(self) -> None:
         app_js = (ROOT_DIR / "static" / "app.js").read_text(encoding="utf-8")

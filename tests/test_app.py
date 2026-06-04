@@ -1,3 +1,5 @@
+import io
+import json
 import re
 import sqlite3
 import tempfile
@@ -265,6 +267,21 @@ class PortalAppTestCase(unittest.TestCase):
         )
         self.assertEqual(response.status_code, 404)
 
+    def test_stale_session_is_rejected_after_admin_removed(self) -> None:
+        _, headers = self.login()
+
+        with app_module.open_connection() as connection:
+            connection.execute("DELETE FROM admins")
+            connection.commit()
+
+        response = self.client.get(
+            f"{app_module.PORTAL_PATH}/api/snapshot",
+            headers=self.browser_headers(),
+            base_url=BASE_URL,
+        )
+        self.assertEqual(response.status_code, 401)
+        self.assertEqual(response.get_json()["message"], "未登录或会话已过期。")
+
     def test_login_rate_limit_blocks_sixth_failed_attempt(self) -> None:
         bootstrap = self.read_bootstrap_credentials()
         csrf_token = self.get_portal_csrf()
@@ -400,6 +417,81 @@ class PortalAppTestCase(unittest.TestCase):
         self.assertEqual(payload["merchant"]["metrics"]["total_items"], 2)
         self.assertEqual(payload["merchant"]["metrics"]["linked_tasks"], 2)
 
+    def test_merchant_item_promote_creates_linked_task(self) -> None:
+        _, headers = self.login()
+        engine = self.app.extensions["monitor_engine"]
+
+        class FakeCatalogBrowser:
+            def fetch_html(self, url: str, timeout_seconds: int) -> str:
+                return """
+                <html>
+                  <head><title>Acme Hosting</title></head>
+                  <body>
+                    <div class="package">
+                      <h3>HK-CMI Unlimited</h3>
+                      <p>库存 9</p>
+                      <a href="cart.php?a=add&pid=21">Order Now</a>
+                    </div>
+                  </body>
+                </html>
+                """
+
+            def rebuild(self, reason: str) -> None:
+                raise AssertionError(reason)
+
+        original_browser = engine.catalog_browser
+        fake_browser = FakeCatalogBrowser()
+        engine.catalog_browser = fake_browser
+        try:
+            result = engine.import_merchant_source(
+                "https://merchant.example.com/products",
+                "",
+                engine.get_runtime_settings(),
+                auto_promote=False,
+            )
+        finally:
+            engine.catalog_browser = original_browser
+
+        self.assertEqual(result.scanned_count, 1)
+        self.assertEqual(result.promoted_count, 0)
+
+        with app_module.open_connection() as connection:
+            item_id = connection.execute("SELECT id FROM merchant_items LIMIT 1").fetchone()[0]
+            task_count_before = connection.execute("SELECT COUNT(*) FROM tasks").fetchone()[0]
+
+        self.assertEqual(task_count_before, 0)
+
+        response = self.client.post(
+            f"{app_module.PORTAL_PATH}/api/merchant/items/{item_id}/promote",
+            headers=headers,
+            base_url=BASE_URL,
+            json={},
+        )
+        self.assertEqual(response.status_code, 200)
+        payload = response.get_json()
+        self.assertTrue(payload["ok"])
+        self.assertEqual(payload["result"]["item_id"], item_id)
+        self.assertIsInstance(payload["result"]["task_id"], int)
+
+        with app_module.open_connection() as connection:
+            task_row = connection.execute(
+                "SELECT source_item_id, source_source_url, source_source_name FROM tasks LIMIT 1"
+            ).fetchone()
+            task_count_after = connection.execute("SELECT COUNT(*) FROM tasks").fetchone()[0]
+
+        self.assertEqual(task_count_after, 1)
+        self.assertEqual(task_row["source_item_id"], item_id)
+        self.assertEqual(task_row["source_source_url"], "https://merchant.example.com/products")
+        self.assertEqual(task_row["source_source_name"], "Acme Hosting")
+
+        snapshot = self.client.get(
+            f"{app_module.PORTAL_PATH}/api/snapshot",
+            headers=self.browser_headers(),
+            base_url=BASE_URL,
+        )
+        payload = snapshot.get_json()
+        self.assertEqual(payload["merchant"]["metrics"]["linked_tasks"], 1)
+
     def test_merchant_source_toggle_updates_activity_and_snapshot(self) -> None:
         _, headers = self.login()
         with app_module.open_connection() as connection:
@@ -481,6 +573,91 @@ class PortalAppTestCase(unittest.TestCase):
         self.assertIn("Docker", payload["message"])
         self.assertEqual(payload["system"]["upgrade_mode"], "manual")
         self.assertIn("bash install.sh --docker-upgrade", payload["system"]["upgrade_command"])
+
+    def test_system_backup_export_and_restore_round_trip(self) -> None:
+        _, headers = self.login()
+        timestamp = app_module.now_iso()
+        with app_module.open_connection() as connection:
+            connection.execute(
+                """
+                INSERT INTO tasks (
+                    name, group_name, monitor_url, target_keyword, restock_template, soldout_template,
+                    enabled, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?)
+                """,
+                (
+                    "Backup SKU",
+                    "Backup Group",
+                    "https://example.com/products/backup",
+                    "Backup SKU",
+                    "<b>{name}</b> {stock}",
+                    "<b>{name}</b> sold out",
+                    timestamp,
+                    timestamp,
+                ),
+            )
+            app_module.save_settings(
+                connection,
+                {
+                    "telegram_chat_id": "backup-chat-id",
+                    "poll_interval_seconds": "60",
+                },
+            )
+            connection.commit()
+
+        export_response = self.client.get(
+            f"{app_module.PORTAL_PATH}/api/system/backup",
+            headers=self.browser_headers(),
+            base_url=BASE_URL,
+        )
+        self.assertEqual(export_response.status_code, 200)
+        self.assertIn("attachment; filename=\"noaff-backup-", export_response.headers["Content-Disposition"])
+        backup_payload = json.loads(export_response.get_data(as_text=True))
+        self.assertEqual(backup_payload["schema_version"], 1)
+        self.assertGreaterEqual(len(backup_payload["tables"]["tasks"]), 1)
+        self.assertIn("admins", backup_payload["tables"])
+
+        with app_module.open_connection() as connection:
+            connection.execute("DELETE FROM tasks")
+            app_module.save_settings(
+                connection,
+                {
+                    "telegram_chat_id": "mutated-chat-id",
+                    "poll_interval_seconds": "120",
+                },
+            )
+            connection.commit()
+
+        restore_response = self.client.post(
+            f"{app_module.PORTAL_PATH}/api/system/backup",
+            headers=headers,
+            base_url=BASE_URL,
+            data={
+                "backup_file": (io.BytesIO(json.dumps(backup_payload).encode("utf-8")), "backup.json"),
+            },
+        )
+        self.assertEqual(restore_response.status_code, 200)
+        self.assertTrue(restore_response.get_json()["ok"])
+
+        snapshot = self.client.get(
+            f"{app_module.PORTAL_PATH}/api/snapshot",
+            headers=self.browser_headers(),
+            base_url=BASE_URL,
+        )
+        payload = snapshot.get_json()
+        self.assertEqual(payload["settings"]["telegram_chat_id"], "backup-chat-id")
+        self.assertEqual(payload["metrics"]["total"], 1)
+
+    def test_system_backup_restore_rejects_invalid_payload(self) -> None:
+        _, headers = self.login()
+        response = self.client.post(
+            f"{app_module.PORTAL_PATH}/api/system/backup",
+            headers=headers,
+            base_url=BASE_URL,
+            data={"backup_file": (io.BytesIO(b"{\"schema_version\":1,\"tables\":{}}"), "bad.json")},
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("缺少管理员或设置数据", response.get_json()["message"])
 
     def test_telegram_state_machine_sends_edits_and_clears_message_id(self) -> None:
         _, headers = self.login()

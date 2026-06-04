@@ -589,6 +589,150 @@ def system_payload() -> dict[str, Any]:
     return payload
 
 
+BACKUP_SCHEMA_VERSION = 1
+BACKUP_TABLES = (
+    "admins",
+    "settings",
+    "merchant_sources",
+    "merchant_items",
+    "tasks",
+    "activity_logs",
+)
+BACKUP_RESTORE_ORDER = (
+    "admins",
+    "settings",
+    "merchant_sources",
+    "merchant_items",
+    "tasks",
+    "activity_logs",
+)
+BACKUP_AUTOINCREMENT_TABLES = (
+    "admins",
+    "merchant_sources",
+    "merchant_items",
+    "tasks",
+    "activity_logs",
+)
+
+
+def sql_identifier(name: str) -> str:
+    return '"' + name.replace('"', '""') + '"'
+
+
+def table_rows(connection: sqlite3.Connection, table: str) -> list[dict[str, Any]]:
+    if table == "settings":
+        raw_rows = connection.execute(
+            f"SELECT key, value, updated_at FROM {sql_identifier(table)} ORDER BY key ASC"
+        ).fetchall()
+        stored_rows = {row["key"]: row for row in raw_rows}
+        effective_settings = load_settings(connection)
+        backup_timestamp = now_iso()
+        ordered_keys = list(SETTINGS_DEFAULTS.keys())
+        extra_keys = sorted(
+            key for key in effective_settings.keys() if key not in SETTINGS_DEFAULTS
+        )
+        result: list[dict[str, Any]] = []
+        for key in ordered_keys + extra_keys:
+            stored_row = stored_rows.get(key)
+            result.append(
+                {
+                    "key": key,
+                    "value": effective_settings.get(key, ""),
+                    "updated_at": stored_row["updated_at"] if stored_row and stored_row["updated_at"] else backup_timestamp,
+                }
+            )
+        return result
+
+    rows = connection.execute(f"SELECT * FROM {sql_identifier(table)} ORDER BY id ASC").fetchall()
+    return [dict(row) for row in rows]
+
+
+def build_backup_payload(connection: sqlite3.Connection) -> dict[str, Any]:
+    tables = {table: table_rows(connection, table) for table in BACKUP_TABLES}
+    return {
+        "schema_version": BACKUP_SCHEMA_VERSION,
+        "exported_at": now_iso(),
+        "app": {
+            "deploy_mode": DEPLOY_MODE,
+            "version": APP_VERSION_OVERRIDE or run_short_command(["git", "rev-parse", "--short", "HEAD"]) or "unknown",
+            "branch": APP_BRANCH_OVERRIDE or run_short_command(["git", "rev-parse", "--abbrev-ref", "HEAD"]) or "",
+        },
+        "tables": tables,
+    }
+
+
+def normalize_backup_tables(payload: Any) -> dict[str, list[dict[str, Any]]]:
+    if not isinstance(payload, dict):
+        raise ValueError("备份文件格式不正确。")
+    schema_version = payload.get("schema_version", BACKUP_SCHEMA_VERSION)
+    if not isinstance(schema_version, int) or schema_version < 1:
+        raise ValueError("备份文件版本不受支持。")
+    raw_tables = payload.get("tables")
+    if raw_tables is None:
+        raw_tables = {key: value for key, value in payload.items() if key in BACKUP_TABLES}
+    if not isinstance(raw_tables, dict):
+        raise ValueError("备份文件 tables 结构不正确。")
+
+    normalized: dict[str, list[dict[str, Any]]] = {}
+    for table in BACKUP_TABLES:
+        rows = raw_tables.get(table, [])
+        if rows is None:
+            rows = []
+        if not isinstance(rows, list):
+            raise ValueError(f"{table} 备份内容必须是列表。")
+        normalized_rows: list[dict[str, Any]] = []
+        for row in rows:
+            if not isinstance(row, dict):
+                raise ValueError(f"{table} 备份行必须是对象。")
+            normalized_rows.append(row)
+        normalized[table] = normalized_rows
+    if not normalized["admins"] or not normalized["settings"]:
+        raise ValueError("备份文件缺少管理员或设置数据，无法恢复。")
+    return normalized
+
+
+def apply_backup_payload(connection: sqlite3.Connection, payload: Any) -> dict[str, int]:
+    tables = normalize_backup_tables(payload)
+
+    connection.execute("PRAGMA foreign_keys=OFF;")
+    try:
+        for table in BACKUP_RESTORE_ORDER:
+            connection.execute(f"DELETE FROM {sql_identifier(table)}")
+        try:
+            placeholders = ", ".join("?" for _ in BACKUP_AUTOINCREMENT_TABLES)
+            connection.execute(
+                f"DELETE FROM sqlite_sequence WHERE name IN ({placeholders})",
+                BACKUP_AUTOINCREMENT_TABLES,
+            )
+        except sqlite3.OperationalError:
+            pass
+
+        restored_counts: dict[str, int] = {}
+        for table in BACKUP_RESTORE_ORDER:
+            rows = tables.get(table, [])
+            if not rows:
+                restored_counts[table] = 0
+                continue
+            column_info = connection.execute(f"PRAGMA table_info({sql_identifier(table)})").fetchall()
+            columns = [row["name"] for row in column_info]
+            for row in rows:
+                row_columns = [column for column in columns if column in row]
+                if not row_columns:
+                    continue
+                quoted_columns = ", ".join(sql_identifier(column) for column in row_columns)
+                placeholders = ", ".join("?" for _ in row_columns)
+                values = [row[column] for column in row_columns]
+                connection.execute(
+                    f"INSERT INTO {sql_identifier(table)} ({quoted_columns}) VALUES ({placeholders})",
+                    values,
+                )
+            restored_counts[table] = len(rows)
+        connection.commit()
+        return restored_counts
+    finally:
+        connection.execute("PRAGMA foreign_keys=ON;")
+
+
 def validate_http_url(candidate: str) -> bool:
     try:
         parsed = urlparse(candidate)
@@ -833,10 +977,29 @@ def initialize_database() -> None:
 def login_required(view):
     @wraps(view)
     def wrapped(*args, **kwargs):
-        if not session.get("admin_id"):
+        admin_id = session.get("admin_id")
+        if not admin_id:
             if request.accept_mimetypes.accept_json or request.path.startswith("/api"):
                 return jsonify({"ok": False, "message": "未登录或会话已过期。"}), 401
             return redirect("/")
+        try:
+            admin_id_int = int(admin_id)
+        except (TypeError, ValueError):
+            session.clear()
+            if request.accept_mimetypes.accept_json or request.path.startswith("/api"):
+                return jsonify({"ok": False, "message": "未登录或会话已过期。"}), 401
+            return redirect("/")
+        with open_connection() as connection:
+            admin = connection.execute(
+                "SELECT id, username FROM admins WHERE id = ?",
+                (admin_id_int,),
+            ).fetchone()
+        if not admin:
+            session.clear()
+            if request.accept_mimetypes.accept_json or request.path.startswith("/api"):
+                return jsonify({"ok": False, "message": "未登录或会话已过期。"}), 401
+            return redirect("/")
+        session["admin_username"] = admin["username"]
         return view(*args, **kwargs)
 
     return wrapped
@@ -1045,6 +1208,33 @@ def create_task_from_catalog_item(
     }
     task_id = insert_task_record(connection, payload, timestamp)
     return task_id
+
+
+def sync_task_source_fields(
+    connection: sqlite3.Connection,
+    task_id: int,
+    source_url: str,
+    source_title: str,
+    item: dict[str, Any],
+) -> None:
+    timestamp = now_iso()
+    connection.execute(
+        """
+        UPDATE tasks
+        SET source_source_url = ?, source_source_name = ?, source_item_url = ?, source_snapshot = ?,
+            source_last_sync_at = ?, updated_at = ?
+        WHERE id = ?
+        """,
+        (
+            source_url,
+            source_title,
+            item["item_url"],
+            json.dumps(item, ensure_ascii=False),
+            timestamp,
+            timestamp,
+            task_id,
+        ),
+    )
 
 
 @dataclass
@@ -2673,7 +2863,6 @@ def make_app() -> Flask:
         with open_connection() as connection:
             settings_payload = normalize_settings(load_settings(connection))
             tasks = connection.execute("SELECT * FROM tasks ORDER BY id DESC").fetchall()
-            admin = connection.execute("SELECT username FROM admins LIMIT 1").fetchone()
             source_rows = connection.execute("SELECT * FROM merchant_sources ORDER BY id DESC").fetchall()
             item_rows = connection.execute("SELECT * FROM merchant_items ORDER BY updated_at DESC, id DESC LIMIT 120").fetchall()
             task_source_rows = connection.execute(
@@ -2763,7 +2952,7 @@ def make_app() -> Flask:
                     ),
                 },
                 "admin": {
-                    "username": admin["username"] if admin else "",
+                    "username": session.get("admin_username", ""),
                 },
                 "metrics": {
                     "total": len(tasks),
@@ -3004,6 +3193,90 @@ def make_app() -> Flask:
         log_activity("info", "catalog", f"商家来源 #{source_id} 已{'启用' if active else '停用'}。")
         return jsonify({"ok": True, "message": "商家来源状态已更新。", "result": {"source_id": source_id, "active": active}})
 
+    @app.route("/api/merchant/items/<int:item_id>/promote", methods=["POST"])
+    @login_required
+    @limiter.limit("8 per minute")
+    def promote_merchant_item(item_id: int):
+        read_json()
+        with open_connection() as connection:
+            item = connection.execute(
+                """
+                SELECT mi.*, ms.source_url, ms.source_name
+                FROM merchant_items mi
+                JOIN merchant_sources ms ON ms.id = mi.source_id
+                WHERE mi.id = ?
+                """,
+                (item_id,),
+            ).fetchone()
+            if not item:
+                return jsonify({"ok": False, "message": "商家商品不存在。"}), 404
+            existing_task = connection.execute(
+                "SELECT * FROM tasks WHERE source_item_id = ? LIMIT 1",
+                (item_id,),
+            ).fetchone()
+
+            if existing_task:
+                sync_task_source_fields(
+                    connection,
+                    int(existing_task["id"]),
+                    item["source_url"],
+                    item["source_name"],
+                    {
+                        "item_url": item["item_url"] or item["monitor_url"],
+                        "source_item_key": item["item_key"],
+                        "title": item["title"],
+                        "keyword": item["keyword"],
+                        "monitor_url": item["monitor_url"],
+                        "price_hint": item["price_hint"] or "",
+                        "stock_hint": item["stock_hint"] or "",
+                        "restock_hint": item["restock_hint"] or "",
+                        "raw_snippet": item["raw_snippet"] or "",
+                        "raw_payload": item["raw_payload"] or "",
+                        "item_state": item["item_state"],
+                    },
+                )
+                connection.commit()
+                task_id = int(existing_task["id"])
+                task_name = str(existing_task["name"])
+            else:
+                item_payload = {
+                    "source_item_key": item["item_key"],
+                    "title": item["title"],
+                    "keyword": item["keyword"],
+                    "monitor_url": item["monitor_url"],
+                    "item_url": item["item_url"] or item["monitor_url"],
+                    "price_hint": item["price_hint"] or "",
+                    "stock_hint": item["stock_hint"] or "",
+                    "restock_hint": item["restock_hint"] or "",
+                    "raw_snippet": item["raw_snippet"] or "",
+                    "raw_payload": item["raw_payload"] or "",
+                    "item_state": item["item_state"],
+                }
+                task_id = create_task_from_catalog_item(
+                    connection,
+                    source_id=int(item["source_id"]),
+                    source_title=str(item["source_name"] or item["source_url"]),
+                    source_url=str(item["source_url"]),
+                    item_id=int(item["id"]),
+                    item=item_payload,
+                )
+                task_name = str(item["title"])
+                connection.commit()
+
+        log_activity("info", "catalog", f"已将商家商品 #{item_id} 生成/关联为任务 #{task_id}。")
+        return jsonify(
+            {
+                "ok": True,
+                "message": "商家商品已生成任务。",
+                "result": {
+                    "item_id": item_id,
+                    "task_id": task_id,
+                    "task_name": task_name,
+                    "already_linked": bool(existing_task),
+                },
+            }
+        )
+
     @app.route("/api/settings/telegram", methods=["POST"])
     @login_required
     @limiter.limit(GENERAL_MUTATION_LIMIT)
@@ -3121,12 +3394,12 @@ def make_app() -> Flask:
             return jsonify(
                 {
                     "ok": False,
-                    "message": "Docker ??????????????????????????? Docker?",
+                    "message": "Docker 部署请复制下方升级命令后在服务器上执行。",
                     "system": system,
                 }
             ), 400
         if not system["upgrade_supported"]:
-            return jsonify({"ok": False, "message": "????????????????", "system": system}), 400
+            return jsonify({"ok": False, "message": "当前环境暂不支持自动升级。", "system": system}), 400
         try:
             completed = subprocess.run(
                 ["systemctl", "start", UPGRADE_SERVICE_NAME],
@@ -3136,12 +3409,60 @@ def make_app() -> Flask:
                 check=False,
             )
         except Exception as exc:
-            return jsonify({"ok": False, "message": f"?????????{exc}"}), 500
+            return jsonify({"ok": False, "message": f"升级服务启动失败：{exc}"}), 500
         if completed.returncode != 0:
-            message = (completed.stderr or completed.stdout or "?????????").strip()
+            message = (completed.stderr or completed.stdout or "升级命令执行失败。").strip()
             return jsonify({"ok": False, "message": message}), 500
-        log_activity("warning", "system", f"??? {session.get('admin_username', '')} ????????")
-        return jsonify({"ok": True, "message": "??????????????????", "system": system_payload()})
+        log_activity("warning", "system", f"管理员 {session.get('admin_username', '')} 已触发系统升级。")
+        return jsonify({"ok": True, "message": "升级任务已触发，服务会在后台自动重启。", "system": system_payload()})
+
+    @app.route("/api/system/backup", methods=["GET"])
+    @login_required
+    def export_system_backup():
+        with open_connection() as connection:
+            payload = build_backup_payload(connection)
+        exported_at = payload["exported_at"].replace(":", "").replace("-", "").replace("+00:00", "Z")
+        filename = f"noaff-backup-{exported_at}.json"
+        response = app.response_class(
+            json.dumps(payload, ensure_ascii=False, indent=2),
+            mimetype="application/json",
+        )
+        response.headers["Content-Disposition"] = f'attachment; filename="{filename}"'
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        return response
+
+    @app.route("/api/system/backup", methods=["POST"])
+    @login_required
+    @limiter.limit("3 per hour")
+    def restore_system_backup():
+        backup_file = request.files.get("backup_file")
+        if not backup_file or not getattr(backup_file, "filename", ""):
+            return jsonify({"ok": False, "message": "请先选择要恢复的备份文件。"}), 400
+        raw_text = backup_file.read()
+        if not raw_text:
+            return jsonify({"ok": False, "message": "备份文件为空。"}), 400
+        try:
+            payload = json.loads(raw_text.decode("utf-8-sig"))
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            return jsonify({"ok": False, "message": "备份文件不是有效的 JSON。"}), 400
+
+        try:
+            with open_connection() as connection:
+                restored_counts = apply_backup_payload(connection, payload)
+        except ValueError as exc:
+            return jsonify({"ok": False, "message": str(exc)}), 400
+        except sqlite3.Error as exc:
+            return jsonify({"ok": False, "message": f"恢复备份失败：{exc}"}), 500
+
+        app.extensions["monitor_engine"].configure_browsers(app.extensions["monitor_engine"].get_runtime_settings())
+        log_activity("warning", "system", f"管理员 {session.get('admin_username', '')} 已恢复系统备份。")
+        return jsonify(
+            {
+                "ok": True,
+                "message": "备份已恢复，页面将刷新以同步最新数据。",
+                "restored": restored_counts,
+            }
+        )
 
     return app
 

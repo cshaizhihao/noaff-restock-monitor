@@ -9,6 +9,7 @@
     let currentView = "tasks";
     let tasksRendered = false;
     let taskIdsSignature = "";
+    let taskStateSignature = "";
     let logsSignature = null;
     let merchantSignature = null;
 
@@ -69,6 +70,10 @@
         upgradeButton: document.getElementById("upgrade-button"),
         upgradeHelp: document.getElementById("upgrade-help"),
         upgradeLog: document.getElementById("upgrade-log"),
+        backupExportButton: document.getElementById("backup-export-button"),
+        backupRestoreButton: document.getElementById("backup-restore-button"),
+        backupFileInput: document.getElementById("backup-file-input"),
+        backupFileName: document.getElementById("backup-file-name"),
         profileForm: document.getElementById("profile-form"),
         profileUsername: document.getElementById("profile-username"),
         profileCurrentPassword: document.getElementById("profile-current-password"),
@@ -178,19 +183,141 @@
 
     function syncInputValue(input, value) {
         if (!input) return;
+        wireDirtyTracking(input);
         const nextValue = String(value ?? "");
         const syncedValue = input.dataset.syncedValue;
         const hasLocalEdit = syncedValue !== undefined && input.value !== syncedValue;
+        const hasDirtyFlag = input.dataset.inputDirty === "1";
 
         if (input.value === nextValue) {
             input.dataset.syncedValue = nextValue;
+            input.dataset.inputDirty = "0";
             return;
         }
-        if (document.activeElement === input || hasLocalEdit) {
+        if (document.activeElement === input || hasLocalEdit || hasDirtyFlag) {
             return;
         }
         input.value = nextValue;
         input.dataset.syncedValue = nextValue;
+        input.dataset.inputDirty = "0";
+    }
+
+    function wireDirtyTracking(input) {
+        if (!input || input.dataset.dirtyTracking === "1") {
+            return;
+        }
+        input.dataset.dirtyTracking = "1";
+        const markDirty = () => {
+            const syncedValue = input.dataset.syncedValue ?? "";
+            input.dataset.inputDirty = input.value === syncedValue ? "0" : "1";
+        };
+        input.addEventListener("input", markDirty);
+        input.addEventListener("change", markDirty);
+        input.addEventListener("blur", markDirty);
+    }
+
+    function updateTaskCard(task) {
+        const card = els.tasksGrid?.querySelector?.(`[data-task-id="${task.id}"]`);
+        if (!card) {
+            return;
+        }
+
+        const [statusClass, statusText, logHint] = statusMeta(task);
+        const stockText = task.last_stock === null || task.last_stock === undefined ? "Hidden" : String(task.last_stock);
+        const lastChecked = task.last_checked_at ? formatTime(task.last_checked_at) : "尚未检查";
+        const actionLabel = task.enabled ? "停用节点" : "启用节点";
+        const sourceLine = task.source_source_name
+            ? `来源：${task.source_source_name}${task.source_item_url ? ` · ${task.source_item_url}` : ""}`
+            : "";
+        const logLine = task.last_error
+            ? `> ${task.last_error}`
+            : `> ${logHint} ${formatTime(task.last_checked_at)}`;
+
+        const statusBadge = card.querySelector("[data-task-status]");
+        if (statusBadge) {
+            statusBadge.className = `status-badge ${statusClass}`;
+            statusBadge.textContent = statusText;
+        }
+
+        const title = card.querySelector("[data-task-name]");
+        if (title) {
+            title.textContent = task.name || "";
+            title.setAttribute("title", task.name || "");
+        }
+
+        const url = card.querySelector("[data-task-url]");
+        if (url) {
+            url.textContent = task.monitor_url || "";
+            url.setAttribute("title", task.monitor_url || "");
+        }
+
+        const source = card.querySelector("[data-task-source]");
+        if (source) {
+            source.textContent = sourceLine;
+            source.classList.toggle("hidden", !sourceLine);
+        }
+
+        const keyword = card.querySelector("[data-task-keyword-text]");
+        if (keyword) {
+            keyword.textContent = `切片狙击: ${task.target_keyword || ""}`;
+        }
+
+        const terminal = card.querySelector("[data-task-terminal]");
+        if (terminal) {
+            terminal.classList.toggle("opacity-95", !task.last_error);
+        }
+
+        const stock = card.querySelector("[data-task-stock]");
+        if (stock) {
+            stock.textContent = stockText;
+            stock.className = task.last_stock > 0 ? "text-emerald-400 font-bold" : "text-slate-300 font-bold";
+        }
+
+        const log = card.querySelector("[data-task-log]");
+        if (log) {
+            log.textContent = logLine;
+            log.className = `truncate-two font-mono text-sm leading-relaxed ${task.last_error ? "text-rose-300" : "animate-pulse-soft text-emerald-400"}`;
+        }
+
+        const meta = card.querySelector("[data-task-meta]");
+        if (meta) {
+            meta.textContent = `message_id: ${task.message_id ?? "-"} · checked: ${lastChecked}`;
+        }
+
+        const toggle = card.querySelector("[data-task-toggle]");
+        if (toggle) {
+            toggle.title = actionLabel;
+            toggle.setAttribute("aria-label", actionLabel);
+        }
+    }
+
+    function updateTaskGroupSummaries(tasks) {
+        const summaryMap = new Map();
+        tasks.forEach((task) => {
+            const groupName = normalizeTaskGroup(task.group_name);
+            if (!summaryMap.has(groupName)) {
+                summaryMap.set(groupName, { count: 0, errorCount: 0 });
+            }
+            const summary = summaryMap.get(groupName);
+            summary.count += 1;
+            if (task.last_error) {
+                summary.errorCount += 1;
+            }
+        });
+
+        els.tasksGrid?.querySelectorAll?.("[data-task-group-section]")?.forEach((section) => {
+            const groupName = section.dataset.taskGroupName || defaultTaskGroup;
+            const summary = summaryMap.get(groupName) || { count: 0, errorCount: 0 };
+            const countBadge = section.querySelector("[data-task-group-count]");
+            if (countBadge) {
+                countBadge.textContent = `${summary.count} 个任务`;
+            }
+            const errorBadge = section.querySelector("[data-task-group-error]");
+            if (errorBadge) {
+                errorBadge.textContent = `${summary.errorCount} 错误`;
+                errorBadge.classList.toggle("hidden", summary.errorCount === 0);
+            }
+        });
     }
 
     async function apiFetch(path, options = {}) {
@@ -463,7 +590,8 @@
                     const [badgeClass, badgeText] = merchantStateMeta(item.item_state);
                     const linkedTask = item.task_id && currentTasks.get(String(item.task_id));
                     const sourceLabel = item.source_name || item.source_url || "未知来源";
-                    const actionLabel = linkedTask ? "打开任务" : "未关联";
+                    const actionLabel = linkedTask ? "编辑任务" : "生成任务";
+                    const actionName = linkedTask ? "open-task" : "promote-item";
                     return `
                         <article class="rounded-xl border border-slate-800/80 bg-slate-950/50 p-4">
                             <div class="flex flex-wrap items-start justify-between gap-3">
@@ -481,7 +609,7 @@
                             </div>
                             <div class="mt-3 flex flex-wrap items-center justify-between gap-3">
                                 <p class="truncate font-mono text-[11px] text-slate-500">${escapeHtml(item.item_url || item.monitor_url || "")}</p>
-                                <button type="button" class="ghost-button !min-h-9 !rounded-lg !px-3 !py-2 text-[12px]" data-merchant-action="open-task" data-task-id="${item.task_id || ""}" ${linkedTask ? "" : "disabled"}>
+                                <button type="button" class="ghost-button !min-h-9 !rounded-lg !px-3 !py-2 text-[12px]" data-merchant-action="${actionName}" data-task-id="${item.task_id || ""}" data-item-id="${item.id}">
                                     ${actionLabel}
                                 </button>
                             </div>
@@ -561,31 +689,31 @@
             return `
                 <article class="${cardClass}"${cardStyle} data-task-id="${task.id}">
                     <div class="absolute right-6 top-6">
-                        <span class="status-badge ${statusClass}">${statusText}</span>
+                        <span class="status-badge ${statusClass}" data-task-status>${statusText}</span>
                     </div>
 
                     <div class="mb-5 pr-28">
-                        <h3 class="mb-2 truncate text-xl font-bold text-white" title="${escapeHtml(task.name)}">${escapeHtml(task.name)}</h3>
-                        <p class="truncate font-mono text-[13px] text-slate-500" title="${escapeHtml(task.monitor_url)}">${escapeHtml(task.monitor_url)}</p>
-                        ${task.source_source_name ? `<p class="mt-2 truncate font-mono text-[11px] text-slate-600">来源：${escapeHtml(task.source_source_name)}${task.source_item_url ? ` · ${escapeHtml(task.source_item_url)}` : ""}</p>` : ""}
+                        <h3 class="mb-2 truncate text-xl font-bold text-white" title="${escapeHtml(task.name)}" data-task-name>${escapeHtml(task.name)}</h3>
+                        <p class="truncate font-mono text-[13px] text-slate-500" title="${escapeHtml(task.monitor_url)}" data-task-url>${escapeHtml(task.monitor_url)}</p>
+                        ${task.source_source_name ? `<p class="mt-2 truncate font-mono text-[11px] text-slate-600" data-task-source>来源：${escapeHtml(task.source_source_name)}${task.source_item_url ? ` · ${escapeHtml(task.source_item_url)}` : ""}</p>` : '<p class="mt-2 hidden truncate font-mono text-[11px] text-slate-600" data-task-source></p>'}
                     </div>
 
-                    <div class="keyword-chip mb-4">
+                    <div class="keyword-chip mb-4" data-task-keyword>
                         <svg class="mr-1.5 h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/>
                         </svg>
-                        切片狙击: ${escapeHtml(task.target_keyword)}
+                        <span data-task-keyword-text>切片狙击: ${escapeHtml(task.target_keyword)}</span>
                     </div>
 
-                    <div class="terminal-box mb-5 flex flex-1 flex-col justify-center p-4 ${task.last_error ? "" : "opacity-95"}">
+                    <div class="terminal-box mb-5 flex flex-1 flex-col justify-center p-4 ${task.last_error ? "" : "opacity-95"}" data-task-terminal>
                         <div class="mb-3 flex items-center justify-between border-b border-slate-800/80 pb-2">
                             <span class="text-[10px] font-bold uppercase tracking-widest text-slate-500">Engine Log</span>
                             <span class="rounded border border-slate-700 bg-slate-800/80 px-2 py-0.5 font-mono text-[10px] text-slate-400">
-                                库存嗅探: <span class="${task.last_stock > 0 ? "text-emerald-400" : "text-slate-300"} font-bold">${escapeHtml(stockText)}</span>
+                                库存嗅探: <span class="${task.last_stock > 0 ? "text-emerald-400" : "text-slate-300"} font-bold" data-task-stock>${escapeHtml(stockText)}</span>
                             </span>
                         </div>
-                        <p class="truncate-two font-mono text-sm leading-relaxed ${task.last_error ? "text-rose-300" : "animate-pulse-soft text-emerald-400"}">${logMessage}</p>
-                        <div class="mt-3 font-mono text-[11px] text-slate-600">
+                        <p class="truncate-two font-mono text-sm leading-relaxed ${task.last_error ? "text-rose-300" : "animate-pulse-soft text-emerald-400"}" data-task-log>${logMessage}</p>
+                        <div class="mt-3 font-mono text-[11px] text-slate-600" data-task-meta>
                             message_id: ${task.message_id ?? "-"} · checked: ${lastChecked}
                         </div>
                     </div>
@@ -598,7 +726,7 @@
                             探针测试
                         </button>
                         <div class="flex space-x-1">
-                            <button type="button" class="icon-button !h-9 !w-9" title="${escapeHtml(actionLabel)}" data-action="toggle">
+                            <button type="button" class="icon-button !h-9 !w-9" title="${escapeHtml(actionLabel)}" aria-label="${escapeHtml(actionLabel)}" data-action="toggle" data-task-toggle>
                                 <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>
                                 </svg>
@@ -643,10 +771,6 @@
                 String(task.id),
                 normalizeTaskGroup(task.group_name),
                 task.enabled ? "1" : "0",
-                task.last_state || "",
-                task.last_stock ?? "",
-                task.last_error || "",
-                task.message_id ?? "",
                 task.name || "",
                 task.monitor_url || "",
                 task.target_keyword || "",
@@ -655,13 +779,32 @@
                 task.button_1_text || "",
                 task.button_1_url || "",
                 task.button_2_text || "",
-                task.button_2_url || ""
+                task.button_2_url || "",
+                task.source_source_name || "",
+                task.source_item_url || "",
+                task.source_source_url || ""
+            ].join(":"))
+            .join("|");
+        const nextTaskStateSignature = tasks
+            .map((task) => [
+                String(task.id),
+                task.last_state || "",
+                task.last_stock ?? "",
+                task.last_error || "",
+                task.message_id ?? "",
+                task.last_checked_at || ""
             ].join(":"))
             .join("|");
         const animateCards = initial || !tasksRendered || taskIdsSignature !== nextTaskIdsSignature;
+        const stateChanged = taskStateSignature !== nextTaskStateSignature;
         tasksRendered = true;
         taskIdsSignature = nextTaskIdsSignature;
+        taskStateSignature = nextTaskStateSignature;
         if (!force && !animateCards) {
+            if (stateChanged) {
+                tasks.forEach(updateTaskCard);
+                updateTaskGroupSummaries(tasks);
+            }
             return;
         }
 
@@ -669,14 +812,16 @@
         const groupSections = groupTasks(tasks).map((group, groupIndex) => {
             const collapsed = isTaskGroupCollapsed(group.name);
             const errorCount = group.tasks.filter((task) => task.last_error).length;
-            const summaryBadge = `<span class="rounded-full border border-slate-700 bg-slate-900/80 px-2.5 py-1 font-mono text-[11px] text-slate-400">${group.tasks.length} 个任务</span>${errorCount ? `<span class="rounded-full border border-rose-900/70 bg-rose-500/10 px-2.5 py-1 font-mono text-[11px] text-rose-300">${errorCount} 错误</span>` : ""}`;
+            const summaryBadge = `
+                <span class="rounded-full border border-slate-700 bg-slate-900/80 px-2.5 py-1 font-mono text-[11px] text-slate-400" data-task-group-count>${group.tasks.length} 个任务</span>
+                <span class="rounded-full border border-rose-900/70 bg-rose-500/10 px-2.5 py-1 font-mono text-[11px] text-rose-300${errorCount ? "" : " hidden"}" data-task-group-error>${errorCount} 错误</span>`;
             const groupCards = collapsed ? "" : `<div class="mt-5 grid grid-cols-1 gap-6 md:grid-cols-2 xl:grid-cols-3">${renderTaskCards(group.tasks, animateCards, cardIndex)}</div>`;
             const groupDelay = animateCards ? ` style="animation-delay: ${groupIndex * 70}ms;"` : "";
             const groupClass = animateCards ? "reveal" : "";
             cardIndex += group.tasks.length;
 
             return `
-                <section class="${groupClass} rounded-2xl border border-slate-800/90 bg-slate-950/35 p-4 shadow-[0_20px_60px_rgba(0,0,0,0.18)] md:p-5"${groupDelay}>
+                <section class="${groupClass} rounded-2xl border border-slate-800/90 bg-slate-950/35 p-4 shadow-[0_20px_60px_rgba(0,0,0,0.18)] md:p-5"${groupDelay} data-task-group-section data-task-group-name="${escapeHtml(group.name)}">
                     <button type="button" class="flex w-full items-center justify-between gap-4 text-left" data-group-toggle="true" data-group-name="${escapeHtml(group.name)}">
                         <div class="min-w-0">
                             <div class="flex flex-wrap items-center gap-2">
@@ -762,6 +907,29 @@
             }
             return;
         }
+        if (action === "promote-item") {
+            const itemId = button.dataset.itemId;
+            if (!itemId) return;
+            button.disabled = true;
+            try {
+                const data = await apiFetch(`/api/merchant/items/${itemId}/promote`, {
+                    method: "POST",
+                    body: JSON.stringify({})
+                });
+                showToast(data.message || "商家商品已生成任务。");
+                await loadSnapshot(false);
+                const createdTaskId = data.result?.task_id;
+                const createdTask = createdTaskId ? currentTasks.get(String(createdTaskId)) : null;
+                if (createdTask) {
+                    openTaskModal(createdTask);
+                }
+            } catch (error) {
+                showToast(error.message, "error");
+            } finally {
+                button.disabled = false;
+            }
+            return;
+        }
         if (action !== "sync-source" && action !== "toggle-source") return;
         const sourceId = button.dataset.sourceId;
         if (!sourceId) return;
@@ -844,6 +1012,65 @@
         }
     }
 
+    function updateBackupFileName() {
+        if (!els.backupFileName || !els.backupFileInput) return;
+        const file = els.backupFileInput.files?.[0];
+        els.backupFileName.textContent = file ? file.name : "选择备份文件";
+    }
+
+    async function exportBackup() {
+        const anchor = document.createElement("a");
+        anchor.href = "/api/system/backup";
+        anchor.download = "";
+        anchor.rel = "noopener";
+        document.body.appendChild(anchor);
+        anchor.click();
+        anchor.remove();
+        showToast("备份下载已开始。");
+    }
+
+    async function restoreBackup() {
+        const file = els.backupFileInput?.files?.[0];
+        if (!file) {
+            showToast("请先选择要恢复的备份文件。", "error");
+            return;
+        }
+        if (!window.confirm("确认恢复这份备份？当前数据库内容将被覆盖。")) {
+            return;
+        }
+        const formData = new FormData();
+        formData.append("backup_file", file, file.name || "noaff-backup.json");
+        els.backupRestoreButton.disabled = true;
+        try {
+            const response = await fetch("/api/system/backup", {
+                method: "POST",
+                credentials: "same-origin",
+                headers: {
+                    Accept: "application/json",
+                    "X-Requested-With": "XMLHttpRequest",
+                    "X-CSRF-Token": csrfToken
+                },
+                body: formData
+            });
+            const data = await response.json().catch(() => ({}));
+            if (data.csrf_token) {
+                csrfToken = data.csrf_token;
+                document.querySelector('meta[name="csrf-token"]')?.setAttribute("content", csrfToken);
+            }
+            if (!response.ok || data.ok === false) {
+                throw new Error(data.message || "恢复失败。");
+            }
+            showToast(data.message || "备份已恢复。");
+            els.backupFileInput.value = "";
+            updateBackupFileName();
+            await loadSnapshot(false);
+        } catch (error) {
+            showToast(error.message, "error");
+        } finally {
+            els.backupRestoreButton.disabled = false;
+        }
+    }
+
     els.loginForm?.addEventListener("submit", async (event) => {
         event.preventDefault();
         const submit = event.submitter;
@@ -915,6 +1142,10 @@
             els.upgradeButton.disabled = false;
         }
     });
+
+    els.backupExportButton?.addEventListener("click", exportBackup);
+    els.backupRestoreButton?.addEventListener("click", restoreBackup);
+    els.backupFileInput?.addEventListener("change", updateBackupFileName);
 
     els.navTasks?.addEventListener("click", () => setNav("tasks"));
     els.navSettings?.addEventListener("click", () => setNav("settings"));

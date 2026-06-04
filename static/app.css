@@ -16,6 +16,47 @@ body {
     font-family: "Inter", system-ui, sans-serif;
 }
 
+.ambient-blob {
+    position: fixed;
+    z-index: -20;
+    border-radius: 9999px;
+    filter: blur(120px);
+    opacity: 0.22;
+    pointer-events: none;
+    animation: float-bg 28s ease-in-out infinite;
+}
+
+.blob-1 {
+    top: -15%;
+    left: -10%;
+    width: 600px;
+    height: 600px;
+    background: rgba(79, 70, 229, 0.85);
+}
+
+.blob-2 {
+    right: -10%;
+    bottom: -10%;
+    width: 500px;
+    height: 500px;
+    background: rgba(14, 165, 233, 0.8);
+    animation-delay: -6s;
+    animation-duration: 32s;
+}
+
+@keyframes float-bg {
+    0%,
+    100% {
+        transform: translate(0, 0) scale(1);
+    }
+    33% {
+        transform: translate(32px, -50px) scale(1.06);
+    }
+    66% {
+        transform: translate(-28px, 36px) scale(0.94);
+    }
+}
+
 ::-webkit-scrollbar {
     width: 8px;
     height: 8px;

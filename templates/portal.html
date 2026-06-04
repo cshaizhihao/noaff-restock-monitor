@@ -14,6 +14,8 @@
          class="min-h-full">
 
         <div class="fixed inset-0 -z-10 bg-grid"></div>
+        <div class="ambient-blob blob-1"></div>
+        <div class="ambient-blob blob-2"></div>
 
         <section id="login-shell" class="flex min-h-screen items-center justify-center px-6 py-10">
             <div class="glass-panel reveal w-full max-w-md overflow-hidden rounded-2xl p-10">
@@ -356,6 +358,38 @@
                                         <p id="upgrade-help" class="text-sm leading-6 text-slate-500"></p>
                                         <div class="terminal-box max-h-52 overflow-y-auto p-4">
                                             <pre id="upgrade-log" class="whitespace-pre-wrap font-mono text-xs leading-6 text-slate-400">暂无升级日志。</pre>
+                                        </div>
+                                    </div>
+                                </section>
+
+                                <section class="control-panel reveal">
+                                    <h3 class="panel-heading">数据备份</h3>
+                                    <div class="mt-5 grid gap-4">
+                                        <p class="text-sm leading-6 text-slate-500">
+                                            导出当前数据库为 JSON 备份，适合迁移、交接和故障恢复。恢复会覆盖管理员、设置、任务和商家数据。
+                                        </p>
+                                        <div class="flex flex-wrap items-center gap-3">
+                                            <button id="backup-export-button" type="button" class="ghost-button">
+                                                <svg class="mr-2 h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 3v12m0 0l4-4m-4 4l-4-4M5 17h14"/>
+                                                </svg>
+                                                导出备份
+                                            </button>
+                                            <label class="flex min-w-0 flex-1 cursor-pointer items-center gap-3 rounded-xl border border-slate-800 bg-slate-950/60 px-4 py-3 text-sm text-slate-300 transition hover:border-slate-700 hover:bg-slate-900/80">
+                                                <svg class="h-5 w-5 shrink-0 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1M12 4v12m0 0l4-4m-4 4l-4-4"/>
+                                                </svg>
+                                                <span id="backup-file-name" class="min-w-0 truncate text-slate-500">选择备份文件</span>
+                                                <input id="backup-file-input" type="file" accept=".json,application/json" class="hidden">
+                                            </label>
+                                        </div>
+                                        <div class="flex flex-wrap gap-3">
+                                            <button id="backup-restore-button" type="button" class="primary-button">
+                                                <svg class="mr-2 h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v6h6M20 20v-6h-6M5 19a9 9 0 0114-10.5M19 5a9 9 0 00-14 10.5"/>
+                                                </svg>
+                                                恢复备份
+                                            </button>
                                         </div>
                                     </div>
                                 </section>
