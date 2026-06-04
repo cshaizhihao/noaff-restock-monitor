@@ -581,6 +581,7 @@ class InstallScriptTestCase(unittest.TestCase):
 
     def test_dashboard_backup_controls_are_wired(self) -> None:
         app_js = (ROOT_DIR / "static" / "app.js").read_text(encoding="utf-8")
+        app_css = (ROOT_DIR / "static" / "app.css").read_text(encoding="utf-8")
         portal_html = (ROOT_DIR / "templates" / "portal.html").read_text(encoding="utf-8")
         self.assertIn("backupExportButton", app_js)
         self.assertIn("backupRestoreButton", app_js)
@@ -589,6 +590,8 @@ class InstallScriptTestCase(unittest.TestCase):
         self.assertIn("restoreBackup", app_js)
         self.assertNotIn("cdn.tailwindcss.com", portal_html)
         self.assertIn('tailwind.css', portal_html)
+        self.assertNotIn("fonts.googleapis.com", app_css)
+        self.assertNotIn("fonts.gstatic.com", app_css)
         self.assertIn('id="backup-export-button"', portal_html)
         self.assertIn('id="backup-file-input"', portal_html)
         self.assertIn('id="backup-restore-button"', portal_html)
