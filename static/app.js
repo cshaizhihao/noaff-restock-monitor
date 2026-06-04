@@ -707,8 +707,8 @@
         return Array.from(groups.entries()).map(([name, groupTasks]) => ({ name, tasks: groupTasks }));
     }
 
-    function renderTaskCards(tasks, animateCards, startIndex = 0) {
-        return tasks.map((task, index) => {
+    function renderTaskCards(tasks, animateCards) {
+        return tasks.map((task) => {
             const [statusClass, statusText, logHint] = statusMeta(task);
             const stockText = task.last_stock === null || task.last_stock === undefined ? "Hidden" : String(task.last_stock);
             const logMessage = task.last_error
@@ -717,9 +717,8 @@
             const lastChecked = task.last_checked_at ? escapeHtml(formatTime(task.last_checked_at)) : "尚未检查";
             const actionLabel = task.enabled ? "停用节点" : "启用节点";
             const cardClass = animateCards ? "task-card reveal" : "task-card";
-            const cardStyle = animateCards ? ` style="animation-delay: ${(startIndex + index) * 80}ms;"` : "";
             return `
-                <article class="${cardClass}"${cardStyle} data-task-id="${task.id}">
+                <article class="${cardClass}" data-task-id="${task.id}">
                     <div class="absolute right-6 top-6">
                         <span class="status-badge ${statusClass}" data-task-status>${statusText}</span>
                     </div>
@@ -780,11 +779,10 @@
         }).join("");
     }
 
-    function renderAddTaskCard(animateCards, index) {
+    function renderAddTaskCard(animateCards) {
         const addCardClass = animateCards ? "add-card reveal" : "add-card";
-        const addCardStyle = animateCards ? ` style="animation-delay: ${index * 80}ms;"` : "";
         return `
-            <button type="button" id="tasks-add-card" class="${addCardClass}"${addCardStyle}>
+            <button type="button" id="tasks-add-card" class="${addCardClass}">
                 <div class="mb-4 flex h-16 w-16 items-center justify-center rounded-full bg-slate-800/80 transition-transform group-hover:scale-110">
                     <svg class="h-8 w-8 text-slate-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/>
@@ -840,20 +838,17 @@
             return;
         }
 
-        let cardIndex = 0;
-        const groupSections = groupTasks(tasks).map((group, groupIndex) => {
+        const groupSections = groupTasks(tasks).map((group) => {
             const collapsed = isTaskGroupCollapsed(group.name);
             const errorCount = group.tasks.filter((task) => task.last_error).length;
             const summaryBadge = `
                 <span class="rounded-full border border-slate-700 bg-slate-900/80 px-2.5 py-1 font-mono text-[11px] text-slate-400" data-task-group-count>${group.tasks.length} 个任务</span>
                 <span class="rounded-full border border-rose-900/70 bg-rose-500/10 px-2.5 py-1 font-mono text-[11px] text-rose-300${errorCount ? "" : " hidden"}" data-task-group-error>${errorCount} 错误</span>`;
-            const groupCards = collapsed ? "" : `<div class="mt-5 grid grid-cols-1 gap-6 md:grid-cols-2 xl:grid-cols-3">${renderTaskCards(group.tasks, animateCards, cardIndex)}</div>`;
-            const groupDelay = animateCards ? ` style="animation-delay: ${groupIndex * 70}ms;"` : "";
+            const groupCards = collapsed ? "" : `<div class="mt-5 grid grid-cols-1 gap-6 md:grid-cols-2 xl:grid-cols-3">${renderTaskCards(group.tasks, animateCards)}</div>`;
             const groupClass = animateCards ? "reveal" : "";
-            cardIndex += group.tasks.length;
 
             return `
-                <section class="${groupClass} rounded-2xl border border-slate-800/90 bg-slate-950/35 p-4 shadow-[0_20px_60px_rgba(0,0,0,0.18)] md:p-5"${groupDelay} data-task-group-section data-task-group-name="${escapeHtml(group.name)}">
+                <section class="${groupClass} rounded-2xl border border-slate-800/90 bg-slate-950/35 p-4 shadow-[0_20px_60px_rgba(0,0,0,0.18)] md:p-5" data-task-group-section data-task-group-name="${escapeHtml(group.name)}">
                     <button type="button" class="flex w-full items-center justify-between gap-4 text-left" data-group-toggle="true" data-group-name="${escapeHtml(group.name)}">
                         <div class="min-w-0">
                             <div class="flex flex-wrap items-center gap-2">
@@ -870,7 +865,7 @@
             `;
         }).join("");
 
-        const addCard = `<div class="grid grid-cols-1 gap-6 md:grid-cols-2 xl:grid-cols-3">${renderAddTaskCard(animateCards, tasks.length)}</div>`;
+        const addCard = `<div class="grid grid-cols-1 gap-6 md:grid-cols-2 xl:grid-cols-3">${renderAddTaskCard(animateCards)}</div>`;
         els.tasksGrid.innerHTML = tasks.length ? `${groupSections}${addCard}` : addCard;
     }
 
