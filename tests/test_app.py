@@ -855,6 +855,37 @@ class PortalAppTestCase(unittest.TestCase):
         self.assertIn("Telegram sendMessage 失败", payload["last_error"])
         self.assertIn("Chat ID", payload["last_error"])
 
+        self.assertEqual(payload["last_error_kind"], "")
+
+    def test_task_payload_classifies_cloudflare_errors(self) -> None:
+        timestamp = app_module.now_iso()
+        with app_module.open_connection() as connection:
+            cursor = connection.execute(
+                """
+                INSERT INTO tasks (
+                    name, monitor_url, target_keyword, restock_template, soldout_template,
+                    enabled, last_error, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    "HK-CMI",
+                    "https://example.com/products",
+                    "HK-CMI",
+                    "{name}",
+                    "{name} sold out",
+                    1,
+                    "catalog 浏览器被 Cloudflare 验证页拦截：https://example.com/products",
+                    timestamp,
+                    timestamp,
+                ),
+            )
+            connection.commit()
+            row = connection.execute("SELECT * FROM tasks WHERE id = ?", (cursor.lastrowid,)).fetchone()
+
+        payload = app_module.to_task_payload(row)
+        self.assertEqual(payload["last_error_kind"], "cloudflare_challenge")
+        self.assertIn("Cloudflare 验证页拦截", payload["last_error"])
+
     def test_update_settings_rejects_debug_port_collisions(self) -> None:
         _, headers = self.login()
 

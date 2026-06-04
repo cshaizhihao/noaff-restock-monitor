@@ -851,16 +851,24 @@ PY
                 source ./install.sh
                 reset_admin_password
                 python3 - "$APP_DIR/data/monitor.db" <<'PY'
+import hashlib
 import sqlite3
 import sys
-from werkzeug.security import check_password_hash
 
 db_path = sys.argv[1]
 with sqlite3.connect(db_path) as connection:
     username, password_hash = connection.execute(
         "SELECT username, password_hash FROM admins LIMIT 1"
     ).fetchone()
-print(username, check_password_hash(password_hash, "NewStrongPass123"))
+algorithm, salt, digest = password_hash.split("$", 2)
+assert algorithm == "pbkdf2:sha256:1000000"
+expected = hashlib.pbkdf2_hmac(
+    "sha256",
+    "NewStrongPass123".encode("utf-8"),
+    salt.encode("utf-8"),
+    1_000_000,
+).hex()
+print(username, digest == expected)
 PY
                 cat "$APP_DIR/data/bootstrap_admin.txt"
                 """

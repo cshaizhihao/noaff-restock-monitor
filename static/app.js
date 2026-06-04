@@ -104,6 +104,40 @@
         soldout: "<b>{name}</b>\n已售罄\n最后库存：{stock}\n检测时间：{checked_at}"
     };
 
+    function errorKindLabel(kind) {
+        switch (kind) {
+            case "cloudflare_challenge":
+                return "Cloudflare 验证页拦截";
+            case "timeout":
+                return "请求超时";
+            case "browser_connection":
+                return "浏览器连接异常";
+            default:
+                return "";
+        }
+    }
+
+    function errorKindTone(kind) {
+        switch (kind) {
+            case "cloudflare_challenge":
+                return "text-amber-300";
+            case "browser_connection":
+                return "text-orange-300";
+            case "timeout":
+                return "text-rose-300";
+            default:
+                return "text-rose-300";
+        }
+    }
+
+    function formatTaskLogLine(task, logHint) {
+        if (task.last_error) {
+            const label = errorKindLabel(task.last_error_kind);
+            return label ? `> ${label}：${task.last_error}` : `> ${task.last_error}`;
+        }
+        return `> ${logHint} ${formatTime(task.last_checked_at)}`;
+    }
+
     function escapeHtml(value) {
         return String(value ?? "")
             .replaceAll("&", "&amp;")
@@ -229,9 +263,7 @@
         const sourceLine = task.source_source_name
             ? `来源：${task.source_source_name}${task.source_item_url ? ` · ${task.source_item_url}` : ""}`
             : "";
-        const logLine = task.last_error
-            ? `> ${task.last_error}`
-            : `> ${logHint} ${formatTime(task.last_checked_at)}`;
+        const logLine = formatTaskLogLine(task, logHint);
 
         const statusBadge = card.querySelector("[data-task-status]");
         if (statusBadge) {
@@ -276,7 +308,7 @@
         const log = card.querySelector("[data-task-log]");
         if (log) {
             log.textContent = logLine;
-            log.className = `truncate-two font-mono text-sm leading-relaxed ${task.last_error ? "text-rose-300" : "animate-pulse-soft text-emerald-400"}`;
+            log.className = `truncate-two font-mono text-sm leading-relaxed ${task.last_error ? errorKindTone(task.last_error_kind) : "animate-pulse-soft text-emerald-400"}`;
         }
 
         const meta = card.querySelector("[data-task-meta]");
@@ -680,7 +712,7 @@
             const [statusClass, statusText, logHint] = statusMeta(task);
             const stockText = task.last_stock === null || task.last_stock === undefined ? "Hidden" : String(task.last_stock);
             const logMessage = task.last_error
-                ? `> ${escapeHtml(task.last_error)}`
+                ? escapeHtml(formatTaskLogLine(task, logHint))
                 : `> ${escapeHtml(logHint)} ${escapeHtml(formatTime(task.last_checked_at))}`;
             const lastChecked = task.last_checked_at ? escapeHtml(formatTime(task.last_checked_at)) : "尚未检查";
             const actionLabel = task.enabled ? "停用节点" : "启用节点";
@@ -712,7 +744,7 @@
                                 库存嗅探: <span class="${task.last_stock > 0 ? "text-emerald-400" : "text-slate-300"} font-bold" data-task-stock>${escapeHtml(stockText)}</span>
                             </span>
                         </div>
-                        <p class="truncate-two font-mono text-sm leading-relaxed ${task.last_error ? "text-rose-300" : "animate-pulse-soft text-emerald-400"}" data-task-log>${logMessage}</p>
+            <p class="truncate-two font-mono text-sm leading-relaxed ${task.last_error ? errorKindTone(task.last_error_kind) : "animate-pulse-soft text-emerald-400"}" data-task-log>${logMessage}</p>
                         <div class="mt-3 font-mono text-[11px] text-slate-600" data-task-meta>
                             message_id: ${task.message_id ?? "-"} · checked: ${lastChecked}
                         </div>

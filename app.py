@@ -167,6 +167,31 @@ BROWSER_RECOVERY_MARKERS = (
     "无界面系统",
     "调试端口",
 )
+BROWSER_ERROR_KINDS = {
+    "cloudflare_challenge": (
+        "cloudflare",
+        "turnstile",
+        "checking your browser",
+        "attention required",
+        "verify you are human",
+        "just a moment",
+        "cf-turnstile",
+        "验证页",
+    ),
+    "timeout": ("timeout", "timed out", "超时"),
+    "browser_connection": (
+        "browserconnecterror",
+        "browser connection",
+        "connection refused",
+        "disconnected",
+        "remote debugging",
+        "user data directory",
+        "user-data-dir",
+        "浏览器连接",
+        "调试端口",
+        "崩溃",
+    ),
+}
 BROWSER_LOCK_FILENAMES = (
     "DevToolsActivePort",
     "SingletonCookie",
@@ -1033,6 +1058,7 @@ def to_task_payload(row: sqlite3.Row) -> dict[str, Any]:
         "message_id": row["message_id"],
         "last_checked_at": row["last_checked_at"] or "",
         "last_error": sanitize_telegram_error(row["last_error"] or ""),
+        "last_error_kind": classify_browser_error(row["last_error"] or ""),
         "created_at": row["created_at"],
         "updated_at": row["updated_at"],
     }
@@ -2123,6 +2149,16 @@ def clean_fragment_text(fragment: str) -> str:
 
 def normalize_signal_text(value: Any) -> str:
     return re.sub(r"[\s_\-]+", "", html_module.unescape(str(value)).strip().lower())
+
+
+def classify_browser_error(message: str) -> str:
+    lowered = normalize_signal_text(message)
+    if not lowered:
+        return ""
+    for kind, markers in BROWSER_ERROR_KINDS.items():
+        if any(marker in lowered for marker in markers):
+            return kind
+    return ""
 
 
 def parse_int_value(value: Any) -> int | None:
