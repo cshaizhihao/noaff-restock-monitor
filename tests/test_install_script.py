@@ -589,6 +589,9 @@ class InstallScriptTestCase(unittest.TestCase):
         self.assertIn('id="backup-export-button"', portal_html)
         self.assertIn('id="backup-file-input"', portal_html)
         self.assertIn('id="backup-restore-button"', portal_html)
+        self.assertGreaterEqual(portal_html.count('autocomplete="username"'), 2)
+        self.assertIn('autocomplete="current-password"', portal_html)
+        self.assertEqual(portal_html.count('autocomplete="new-password"'), 2)
 
     def test_dashboard_supports_collapsible_task_groups(self) -> None:
         app_js = (ROOT_DIR / "static" / "app.js").read_text(encoding="utf-8")

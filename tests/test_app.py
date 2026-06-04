@@ -886,6 +886,35 @@ class PortalAppTestCase(unittest.TestCase):
         self.assertEqual(payload["last_error_kind"], "cloudflare_challenge")
         self.assertIn("Cloudflare 验证页拦截", payload["last_error"])
 
+    def test_task_payload_classifies_browser_disconnect_errors(self) -> None:
+        timestamp = app_module.now_iso()
+        with app_module.open_connection() as connection:
+            cursor = connection.execute(
+                """
+                INSERT INTO tasks (
+                    name, monitor_url, target_keyword, restock_template, soldout_template,
+                    enabled, last_error, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    "JP.TYO.INTL.Sonic",
+                    "https://example.com/products",
+                    "Sonic",
+                    "{name}",
+                    "{name} sold out",
+                    1,
+                    "与页面的连接已断开。版本: 4.1.1.4",
+                    timestamp,
+                    timestamp,
+                ),
+            )
+            connection.commit()
+            row = connection.execute("SELECT * FROM tasks WHERE id = ?", (cursor.lastrowid,)).fetchone()
+
+        payload = app_module.to_task_payload(row)
+        self.assertEqual(payload["last_error_kind"], "browser_connection")
+        self.assertIn("与页面的连接已断开", payload["last_error"])
+
     def test_update_settings_rejects_debug_port_collisions(self) -> None:
         _, headers = self.login()
 

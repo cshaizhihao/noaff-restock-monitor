@@ -314,20 +314,20 @@
                                     <form id="profile-form" class="mt-5 grid gap-4">
                                         <div>
                                             <label for="profile-username" class="form-label">新用户名</label>
-                                            <input id="profile-username" type="text" class="input-dark">
+                                            <input id="profile-username" type="text" autocomplete="username" class="input-dark">
                                         </div>
                                         <div>
                                             <label for="profile-current-password" class="form-label">当前密码</label>
-                                            <input id="profile-current-password" type="password" class="input-dark" required>
+                                            <input id="profile-current-password" type="password" autocomplete="current-password" class="input-dark" required>
                                         </div>
                                         <div class="grid gap-4 sm:grid-cols-2">
                                             <div>
                                                 <label for="profile-new-password" class="form-label">新密码</label>
-                                                <input id="profile-new-password" type="password" class="input-dark">
+                                                <input id="profile-new-password" type="password" autocomplete="new-password" class="input-dark">
                                             </div>
                                             <div>
                                                 <label for="profile-confirm-password" class="form-label">确认新密码</label>
-                                                <input id="profile-confirm-password" type="password" class="input-dark">
+                                                <input id="profile-confirm-password" type="password" autocomplete="new-password" class="input-dark">
                                             </div>
                                         </div>
                                         <button type="submit" class="primary-button">更新凭据</button>
