@@ -327,41 +327,47 @@ print(quote(sys.argv[1], safe=''))
 PY
 }
 
-normalize_domain_input() {
-  python3 - "$1" <<'PY'
-import sys
-from urllib.parse import urlsplit
+trim_whitespace() {
+  local value="${1:-}"
+  value="${value#"${value%%[![:space:]]*}"}"
+  value="${value%"${value##*[![:space:]]}"}"
+  printf '%s' "$value"
+}
 
-raw = sys.argv[1].strip()
-if not raw:
-    print("")
-    raise SystemExit
-candidate = raw if "://" in raw else f"http://{raw}"
-parsed = urlsplit(candidate)
-host = parsed.hostname or raw.split("/", 1)[0].split(":", 1)[0]
-print((host or "").strip().strip("."))
-PY
+normalize_domain_input() {
+  local raw candidate host
+  raw="$(trim_whitespace "${1:-}")"
+  [[ -n "$raw" ]] || return 0
+  candidate="$raw"
+  if [[ "$candidate" == *"://"* ]]; then
+    candidate="${candidate#*://}"
+  fi
+  candidate="${candidate%%[/?#]*}"
+  candidate="${candidate%%@*}"
+  if [[ "$candidate" =~ ^\[(.*)\](:[0-9]+)?$ ]]; then
+    host="${BASH_REMATCH[1]}"
+  elif [[ "$candidate" == *:* ]]; then
+    host="${candidate%%:*}"
+  else
+    host="$candidate"
+  fi
+  host="${host%.}"
+  printf '%s' "$host"
 }
 
 normalize_domain_list() {
-  python3 - "$1" <<'PY'
-import sys
-from urllib.parse import urlsplit
-
-seen = set()
-result = []
-for raw in sys.argv[1].split(","):
-    value = raw.strip()
-    if not value:
-        continue
-    candidate = value if "://" in value else f"http://{value}"
-    parsed = urlsplit(candidate)
-    host = (parsed.hostname or value.split("/", 1)[0].split(":", 1)[0]).strip().strip(".")
-    if host and host not in seen:
-        seen.add(host)
-        result.append(host)
-print(",".join(result))
-PY
+  local raw host
+  declare -A seen=()
+  local result=()
+  IFS=',' read -r -a parts <<< "${1:-}"
+  for raw in "${parts[@]}"; do
+    host="$(normalize_domain_input "$raw")"
+    [[ -n "$host" ]] || continue
+    [[ -n "${seen[$host]:-}" ]] && continue
+    seen["$host"]=1
+    result+=("$host")
+  done
+  (IFS=,; printf '%s' "${result[*]}")
 }
 
 random_token() {
@@ -375,21 +381,7 @@ read_env_value() {
   local key="$1"
   local env_file="${2:-$APP_DIR/.env}"
   [[ -f "$env_file" ]] || return 0
-  python3 - "$env_file" "$key" <<'PY'
-import pathlib
-import sys
-
-path, key = sys.argv[1:]
-value = ""
-for line in pathlib.Path(path).read_text(encoding="utf-8").splitlines():
-    stripped = line.strip()
-    if not stripped or stripped.startswith("#") or "=" not in stripped:
-        continue
-    left, right = stripped.split("=", 1)
-    if left.strip() == key:
-        value = right.strip()
-print(value)
-PY
+  grep -m1 -E "^[[:space:]]*${key}=" "$env_file" | sed -E "s/^[[:space:]]*${key}=//" || true
 }
 
 prefer_existing_value() {
@@ -609,16 +601,17 @@ validate_port() {
 }
 
 is_valid_certbot_email() {
-  python3 - "$1" <<'PY'
-import re
-import sys
-
-email = sys.argv[1].strip()
-placeholder_domains = {"example.com", "example.org", "example.net", "invalid", "localhost"}
-domain = email.rsplit("@", 1)[-1].lower() if "@" in email else ""
-valid_shape = bool(re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", email))
-raise SystemExit(0 if valid_shape and domain not in placeholder_domains else 1)
-PY
+  local email domain
+  email="$(trim_whitespace "${1:-}")"
+  [[ -n "$email" ]] || return 1
+  [[ "$email" =~ ^[^[:space:]@]+@[^[:space:]@]+\.[^[:space:]@]+$ ]] || return 1
+  domain="${email##*@}"
+  case "${domain,,}" in
+    example.com|example.org|example.net|invalid|localhost)
+      return 1
+      ;;
+  esac
+  return 0
 }
 
 validate_certbot_email() {
@@ -2003,6 +1996,7 @@ uninstall_noaff_installation() {
 }
 
 reset_admin_password() {
+  ensure_python_runtime
   load_existing_env_defaults
   local db_path="${APP_DIR}/data/monitor.db"
   local bootstrap_path="${APP_DIR}/data/bootstrap_admin.txt"
@@ -2101,6 +2095,7 @@ PY
 }
 
 write_env_file() {
+  ensure_python_runtime
   [[ -n "$SECRET_KEY" ]] || SECRET_KEY="$(random_token)"
   [[ -n "$ADMIN_PASSWORD" ]] || ADMIN_PASSWORD="$(python3 - <<'PY'
 import secrets
@@ -2573,17 +2568,18 @@ main() {
     chmod 644 "$INSTALL_LOG"
     exec > >(tee -a "$INSTALL_LOG") 2>&1
   fi
-  ensure_python_runtime
   load_existing_env_defaults
   if bool_is_true "$UNINSTALL_ONLY"; then
     uninstall_noaff_installation
     return
   fi
   if bool_is_true "$PASSWORD_RESET_ONLY"; then
+    ensure_python_runtime
     reset_admin_password
     return
   fi
   if bool_is_true "$DOCKER_UPGRADE_ONLY"; then
+    ensure_python_runtime
     normalize_access_mode
     run_docker_deploy_flow
     return
@@ -2605,6 +2601,7 @@ main() {
 
   validate_required_inputs
   validate_runtime_config
+  ensure_python_runtime
 
   if [[ "$DEPLOY_MODE" == "docker" ]]; then
     run_docker_deploy_flow

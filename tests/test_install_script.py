@@ -121,6 +121,35 @@ class InstallScriptTestCase(unittest.TestCase):
         self.assertIn("FQDN:              IP mode", output)
         self.assertIn("ENABLE_TLS:        false", output)
 
+    def test_validate_only_does_not_bootstrap_python_runtime(self) -> None:
+        output = self.assert_shell_ok(
+            textwrap.dedent(
+                r"""
+                set -Eeuo pipefail
+                export NOAFF_INSTALL_LIBRARY_MODE=true
+                source ./install.sh
+
+                ensure_python_runtime() {
+                  printf 'bootstrap-called\n'
+                  return 1
+                }
+
+                python3() {
+                  printf 'python3-called\n'
+                  return 1
+                }
+
+                ACCESS_MODE=domain-direct \
+                FQDN=monitor.example.com \
+                CERTBOT_EMAIL=ops@noaff.dev \
+                main --validate-only
+                """
+            )
+        )
+        self.assertIn("NOAFF installer validation passed.", output)
+        self.assertNotIn("bootstrap-called", output)
+        self.assertNotIn("python3-called", output)
+
     def test_validate_only_accepts_docker_mode_without_domain(self) -> None:
         output = self.assert_shell_ok("DEPLOY_MODE=docker PUBLIC_APP_PORT=7777 bash install.sh --validate-only")
         self.assertIn("ACCESS_MODE:       ip", output)
@@ -421,6 +450,40 @@ class InstallScriptTestCase(unittest.TestCase):
             )
         )
         self.assertIn("uninstalled", output)
+
+    def test_uninstall_does_not_bootstrap_python_runtime(self) -> None:
+        output = self.assert_shell_ok(
+            textwrap.dedent(
+                r"""
+                set -Eeuo pipefail
+                temp_dir="$(mktemp -d)"
+                export NOAFF_INSTALL_LIBRARY_MODE=true
+                export APP_DIR="${temp_dir}/app"
+                export CLI_SCRIPT="${temp_dir}/noaff"
+                mkdir -p "$APP_DIR/data"
+                source ./install.sh
+                INSTALL_LOG="${temp_dir}/install.log"
+
+                require_root() { :; }
+                ensure_python_runtime() {
+                  printf 'bootstrap-called\n'
+                  return 1
+                }
+                python3() {
+                  printf 'python3-called\n'
+                  return 1
+                }
+                uninstall_noaff_installation() {
+                  printf 'uninstall-called\n'
+                }
+
+                main --uninstall
+                """
+            )
+        )
+        self.assertIn("uninstall-called", output)
+        self.assertNotIn("bootstrap-called", output)
+        self.assertNotIn("python3-called", output)
 
     def test_native_installs_management_cli_before_certificate_steps(self) -> None:
         script = (ROOT_DIR / "install.sh").read_text(encoding="utf-8")
