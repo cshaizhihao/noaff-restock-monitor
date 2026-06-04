@@ -103,7 +103,29 @@ GENERAL_MUTATION_LIMIT = os.getenv("GENERAL_MUTATION_LIMIT", "40 per minute")
 LIMITER_STORAGE_URI = os.getenv("LIMITER_STORAGE_URI", "memory://")
 
 ALLOWED_BROWSER_HINTS = ("mozilla", "chrome", "safari", "firefox", "edg", "applewebkit")
-SOLD_OUT_MARKERS = ("sold out", "out of stock", "暂无库存", "缺货", "售罄", "无货")
+SOLD_OUT_MARKERS = (
+    "sold out",
+    "sold-out",
+    "out of stock",
+    "currently out of stock",
+    "not available",
+    "unavailable",
+    "no stock",
+    "stock exhausted",
+    "暂无库存",
+    "暫無庫存",
+    "无库存",
+    "無庫存",
+    "缺货",
+    "缺貨",
+    "售罄",
+    "已售罄",
+    "无货",
+    "無貨",
+    "补货中",
+    "補貨中",
+    "已下架",
+)
 
 BROWSER_RECOVERY_MARKERS = (
     "browserconnecterror",
@@ -140,18 +162,186 @@ SETTINGS_DEFAULTS = {
     "request_timeout_seconds": str(DEFAULT_TIMEOUT_SECONDS),
 }
 
+STOCK_LABEL = (
+    r"(?:库存|庫存|可用|可售|有货|有貨|现货|現貨|剩余|剩餘|余量|餘量|还剩|還剩|数量|數量|"
+    r"available|availability|in\s*stock|stock|qty|quantity|inventory|remaining|left|units?)"
+)
 STOCK_HTML_GAP = r"(?:\s|&nbsp;|&#\d+;|&[a-z]+;|[:：=()（）\[\]【】\-_/]|<!--.*?-->|<[^>]{1,240}>){0,40}"
 STOCK_PATTERNS = [
     re.compile(
-        rf"(?:库存|可用|剩余|available|availability|in\s*stock|stock|qty|quantity)"
-        rf"{STOCK_HTML_GAP}(?P<count>\d{{1,6}})",
+        rf"{STOCK_LABEL}{STOCK_HTML_GAP}(?P<count>\d{{1,6}})",
         re.IGNORECASE | re.DOTALL,
     ),
     re.compile(
-        rf"(?P<count>\d{{1,6}}){STOCK_HTML_GAP}"
-        rf"(?:库存|可用|available|in\s*stock|stock|qty|quantity)",
+        rf"(?P<count>\d{{1,6}}){STOCK_HTML_GAP}{STOCK_LABEL}",
         re.IGNORECASE | re.DOTALL,
     ),
+    re.compile(
+        rf"(?:only|仅剩|僅剩){STOCK_HTML_GAP}(?P<count>\d{{1,6}}){STOCK_HTML_GAP}"
+        rf"(?:left|available|stock|件|台|个|個)?",
+        re.IGNORECASE | re.DOTALL,
+    ),
+]
+JSON_SCRIPT_PATTERN = re.compile(r"<script\b[^>]*>(?P<body>.*?)</script>", re.IGNORECASE | re.DOTALL)
+JSON_STOCK_KEYS = {
+    "stock",
+    "stocklevel",
+    "stockquantity",
+    "stockqty",
+    "quantity",
+    "qty",
+    "inventory",
+    "inventorylevel",
+    "inventoryquantity",
+    "inventoryqty",
+    "availablequantity",
+    "availablestock",
+    "remaining",
+    "left",
+    "onhand",
+    "onhandquantity",
+}
+JSON_AVAILABILITY_KEYS = {
+    "availability",
+    "availabilitystatus",
+    "availablestatus",
+    "available",
+    "isavailable",
+    "instock",
+    "stockstatus",
+    "inventorystatus",
+    "orderable",
+    "canpurchase",
+    "canbuy",
+}
+JSON_RESTOCK_KEYS = {
+    "restockdate",
+    "availabilitydate",
+    "backinstockdate",
+    "backorderdate",
+    "expecteddate",
+    "shipdate",
+    "releasedate",
+    "availabledate",
+    "deliverydate",
+    "eta",
+}
+JSON_IN_STOCK_TOKENS = {
+    "instock",
+    "limitedavailability",
+    "preorder",
+    "backorder",
+    "availablefororder",
+    "backinstock",
+    "availablenow",
+    "readytoship",
+    "现货",
+    "有货",
+    "可购买",
+    "可下单",
+    "预售",
+    "预订",
+    "預售",
+    "預訂",
+    "补货中",
+    "補貨中",
+    "到货",
+    "到貨",
+    "即将到货",
+    "即將到貨",
+}
+JSON_OUT_OF_STOCK_TOKENS = {
+    "outofstock",
+    "soldout",
+    "discontinued",
+    "unavailable",
+    "notavailable",
+    "temporarilyunavailable",
+    "缺货",
+    "缺貨",
+    "无货",
+    "無貨",
+    "暂无库存",
+    "暫無庫存",
+    "售罄",
+    "已售罄",
+}
+RESTOCK_HINT_PATTERNS = [
+    re.compile(
+        r"(?:availabilityDate|restockDate|backInStockDate|backOrderDate|expectedDate|shipDate|releaseDate|"
+        r"availableDate|deliveryDate|eta)['\"]?\s*[:=]\s*['\"]?(?P<hint>[^'\"<>\s,;]{4,40})",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"(?:预计|預計|预计于|預計於|补货|補貨|到货|到貨|restock(?:ed|ing)?|back\s*in\s*stock|"
+        r"coming\s*soon|available\s*on|ships?\s*on|ship\s*date|availability\s*date|availabilityDate|"
+        r"restockDate|backInStockDate|backOrderDate|expectedDate|shipDate|releaseDate|availableDate|"
+        r"deliveryDate|pre[-\s]?order|"
+        r"back[-\s]?order)[^\n<]{0,80}(?P<hint>(?:(?<!\d)\d{4}[./-]\d{1,2}[./-]\d{1,2}(?!\d)|"
+        r"(?<!\d)\d{1,2}[./-]\d{1,2}[./-]\d{2,4}(?!\d)|\d{4}年\d{1,2}月\d{1,2}日|today|tomorrow|tonight|"
+        r"this week|next week|soon|coming soon|"
+        r"即将到货|即將到貨|近期|稍后|稍後))",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"(?:预计|預計|补货|補貨|到货|到貨|restock(?:ed|ing)?|back\s*in\s*stock|availability\s*date|"
+        r"availabilityDate|restockDate|backInStockDate|backOrderDate|expectedDate|shipDate|releaseDate|"
+        r"availableDate|deliveryDate|back[-\s]?order)[^\n<]{0,80}(?P<hint>[^<\n]{1,80})",
+        re.IGNORECASE,
+    ),
+]
+STRUCTURED_STOCK_PATTERNS = [
+    re.compile(
+        r"\b(?:data-(?:stock|qty|quantity|inventory|inventory-quantity|inventory_quantity|"
+        r"available|available-stock|available_stock|stock-level|stock_level|stock-quantity|stock_quantity)"
+        r"|stock|qty|quantity|inventory|inventoryQuantity|inventory_quantity|inventoryLevel|inventory_level|"
+        r"availableQuantity|available_quantity|availableStock|available_stock|stockLevel|stock_level|"
+        r"remaining|left|onHand|on_hand)\s*=\s*['\"](?P<count>\d{1,6})['\"]",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"['\"](?:stock|qty|quantity|inventory|inventoryQuantity|inventory_quantity|inventoryLevel|inventory_level|"
+        r"availableQuantity|available_quantity|availableStock|available_stock|stockLevel|stock_level|"
+        r"remaining|left|onHand|on_hand)['\"]\s*:\s*['\"]?(?P<count>\d{1,6})",
+        re.IGNORECASE,
+    ),
+]
+IN_STOCK_AVAILABILITY_PATTERNS = [
+    re.compile(
+        r"['\"]availability['\"]\s*:\s*['\"][^'\"]*(?:InStock|LimitedAvailability|PreOrder|BackOrder|BackInStock|AvailableForOrder|OnlineOnly|InStoreOnly)[^'\"]*['\"]",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"\b(?:content|href)\s*=\s*['\"][^'\"]*(?:InStock|LimitedAvailability|PreOrder|BackOrder|BackInStock|AvailableForOrder|OnlineOnly|InStoreOnly)[^'\"]*['\"]",
+        re.IGNORECASE,
+    ),
+    re.compile(r"['\"](?:available|isAvailable|inStock|instock)['\"]\s*:\s*(?:true|1)", re.IGNORECASE),
+    re.compile(r"\bdata-(?:available|in-stock|instock)\s*=\s*['\"](?:true|1|yes)['\"]", re.IGNORECASE),
+]
+OUT_OF_STOCK_AVAILABILITY_PATTERNS = [
+    re.compile(
+        r"['\"]availability['\"]\s*:\s*['\"][^'\"]*(?:OutOfStock|SoldOut|Discontinued|Unavailable|NotAvailable|TemporarilyUnavailable)[^'\"]*['\"]",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"\b(?:content|href)\s*=\s*['\"][^'\"]*(?:OutOfStock|SoldOut|Discontinued|Unavailable|NotAvailable|TemporarilyUnavailable)[^'\"]*['\"]",
+        re.IGNORECASE,
+    ),
+    re.compile(r"['\"](?:available|isAvailable|inStock|instock)['\"]\s*:\s*(?:false|0)", re.IGNORECASE),
+    re.compile(r"\bdata-(?:available|in-stock|instock)\s*=\s*['\"](?:false|0|no)['\"]", re.IGNORECASE),
+]
+ORDERABLE_PATTERNS = [
+    re.compile(
+        r"\b(?:order\s*now|configure|add\s*to\s*cart|buy\s*now|checkout|purchase|"
+        r"pre[-\s]?order|back[-\s]?order|back\s*in\s*stock|available\s*now|coming\s*soon)\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"(?:立即(?:订购|訂購|购买|購買|下单|下單)|加入(?:购物车|購物車)|现在购买|現在購買|可下单|可下單|"
+        r"可购买|可購買|选择套餐|選擇套餐|订购|訂購|预售|預售|预订|預訂|预约|預約|补货|補貨|到货通知|到貨通知|"
+        r"即将到货|即將到貨|现货|現貨|有货|有貨)",
+    ),
+    re.compile(r"(?:cart\.php\?a=add|/cart/add|/checkout|/order)", re.IGNORECASE),
 ]
 
 
@@ -1150,7 +1340,16 @@ def slice_fragment(html_text: str, keyword: str) -> str:
         return ""
     if not keyword:
         return ""
-    match = re.search(re.escape(keyword), html_text, re.IGNORECASE)
+    keyword_candidates = [
+        keyword,
+        html_module.escape(keyword, quote=False),
+        html_module.escape(keyword, quote=True),
+    ]
+    match = None
+    for candidate in dict.fromkeys(candidate for candidate in keyword_candidates if candidate):
+        match = re.search(re.escape(candidate), html_text, re.IGNORECASE)
+        if match:
+            break
     if not match:
         return ""
     start = max(0, match.start() - 50)
@@ -1158,27 +1357,248 @@ def slice_fragment(html_text: str, keyword: str) -> str:
     return html_text[start:end]
 
 
+def clean_fragment_text(fragment: str) -> str:
+    cleaned = re.sub(r"(?is)<(script|style|noscript)\b.*?</\1>", " ", fragment)
+    cleaned = re.sub(r"(?is)<!--.*?-->", " ", cleaned)
+    cleaned = html_module.unescape(re.sub(r"<[^>]+>", " ", cleaned))
+    return re.sub(r"\s+", " ", cleaned).strip()
+
+
+def normalize_signal_text(value: Any) -> str:
+    return re.sub(r"[\s_\-]+", "", html_module.unescape(str(value)).strip().lower())
+
+
+def parse_int_value(value: Any) -> int | None:
+    if isinstance(value, bool):
+        return int(value)
+    if isinstance(value, int):
+        return value if value >= 0 else None
+    if isinstance(value, float):
+        if value < 0 or not value.is_integer():
+            return None
+        return int(value)
+    if isinstance(value, str):
+        match = re.search(r"\d{1,6}", value.replace(",", ""))
+        if match:
+            return int(match.group(0))
+    return None
+
+
+def parse_bool_value(value: Any) -> bool | None:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, int):
+        if value in {0, 1}:
+            return bool(value)
+        return None
+    if isinstance(value, float):
+        if value in {0.0, 1.0}:
+            return bool(value)
+        return None
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"true", "1", "yes", "y", "on"}:
+            return True
+        if normalized in {"false", "0", "no", "n", "off"}:
+            return False
+    return None
+
+
+def normalize_restock_hint(value: Any) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, (list, tuple)):
+        for item in value:
+            hint = normalize_restock_hint(item)
+            if hint:
+                return hint
+        return ""
+    text = html_module.unescape(str(value))
+    text = re.sub(r"\s+", " ", text).strip()
+    date_match = re.search(r"\d{4}[./-]\d{1,2}[./-]\d{1,2}", text)
+    if not date_match:
+        date_match = re.search(r"\d{4}年\d{1,2}月\d{1,2}日", text)
+    if date_match:
+        return date_match.group(0)
+    return text.strip(" ：:，,。.;；")[:80]
+
+
+def append_restock_hint(detail: str, restock_hint: str) -> str:
+    if not restock_hint:
+        return detail
+    base = detail.rstrip("。.!? ")
+    return f"{base}；检测到补货信息：{restock_hint}。"
+
+
+def scan_json_stock_signal(value: Any) -> tuple[int | None, str] | None:
+    if isinstance(value, dict):
+        for key, item in value.items():
+            normalized_key = normalize_signal_text(key)
+            if normalized_key in JSON_STOCK_KEYS:
+                count = parse_int_value(item)
+                if count is not None:
+                    return count, "匹配到 JSON 库存字段。"
+            if normalized_key in JSON_AVAILABILITY_KEYS:
+                boolean_value = parse_bool_value(item)
+                if boolean_value is not None:
+                    return (1 if boolean_value else 0), "匹配到 JSON 可用状态。"
+                if isinstance(item, str):
+                    normalized_item = normalize_signal_text(item)
+                    if any(token in normalized_item for token in JSON_IN_STOCK_TOKENS):
+                        return 1, "匹配到 JSON 可购买状态。"
+                    if any(token in normalized_item for token in JSON_OUT_OF_STOCK_TOKENS):
+                        return 0, "匹配到 JSON 售罄状态。"
+            nested = scan_json_stock_signal(item)
+            if nested is not None:
+                return nested
+    elif isinstance(value, list):
+        for item in value:
+            nested = scan_json_stock_signal(item)
+            if nested is not None:
+                return nested
+    return None
+
+
+def parse_json_scripts(fragment: str) -> tuple[int | None, str]:
+    for match in JSON_SCRIPT_PATTERN.finditer(fragment):
+        body = html_module.unescape(match.group("body") or "").strip()
+        if not body:
+            continue
+        body = re.sub(r"(?is)^\s*(?:<!--|//<!\[CDATA\[)", "", body).strip()
+        body = re.sub(r"(?is)(?:-->|//\]\]>)\s*$", "", body).strip()
+        if not body:
+            continue
+        if "=" in body and not body.lstrip().startswith(("{", "[")):
+            body = body.split("=", 1)[1].strip().rstrip(";")
+        if not body.startswith(("{", "[")):
+            continue
+        try:
+            payload = json.loads(body)
+        except json.JSONDecodeError:
+            continue
+        matched = scan_json_stock_signal(payload)
+        if matched is not None:
+            return matched
+    return None, ""
+
+
+def extract_restock_hint(fragment: str, cleaned_text: str) -> str:
+    haystack = f"{fragment}\n{cleaned_text}"
+    for pattern in RESTOCK_HINT_PATTERNS:
+        match = pattern.search(haystack)
+        if match:
+            hint = normalize_restock_hint(match.groupdict().get("hint") or match.group(0))
+            if hint:
+                return hint
+    return ""
+
+
+def parse_structured_stock(fragment: str, restock_hint: str = "") -> tuple[int | None, str]:
+    json_stock, json_detail = parse_json_scripts(fragment)
+    if json_stock is not None:
+        return json_stock, append_restock_hint(json_detail, restock_hint)
+
+    for pattern in STRUCTURED_STOCK_PATTERNS:
+        match = pattern.search(fragment)
+        if match:
+            return int(match.group("count")), append_restock_hint("匹配到结构化库存字段。", restock_hint)
+    for pattern in OUT_OF_STOCK_AVAILABILITY_PATTERNS:
+        if pattern.search(fragment):
+            return 0, append_restock_hint("匹配到结构化售罄状态。", restock_hint)
+    for pattern in IN_STOCK_AVAILABILITY_PATTERNS:
+        if pattern.search(fragment):
+            return 1, append_restock_hint("匹配到结构化可购买状态。", restock_hint)
+    return None, ""
+
+
+def has_sold_out_marker(cleaned_text: str) -> bool:
+    lowered = cleaned_text.lower()
+    return any(marker.lower() in lowered for marker in SOLD_OUT_MARKERS)
+
+
+def has_orderable_marker(fragment: str, cleaned_text: str) -> bool:
+    haystack = f"{fragment}\n{cleaned_text}"
+    return any(pattern.search(haystack) for pattern in ORDERABLE_PATTERNS)
+
+
+def is_date_like_context(text: str) -> bool:
+    lowered = text.lower()
+    return bool(
+        re.search(r"\d{4}\s*[./-]\s*\d{1,2}\s*[./-]\s*\d{1,2}", text)
+        or re.search(r"\d{1,2}\s*[./-]\s*\d{1,2}\s*[./-]\s*\d{2,4}", text)
+        or re.search(r"\d{4}年\d{1,2}月\d{1,2}日", text)
+        or any(
+            token in lowered
+            for token in (
+                "availabilitydate",
+                "restockdate",
+                "backinstockdate",
+                "backorderdate",
+                "expecteddate",
+                "shipdate",
+                "releasedate",
+                "availabledate",
+                "deliverydate",
+                "补货",
+                "補貨",
+                "到货",
+                "到貨",
+                "restock",
+                "back in stock",
+                "pre-order",
+                "preorder",
+            )
+        )
+    )
+
+
 def parse_stock(fragment: str) -> tuple[int | None, str]:
     if not fragment:
         return None, "未抓到有效 HTML 片段。"
 
+    cleaned = clean_fragment_text(fragment)
+    restock_hint = extract_restock_hint(fragment, cleaned)
+
+    structured_stock, structured_detail = parse_structured_stock(fragment, restock_hint)
+    if structured_stock is not None:
+        return structured_stock, structured_detail
+
     for pattern in STOCK_PATTERNS:
         match = pattern.search(fragment)
         if match:
-            return int(match.group("count")), "匹配到 HTML 库存数字。"
+            snippet = fragment[max(0, match.start() - 32) : min(len(fragment), match.end() + 32)]
+            if is_date_like_context(html_module.unescape(snippet)) or has_sold_out_marker(html_module.unescape(snippet)):
+                continue
+            return int(match.group("count")), append_restock_hint("匹配到 HTML 库存数字。", restock_hint)
 
-    cleaned = html_module.unescape(re.sub(r"<[^>]+>", " ", fragment))
-    cleaned = re.sub(r"\s+", " ", cleaned)
     text_match = re.search(
-        r"(?:库存|可用|剩余|available|availability|in\s*stock|stock|qty|quantity)[^0-9]{0,80}(\d{1,6})",
+        rf"{STOCK_LABEL}[^0-9]{{0,80}}(\d{{1,6}})",
         cleaned,
         re.IGNORECASE,
     )
     if text_match:
-        return int(text_match.group(1)), "通过文本降噪提取到库存数字。"
+        snippet = cleaned[max(0, text_match.start() - 40) : min(len(cleaned), text_match.end() + 40)]
+        if not is_date_like_context(snippet):
+            return int(text_match.group(1)), append_restock_hint("通过文本降噪提取到库存数字。", restock_hint)
 
-    if any(marker in cleaned.lower() for marker in SOLD_OUT_MARKERS):
-        return 0, "命中售罄标记。"
+    reverse_text_match = re.search(
+        rf"(\d{{1,6}})[^0-9]{{0,80}}{STOCK_LABEL}",
+        cleaned,
+        re.IGNORECASE,
+    )
+    if reverse_text_match:
+        snippet = cleaned[max(0, reverse_text_match.start() - 40) : min(len(cleaned), reverse_text_match.end() + 40)]
+        if not is_date_like_context(snippet):
+            return int(reverse_text_match.group(1)), append_restock_hint("通过文本倒序提取到库存数字。", restock_hint)
+
+    if has_sold_out_marker(cleaned):
+        return 0, append_restock_hint("命中售罄标记。", restock_hint)
+
+    if has_orderable_marker(fragment, cleaned):
+        return 1, append_restock_hint("未显示库存数字，但命中可下单/购买入口，按有货处理。", restock_hint)
+
+    if restock_hint:
+        return 0, f"检测到补货信息：{restock_hint}，但未发现明确库存数字。"
 
     return None, "未找到库存数字或售罄标记。"
 

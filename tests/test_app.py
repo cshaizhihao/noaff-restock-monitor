@@ -695,6 +695,68 @@ class PortalAppTestCase(unittest.TestCase):
         self.assertEqual(sold_out_stock, 0)
         self.assertIn("售罄", sold_out_detail)
 
+    def test_stock_parser_handles_common_merchant_restock_signals(self) -> None:
+        escaped_fragment = app_module.slice_fragment(
+            "A" * 60 + "Sonic &amp; Kawasaki" + "<span data-stock=\"9\"></span>",
+            "Sonic & Kawasaki",
+        )
+        self.assertIn("data-stock", escaped_fragment)
+        stock, detail = app_module.parse_stock(escaped_fragment)
+        self.assertEqual(stock, 9)
+        self.assertIn("结构化库存", detail)
+
+        json_ld_stock, json_ld_detail = app_module.parse_stock(
+            """
+            <script type="application/ld+json">
+            {"@type":"Product","name":"HK-CMI","offers":{"availability":"https://schema.org/InStock"}}
+            </script>
+            """
+        )
+        self.assertEqual(json_ld_stock, 1)
+        self.assertIn("可购买", json_ld_detail)
+
+        whmcs_stock, whmcs_detail = app_module.parse_stock(
+            """
+            <div class="package">
+              <h3>Tokyo NVMe</h3>
+              <a class="btn btn-success" href="cart.php?a=add&pid=21">Order Now</a>
+            </div>
+            """
+        )
+        self.assertEqual(whmcs_stock, 1)
+        self.assertIn("可下单", whmcs_detail)
+
+        left_stock, left_detail = app_module.parse_stock("<div>Only <span>2</span> left today</div>")
+        self.assertEqual(left_stock, 2)
+        self.assertIn("库存数字", left_detail)
+
+        sold_out_stock, sold_out_detail = app_module.parse_stock(
+            '<button class="btn disabled">Currently Out of Stock</button>'
+        )
+        self.assertEqual(sold_out_stock, 0)
+        self.assertIn("售罄", sold_out_detail)
+
+        json_quantity_stock, json_quantity_detail = app_module.parse_stock(
+            """
+            <script type="application/ld+json">
+            {"@context":"https://schema.org","@type":"Product","inventory_quantity":"8","availabilityDate":"2026-06-05"}
+            </script>
+            """
+        )
+        self.assertEqual(json_quantity_stock, 8)
+        self.assertIn("JSON", json_quantity_detail)
+        self.assertIn("2026-06-05", json_quantity_detail)
+
+        restock_stock, restock_detail = app_module.parse_stock(
+            """
+            <div class="status">预计补货：2026年6月5日</div>
+            <button disabled>Out of Stock</button>
+            """
+        )
+        self.assertEqual(restock_stock, 0)
+        self.assertIn("补货信息", restock_detail)
+        self.assertIn("2026年6月5日", restock_detail)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
