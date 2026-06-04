@@ -1,3 +1,4 @@
+import hashlib
 import html as html_module
 import ipaddress
 import json
@@ -18,7 +19,7 @@ from functools import wraps
 from pathlib import Path
 from string import Formatter
 from typing import Any
-from urllib.parse import urlparse
+from urllib.parse import urljoin, urlparse, urldefrag
 
 import psutil
 import requests
@@ -59,6 +60,18 @@ def now_iso() -> str:
     return now_utc().isoformat(timespec="seconds")
 
 
+def parse_iso_datetime(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=UTC)
+    return parsed.astimezone(UTC)
+
+
 def env_bool(name: str, default: bool) -> bool:
     value = os.getenv(name)
     if value is None:
@@ -81,10 +94,12 @@ DEFAULT_APP_PORT = int(os.getenv("APP_PORT", "7777"))
 DEFAULT_APP_HOST = os.getenv("APP_HOST", "0.0.0.0").strip() or "0.0.0.0"
 DEFAULT_MONITOR_PORT = int(os.getenv("MONITOR_DEBUG_PORT", "9223"))
 DEFAULT_TEST_PORT = int(os.getenv("TEST_DEBUG_PORT", "9334"))
+DEFAULT_CATALOG_PORT = int(os.getenv("CATALOG_DEBUG_PORT", "9445"))
 DEFAULT_POLL_INTERVAL = int(os.getenv("POLL_INTERVAL_SECONDS", "45"))
 DEFAULT_TIMEOUT_SECONDS = int(os.getenv("REQUEST_TIMEOUT_SECONDS", "25"))
 DEFAULT_HEADLESS = env_bool("CHROMIUM_HEADLESS", True)
 DEFAULT_BROWSER_PATH = os.getenv("CHROMIUM_BINARY", "").strip()
+DEFAULT_BROWSER_USER_AGENT = os.getenv("CHROMIUM_USER_AGENT", "").strip()
 ENABLE_PROXY_FIX = env_bool("ENABLE_PROXY_FIX", False)
 PROXY_FIX_X_FOR = int(os.getenv("PROXY_FIX_X_FOR", "1"))
 PROXY_FIX_X_PROTO = int(os.getenv("PROXY_FIX_X_PROTO", "1"))
@@ -135,6 +150,12 @@ BROWSER_RECOVERY_MARKERS = (
     "connection refused",
     "devtoolsactiveport",
     "disconnected",
+    "just a moment",
+    "cloudflare",
+    "turnstile",
+    "cf-turnstile",
+    "checking your browser",
+    "attention required",
     "remote debugging",
     "timeout",
     "timed out",
@@ -158,9 +179,13 @@ SETTINGS_DEFAULTS = {
     "telegram_chat_id": os.getenv("TELEGRAM_CHAT_ID", "").strip(),
     "monitor_debug_port": str(DEFAULT_MONITOR_PORT),
     "test_debug_port": str(DEFAULT_TEST_PORT),
+    "catalog_debug_port": str(DEFAULT_CATALOG_PORT),
     "poll_interval_seconds": str(DEFAULT_POLL_INTERVAL),
     "request_timeout_seconds": str(DEFAULT_TIMEOUT_SECONDS),
 }
+
+DEFAULT_RESTOCK_TEMPLATE = "<b>{name}</b>\n库存：{stock}\n链接：{url}\n检测时间：{checked_at}"
+DEFAULT_SOLDOUT_TEMPLATE = "<b>{name}</b>\n已售罄\n最后库存：{stock}\n检测时间：{checked_at}"
 
 STOCK_LABEL = (
     r"(?:库存|庫存|可用|可售|有货|有貨|现货|現貨|剩余|剩餘|余量|餘量|还剩|還剩|数量|數量|"
@@ -601,8 +626,10 @@ def find_browser_binary() -> str:
 
 
 def get_connection() -> sqlite3.Connection:
-    connection = sqlite3.connect(DB_PATH)
+    connection = sqlite3.connect(DB_PATH, timeout=30)
     connection.row_factory = sqlite3.Row
+    connection.execute("PRAGMA foreign_keys=ON;")
+    connection.execute("PRAGMA busy_timeout=5000;")
     return connection
 
 
@@ -644,6 +671,7 @@ def log_activity(level: str, scope: str, message: str) -> None:
 def normalize_settings(raw: dict[str, str]) -> dict[str, Any]:
     monitor_port = int(raw.get("monitor_debug_port") or DEFAULT_MONITOR_PORT)
     test_port = int(raw.get("test_debug_port") or DEFAULT_TEST_PORT)
+    catalog_port = int(raw.get("catalog_debug_port") or DEFAULT_CATALOG_PORT)
     poll_interval = max(15, min(3600, int(raw.get("poll_interval_seconds") or DEFAULT_POLL_INTERVAL)))
     timeout_seconds = max(10, min(120, int(raw.get("request_timeout_seconds") or DEFAULT_TIMEOUT_SECONDS)))
     return {
@@ -651,6 +679,7 @@ def normalize_settings(raw: dict[str, str]) -> dict[str, Any]:
         "telegram_chat_id": raw.get("telegram_chat_id", "").strip(),
         "monitor_debug_port": monitor_port,
         "test_debug_port": test_port,
+        "catalog_debug_port": catalog_port,
         "poll_interval_seconds": poll_interval,
         "request_timeout_seconds": timeout_seconds,
     }
@@ -709,6 +738,13 @@ def initialize_database() -> None:
                 button_1_url TEXT DEFAULT '',
                 button_2_text TEXT DEFAULT '',
                 button_2_url TEXT DEFAULT '',
+                source_item_id INTEGER,
+                source_item_key TEXT DEFAULT '',
+                source_source_url TEXT DEFAULT '',
+                source_source_name TEXT DEFAULT '',
+                source_item_url TEXT DEFAULT '',
+                source_snapshot TEXT DEFAULT '',
+                source_last_sync_at TEXT,
                 enabled INTEGER NOT NULL DEFAULT 1,
                 last_stock INTEGER,
                 last_state TEXT NOT NULL DEFAULT 'unknown',
@@ -726,9 +762,48 @@ def initialize_database() -> None:
                 message TEXT NOT NULL,
                 created_at TEXT NOT NULL
             );
+
+            CREATE TABLE IF NOT EXISTS merchant_sources (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                source_url TEXT NOT NULL UNIQUE,
+                source_name TEXT NOT NULL DEFAULT '',
+                active INTEGER NOT NULL DEFAULT 1,
+                discovered_count INTEGER NOT NULL DEFAULT 0,
+                last_sync_at TEXT,
+                last_error TEXT DEFAULT '',
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS merchant_items (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                source_id INTEGER NOT NULL,
+                item_key TEXT NOT NULL,
+                title TEXT NOT NULL,
+                keyword TEXT NOT NULL,
+                monitor_url TEXT NOT NULL,
+                item_url TEXT DEFAULT '',
+                price_hint TEXT DEFAULT '',
+                stock_hint TEXT DEFAULT '',
+                restock_hint TEXT DEFAULT '',
+                raw_snippet TEXT DEFAULT '',
+                raw_payload TEXT DEFAULT '',
+                item_state TEXT NOT NULL DEFAULT 'new',
+                last_seen_at TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                UNIQUE(source_id, item_key)
+            );
             """
         )
         ensure_column(connection, "tasks", "group_name", "TEXT NOT NULL DEFAULT '默认分组'")
+        ensure_column(connection, "tasks", "source_item_id", "INTEGER")
+        ensure_column(connection, "tasks", "source_item_key", "TEXT DEFAULT ''")
+        ensure_column(connection, "tasks", "source_source_url", "TEXT DEFAULT ''")
+        ensure_column(connection, "tasks", "source_source_name", "TEXT DEFAULT ''")
+        ensure_column(connection, "tasks", "source_item_url", "TEXT DEFAULT ''")
+        ensure_column(connection, "tasks", "source_snapshot", "TEXT DEFAULT ''")
+        ensure_column(connection, "tasks", "source_last_sync_at", "TEXT")
 
         existing_admin = connection.execute("SELECT id FROM admins LIMIT 1").fetchone()
         if not existing_admin:
@@ -768,10 +843,11 @@ def login_required(view):
 
 
 def to_task_payload(row: sqlite3.Row) -> dict[str, Any]:
+    keys = set(row.keys())
     return {
         "id": row["id"],
         "name": row["name"],
-        "group_name": normalize_task_group(row["group_name"] if "group_name" in row.keys() else ""),
+        "group_name": normalize_task_group(row["group_name"] if "group_name" in keys else ""),
         "monitor_url": row["monitor_url"],
         "target_keyword": row["target_keyword"],
         "restock_template": row["restock_template"],
@@ -780,6 +856,13 @@ def to_task_payload(row: sqlite3.Row) -> dict[str, Any]:
         "button_1_url": row["button_1_url"] or "",
         "button_2_text": row["button_2_text"] or "",
         "button_2_url": row["button_2_url"] or "",
+        "source_item_id": row["source_item_id"] if "source_item_id" in keys else None,
+        "source_item_key": (row["source_item_key"] or "") if "source_item_key" in keys else "",
+        "source_source_url": (row["source_source_url"] or "") if "source_source_url" in keys else "",
+        "source_source_name": (row["source_source_name"] or "") if "source_source_name" in keys else "",
+        "source_item_url": (row["source_item_url"] or "") if "source_item_url" in keys else "",
+        "source_snapshot": (row["source_snapshot"] or "") if "source_snapshot" in keys else "",
+        "source_last_sync_at": (row["source_last_sync_at"] or "") if "source_last_sync_at" in keys else "",
         "enabled": bool(row["enabled"]),
         "last_stock": row["last_stock"],
         "last_state": row["last_state"],
@@ -788,6 +871,49 @@ def to_task_payload(row: sqlite3.Row) -> dict[str, Any]:
         "last_error": sanitize_telegram_error(row["last_error"] or ""),
         "created_at": row["created_at"],
         "updated_at": row["updated_at"],
+    }
+
+
+def to_source_payload(row: sqlite3.Row, item_count: int = 0, linked_count: int = 0) -> dict[str, Any]:
+    return {
+        "id": row["id"],
+        "source_url": row["source_url"],
+        "source_name": row["source_name"] or "",
+        "active": bool(row["active"]),
+        "discovered_count": row["discovered_count"],
+        "item_count": item_count,
+        "linked_count": linked_count,
+        "last_sync_at": row["last_sync_at"] or "",
+        "last_error": row["last_error"] or "",
+        "created_at": row["created_at"],
+        "updated_at": row["updated_at"],
+    }
+
+
+def to_merchant_item_payload(
+    row: sqlite3.Row,
+    source_row: sqlite3.Row | None = None,
+    task_row: sqlite3.Row | None = None,
+) -> dict[str, Any]:
+    return {
+        "id": row["id"],
+        "source_id": row["source_id"],
+        "source_url": source_row["source_url"] if source_row else "",
+        "source_name": source_row["source_name"] if source_row else "",
+        "item_key": row["item_key"],
+        "title": row["title"],
+        "keyword": row["keyword"],
+        "monitor_url": row["monitor_url"],
+        "item_url": row["item_url"] or "",
+        "price_hint": row["price_hint"] or "",
+        "stock_hint": row["stock_hint"] or "",
+        "restock_hint": row["restock_hint"] or "",
+        "item_state": row["item_state"],
+        "last_seen_at": row["last_seen_at"] or "",
+        "created_at": row["created_at"],
+        "updated_at": row["updated_at"],
+        "task_id": task_row["id"] if task_row else None,
+        "task_name": task_row["name"] if task_row else "",
     }
 
 
@@ -824,12 +950,136 @@ def validate_task_payload(payload: dict[str, Any]) -> tuple[bool, str]:
     return True, ""
 
 
+def optional_int(value: Any) -> int | None:
+    if value in ("", None):
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def normalize_task_source_fields(payload: dict[str, Any], fallback: sqlite3.Row | None = None) -> dict[str, Any]:
+    fallback_keys = set(fallback.keys()) if fallback is not None else set()
+    return {
+        "source_item_id": optional_int(payload.get("source_item_id")) if payload.get("source_item_id") not in (None, "") else (fallback["source_item_id"] if fallback is not None and "source_item_id" in fallback_keys else None),
+        "source_item_key": str(payload.get("source_item_key", "")).strip() or (str(fallback["source_item_key"]) if fallback is not None and "source_item_key" in fallback_keys else ""),
+        "source_source_url": str(payload.get("source_source_url", "")).strip() or (str(fallback["source_source_url"]) if fallback is not None and "source_source_url" in fallback_keys else ""),
+        "source_source_name": str(payload.get("source_source_name", "")).strip() or (str(fallback["source_source_name"]) if fallback is not None and "source_source_name" in fallback_keys else ""),
+        "source_item_url": str(payload.get("source_item_url", "")).strip() or (str(fallback["source_item_url"]) if fallback is not None and "source_item_url" in fallback_keys else ""),
+        "source_snapshot": str(payload.get("source_snapshot", "")).strip() or (str(fallback["source_snapshot"]) if fallback is not None and "source_snapshot" in fallback_keys else ""),
+        "source_last_sync_at": str(payload.get("source_last_sync_at", "")).strip() or (str(fallback["source_last_sync_at"]) if fallback is not None and "source_last_sync_at" in fallback_keys else ""),
+    }
+
+
+def build_task_insert_values(payload: dict[str, Any], source_fields: dict[str, Any], timestamp: str) -> tuple[Any, ...]:
+    return (
+        str(payload["name"]).strip(),
+        normalize_task_group(payload.get("group_name")),
+        str(payload["monitor_url"]).strip(),
+        str(payload["target_keyword"]).strip(),
+        str(payload["restock_template"]).strip() or DEFAULT_RESTOCK_TEMPLATE,
+        str(payload["soldout_template"]).strip() or DEFAULT_SOLDOUT_TEMPLATE,
+        str(payload.get("button_1_text", "")).strip(),
+        str(payload.get("button_1_url", "")).strip(),
+        str(payload.get("button_2_text", "")).strip(),
+        str(payload.get("button_2_url", "")).strip(),
+        source_fields["source_item_id"],
+        source_fields["source_item_key"],
+        source_fields["source_source_url"],
+        source_fields["source_source_name"],
+        source_fields["source_item_url"],
+        source_fields["source_snapshot"],
+        source_fields["source_last_sync_at"] or timestamp,
+        1 if payload.get("enabled", True) else 0,
+        timestamp,
+        timestamp,
+    )
+
+
+def insert_task_record(connection: sqlite3.Connection, payload: dict[str, Any], timestamp: str, fallback: sqlite3.Row | None = None) -> int:
+    source_fields = normalize_task_source_fields(payload, fallback)
+    cursor = connection.execute(
+        """
+        INSERT INTO tasks (
+            name, group_name, monitor_url, target_keyword, restock_template, soldout_template,
+            button_1_text, button_1_url, button_2_text, button_2_url,
+            source_item_id, source_item_key, source_source_url, source_source_name, source_item_url,
+            source_snapshot, source_last_sync_at, enabled, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        build_task_insert_values(payload, source_fields, timestamp),
+    )
+    connection.commit()
+    return int(cursor.lastrowid)
+
+
+def create_task_from_catalog_item(
+    connection: sqlite3.Connection,
+    source_id: int,
+    source_title: str,
+    source_url: str,
+    item_id: int,
+    item: dict[str, Any],
+) -> int:
+    timestamp = now_iso()
+    payload = {
+        "name": item["title"],
+        "group_name": source_title,
+        "monitor_url": item["monitor_url"],
+        "target_keyword": item["keyword"],
+        "restock_template": DEFAULT_RESTOCK_TEMPLATE,
+        "soldout_template": DEFAULT_SOLDOUT_TEMPLATE,
+        "button_1_text": "",
+        "button_1_url": "",
+        "button_2_text": "",
+        "button_2_url": "",
+        "enabled": True,
+        "source_item_id": item_id,
+        "source_item_key": item["source_item_key"],
+        "source_source_url": source_url,
+        "source_source_name": source_title,
+        "source_item_url": item["item_url"],
+        "source_snapshot": json.dumps(item, ensure_ascii=False),
+        "source_last_sync_at": timestamp,
+    }
+    task_id = insert_task_record(connection, payload, timestamp)
+    return task_id
+
+
 @dataclass
 class ScrapeResult:
     stock: int | None
     fragment: str
     detail: str
     used_test_browser: bool
+
+
+@dataclass
+class MerchantCatalogItem:
+    source_item_key: str
+    title: str
+    keyword: str
+    monitor_url: str
+    item_url: str
+    price_hint: str
+    stock_hint: str
+    restock_hint: str
+    raw_snippet: str
+    raw_payload: str
+
+
+@dataclass
+class MerchantImportResult:
+    source_id: int
+    source_url: str
+    source_name: str
+    scanned_count: int
+    upserted_count: int
+    promoted_count: int
+    archived_count: int
+    last_sync_at: str
+    items: list[dict[str, Any]]
 
 
 def sanitize_telegram_error(value: str, token: str = "") -> str:
@@ -969,6 +1219,11 @@ class BrowserHarness:
 
         options = ChromiumOptions()
         options.set_local_port(self.port)
+        if DEFAULT_BROWSER_USER_AGENT:
+            try:
+                options.set_user_agent(DEFAULT_BROWSER_USER_AGENT)
+            except Exception:
+                pass
         options.set_argument("--disable-gpu")
         options.set_argument("--disable-dev-shm-usage")
         options.set_argument("--disable-blink-features=AutomationControlled")
@@ -999,13 +1254,50 @@ class BrowserHarness:
     def fetch_html(self, url: str, timeout_seconds: int) -> str:
         with self.lock:
             page = self.ensure_page()
-            ok = page.get(url, timeout=timeout_seconds)
+            ok = page.get(url, timeout=timeout_seconds, retry=1, interval=1)
             if ok is False:
                 raise TimeoutError(f"{self.role} browser timed out while opening {url}")
-            time.sleep(1.2)
+
+            try:
+                page.wait.doc_loaded(timeout=max(3, min(timeout_seconds, 10)))
+            except Exception:
+                pass
+
+            time.sleep(0.9)
             html_text = page.html or ""
             if not html_text:
                 raise RuntimeError(f"{self.role} browser returned empty HTML")
+            page_title = ""
+            try:
+                page_title = page.title or ""
+            except Exception:
+                pass
+            if looks_like_cloudflare_challenge(html_text, page_title, url):
+                for attempt in range(3):
+                    log_activity(
+                        "warning",
+                        f"browser:{self.role}",
+                        f"检测到 Cloudflare/Turnstile 挑战页，准备重试第 {attempt + 1} 次：{url}",
+                    )
+                    time.sleep(1.8 + attempt)
+                    try:
+                        page.refresh(ignore_cache=True)
+                    except Exception:
+                        pass
+                    try:
+                        page.wait.doc_loaded(timeout=max(3, min(timeout_seconds, 10)))
+                    except Exception:
+                        pass
+                    html_text = page.html or ""
+                    if not html_text:
+                        continue
+                    try:
+                        page_title = page.title or ""
+                    except Exception:
+                        page_title = ""
+                    if not looks_like_cloudflare_challenge(html_text, page_title, url):
+                        return html_text
+                raise RuntimeError(f"{self.role} browser is blocked by Cloudflare challenge at {url}")
             return html_text
 
     def rebuild(self, reason: str) -> None:
@@ -1085,6 +1377,7 @@ class MonitoringEngine:
         browser_binary = find_browser_binary()
         self.monitor_browser = BrowserHarness("monitor", DEFAULT_MONITOR_PORT, DEFAULT_HEADLESS, browser_binary)
         self.test_browser = BrowserHarness("test", DEFAULT_TEST_PORT, DEFAULT_HEADLESS, browser_binary)
+        self.catalog_browser = BrowserHarness("catalog", DEFAULT_CATALOG_PORT, DEFAULT_HEADLESS, browser_binary)
         self.last_cycle_started = ""
         self.last_cycle_finished = ""
         self.last_exception = ""
@@ -1100,6 +1393,7 @@ class MonitoringEngine:
         browser_binary = find_browser_binary()
         self.monitor_browser.update(settings_payload["monitor_debug_port"], DEFAULT_HEADLESS, browser_binary)
         self.test_browser.update(settings_payload["test_debug_port"], DEFAULT_HEADLESS, browser_binary)
+        self.catalog_browser.update(settings_payload["catalog_debug_port"], DEFAULT_HEADLESS, browser_binary)
 
     def start(self) -> None:
         if self.thread and self.thread.is_alive():
@@ -1112,6 +1406,7 @@ class MonitoringEngine:
         self.stop_event.set()
         self.monitor_browser.shutdown()
         self.test_browser.shutdown()
+        self.catalog_browser.shutdown()
 
     def get_status(self) -> dict[str, Any]:
         with self.state_lock:
@@ -1126,9 +1421,48 @@ class MonitoringEngine:
     def restart(self, reason: str) -> None:
         self.monitor_browser.rebuild(reason)
         self.test_browser.rebuild(reason)
+        self.catalog_browser.rebuild(reason)
         with self.state_lock:
             self.last_exception = ""
         log_activity("warning", "engine", f"已手动重启浏览器引擎：{reason}")
+
+    def process_merchant_sources(self, settings_payload: dict[str, Any]) -> int:
+        sync_interval = max(180, int(settings_payload["poll_interval_seconds"]) * 3)
+        now = now_utc()
+        synced_count = 0
+
+        with open_connection() as connection:
+            sources = connection.execute(
+                """
+                SELECT * FROM merchant_sources
+                WHERE active = 1
+                ORDER BY updated_at ASC, id ASC
+                """
+            ).fetchall()
+
+        for source in sources:
+            last_sync_at = parse_iso_datetime(source["last_sync_at"] if "last_sync_at" in source.keys() else None)
+            if last_sync_at and (now - last_sync_at).total_seconds() < sync_interval:
+                continue
+            try:
+                self.import_merchant_source(
+                    source["source_url"],
+                    source["source_name"],
+                    settings_payload,
+                    auto_promote=True,
+                )
+                synced_count += 1
+            except Exception as exc:
+                error_message = str(exc)[:1000]
+                with open_connection() as connection:
+                    connection.execute(
+                        "UPDATE merchant_sources SET last_error = ?, updated_at = ? WHERE id = ?",
+                        (error_message, now_iso(), source["id"]),
+                    )
+                    connection.commit()
+                log_activity("warning", "catalog", f"同步商家来源 #{source['id']} 失败：{exc}")
+
+        return synced_count
 
     def run_loop(self) -> None:
         while not self.stop_event.is_set():
@@ -1151,6 +1485,7 @@ class MonitoringEngine:
                     processed = self.process_task(task, settings_payload, use_test_browser=False)
                     if processed:
                         successful += 1
+                self.process_merchant_sources(settings_payload)
                 self._mark_cycle_finish(successful, "")
             except Exception as exc:  # pragma: no cover - runtime recovery path
                 self._mark_cycle_finish(successful, str(exc))
@@ -1186,6 +1521,213 @@ class MonitoringEngine:
                     continue
                 break
         return ScrapeResult(stock=None, fragment="", detail=last_error or "抓取失败", used_test_browser=use_test_browser)
+
+    def import_merchant_source(
+        self,
+        source_url: str,
+        source_name: str,
+        settings_payload: dict[str, Any],
+        auto_promote: bool = True,
+    ) -> MerchantImportResult:
+        source_url = source_url.strip()
+        if not source_url:
+            raise RuntimeError("商家页面链接不能为空。")
+        if not validate_http_url(source_url):
+            raise RuntimeError("商家页面链接必须是有效的 http(s) 地址。")
+
+        last_error = ""
+        html_text = ""
+        for attempt in range(3):
+            try:
+                html_text = self.catalog_browser.fetch_html(source_url, settings_payload["request_timeout_seconds"])
+                break
+            except Exception as exc:
+                last_error = str(exc)
+                if should_auto_heal(exc) and attempt < 2:
+                    self.catalog_browser.rebuild(last_error)
+                    time.sleep(0.6)
+                    continue
+                raise RuntimeError(last_error or "商家页面抓取失败。") from exc
+
+        discovered_items = discover_catalog_items(html_text, source_url)
+        source_title = normalize_candidate_title(source_name) or extract_page_title(html_text)
+        if not source_title:
+            source_title = urlparse(source_url).hostname or source_url
+
+        timestamp = now_iso()
+        upserted_count = 0
+        promoted_count = 0
+        archived_count = 0
+        persisted_items: list[dict[str, Any]] = []
+        source_id = 0
+
+        with open_connection() as connection:
+            source_row = connection.execute("SELECT * FROM merchant_sources WHERE source_url = ?", (source_url,)).fetchone()
+            if source_row:
+                source_id = int(source_row["id"])
+                connection.execute(
+                    """
+                    UPDATE merchant_sources
+                    SET source_name = ?, active = 1, last_sync_at = ?, last_error = '', discovered_count = ?, updated_at = ?
+                    WHERE id = ?
+                    """,
+                    (source_title, timestamp, len(discovered_items), timestamp, source_id),
+                )
+            else:
+                cursor = connection.execute(
+                    """
+                    INSERT INTO merchant_sources (
+                        source_url, source_name, active, discovered_count, last_sync_at, last_error, created_at, updated_at
+                    ) VALUES (?, ?, 1, ?, ?, '', ?, ?)
+                    """,
+                    (source_url, source_title, len(discovered_items), timestamp, timestamp, timestamp),
+                )
+                source_id = int(cursor.lastrowid)
+
+            seen_keys: set[str] = set()
+            existing_items = {
+                row["item_key"]: row
+                for row in connection.execute(
+                    "SELECT * FROM merchant_items WHERE source_id = ?",
+                    (source_id,),
+                ).fetchall()
+            }
+
+            for item in discovered_items:
+                seen_keys.add(item["source_item_key"])
+                item_state = "updated" if item["source_item_key"] in existing_items else "new"
+                existing = existing_items.get(item["source_item_key"])
+                if existing:
+                    upserted_count += 1
+                    connection.execute(
+                        """
+                        UPDATE merchant_items
+                        SET title = ?, keyword = ?, monitor_url = ?, item_url = ?, price_hint = ?, stock_hint = ?,
+                            restock_hint = ?, raw_snippet = ?, raw_payload = ?, item_state = ?, last_seen_at = ?, updated_at = ?
+                        WHERE id = ?
+                        """,
+                        (
+                            item["title"],
+                            item["keyword"],
+                            item["monitor_url"],
+                            item["item_url"],
+                            item["price_hint"],
+                            item["stock_hint"],
+                            item["restock_hint"],
+                            item["raw_snippet"],
+                            item["raw_payload"],
+                            item_state,
+                            timestamp,
+                            timestamp,
+                            existing["id"],
+                        ),
+                    )
+                    item_id = int(existing["id"])
+                else:
+                    cursor = connection.execute(
+                        """
+                        INSERT INTO merchant_items (
+                            source_id, item_key, title, keyword, monitor_url, item_url, price_hint, stock_hint,
+                            restock_hint, raw_snippet, raw_payload, item_state, last_seen_at, created_at, updated_at
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        (
+                            source_id,
+                            item["source_item_key"],
+                            item["title"],
+                            item["keyword"],
+                            item["monitor_url"],
+                            item["item_url"],
+                            item["price_hint"],
+                            item["stock_hint"],
+                            item["restock_hint"],
+                            item["raw_snippet"],
+                            item["raw_payload"],
+                            item_state,
+                            timestamp,
+                            timestamp,
+                            timestamp,
+                        ),
+                    )
+                    item_id = int(cursor.lastrowid)
+                    upserted_count += 1
+
+                task_row = connection.execute(
+                    "SELECT id FROM tasks WHERE source_item_id = ? LIMIT 1",
+                    (item_id,),
+                ).fetchone()
+                task_id = None
+                if auto_promote and not task_row:
+                    task_id = create_task_from_catalog_item(
+                        connection,
+                        source_id=source_id,
+                        source_title=source_title,
+                        source_url=source_url,
+                        item_id=item_id,
+                        item=item,
+                    )
+                    promoted_count += 1
+                elif task_row:
+                    task_id = int(task_row["id"])
+                    connection.execute(
+                        """
+                        UPDATE tasks
+                        SET source_source_url = ?, source_source_name = ?, source_item_url = ?, source_snapshot = ?,
+                            source_last_sync_at = ?, updated_at = ?
+                        WHERE id = ?
+                        """,
+                        (
+                            source_url,
+                            source_title,
+                            item["item_url"],
+                            json.dumps(item, ensure_ascii=False),
+                            timestamp,
+                            timestamp,
+                            task_id,
+                        ),
+                    )
+
+                persisted_items.append(
+                    {
+                        "id": item_id,
+                        "item_key": item["source_item_key"],
+                        "title": item["title"],
+                        "keyword": item["keyword"],
+                        "monitor_url": item["monitor_url"],
+                        "item_url": item["item_url"],
+                        "price_hint": item["price_hint"],
+                        "stock_hint": item["stock_hint"],
+                        "restock_hint": item["restock_hint"],
+                        "item_state": item_state,
+                        "task_id": task_id,
+                    }
+                )
+
+            if seen_keys:
+                for row in connection.execute(
+                    "SELECT id, item_key, item_state FROM merchant_items WHERE source_id = ?",
+                    (source_id,),
+                ).fetchall():
+                    if row["item_key"] not in seen_keys and row["item_state"] != "archived":
+                        connection.execute(
+                            "UPDATE merchant_items SET item_state = 'archived', updated_at = ? WHERE id = ?",
+                            (timestamp, row["id"]),
+                        )
+                        archived_count += 1
+
+            connection.commit()
+
+        return MerchantImportResult(
+            source_id=source_id,
+            source_url=source_url,
+            source_name=source_title,
+            scanned_count=len(discovered_items),
+            upserted_count=upserted_count,
+            promoted_count=promoted_count,
+            archived_count=archived_count,
+            last_sync_at=timestamp,
+            items=persisted_items,
+        )
 
     def process_task(self, task: sqlite3.Row, settings_payload: dict[str, Any], use_test_browser: bool) -> bool:
         result = self.scrape_task(task, settings_payload, use_test_browser)
@@ -1320,6 +1862,12 @@ def build_buttons(task: sqlite3.Row | dict[str, Any]) -> list[dict[str, str]]:
 
 def message_template_values(task: sqlite3.Row, stock: int | None) -> dict[str, str]:
     checked_at = now_utc().astimezone().strftime("%Y-%m-%d %H:%M:%S")
+    source_name = ""
+    source_url = ""
+    if "source_source_name" in task.keys():
+        source_name = str(task["source_source_name"] or "")
+    if "source_source_url" in task.keys():
+        source_url = str(task["source_source_url"] or "")
     return {
         "name": telegram_html_value(task["name"]),
         "stock": "" if stock is None else telegram_html_value(stock),
@@ -1327,12 +1875,30 @@ def message_template_values(task: sqlite3.Row, stock: int | None) -> dict[str, s
         "keyword": telegram_html_value(task["target_keyword"]),
         "checked_at": telegram_html_value(checked_at),
         "status": telegram_html_value("in_stock" if (stock or 0) > 0 else "sold_out"),
+        "source_name": telegram_html_value(source_name),
+        "source_url": telegram_html_value(source_url),
     }
 
 
 def should_auto_heal(exc: Exception) -> bool:
     message = str(exc).lower()
     return any(token.lower() in message for token in BROWSER_RECOVERY_MARKERS)
+
+
+def looks_like_cloudflare_challenge(html_text: str, title: str = "", url: str = "") -> bool:
+    haystack = " ".join(part for part in (html_text[:8000], title, url) if part).lower()
+    return any(
+        marker in haystack
+        for marker in (
+            "just a moment",
+            "cloudflare",
+            "turnstile",
+            "cf-turnstile",
+            "checking your browser",
+            "attention required",
+            "verify you are human",
+        )
+    )
 
 
 def slice_fragment(html_text: str, keyword: str) -> str:
@@ -1603,6 +2169,378 @@ def parse_stock(fragment: str) -> tuple[int | None, str]:
     return None, "未找到库存数字或售罄标记。"
 
 
+DISCOVERY_SKIP_URL_PARTS = (
+    "javascript:",
+    "mailto:",
+    "tel:",
+    "#",
+    "/login",
+    "/logout",
+    "/signin",
+    "/signup",
+    "/register",
+    "/account",
+    "/cart",
+    "/checkout",
+    "/contact",
+    "/about",
+    "/privacy",
+    "/terms",
+    "/support",
+    "/search",
+    "/blog",
+    "/news",
+    "/category",
+    "/categories",
+)
+DISCOVERY_ACTION_TEXTS = {
+    "order now",
+    "buy now",
+    "add to cart",
+    "checkout",
+    "purchase",
+    "view details",
+    "more info",
+    "learn more",
+    "立即订购",
+    "立即購買",
+    "立即下单",
+    "立即下單",
+    "加入购物车",
+    "加入購物車",
+    "现在购买",
+    "現在購買",
+    "可下单",
+    "可下單",
+    "可购买",
+    "可購買",
+    "预售",
+    "預售",
+    "预订",
+    "預訂",
+    "到货通知",
+    "到貨通知",
+}
+DISCOVERY_GENERIC_TEXTS = {
+    "home",
+    "index",
+    "about",
+    "contact",
+    "login",
+    "logout",
+    "sign in",
+    "sign up",
+    "register",
+    "cart",
+    "checkout",
+    "support",
+    "faq",
+    "privacy policy",
+    "terms",
+    "next",
+    "prev",
+    "previous",
+    "back",
+}
+HEADING_PATTERN = re.compile(r"<h[1-6]\b[^>]*>(?P<body>.*?)</h[1-6]>", re.IGNORECASE | re.DOTALL)
+ANCHOR_PATTERN = re.compile(r"<a\b(?P<attrs>[^>]*)>(?P<body>.*?)</a>", re.IGNORECASE | re.DOTALL)
+TITLE_ATTR_PATTERN = re.compile(r"\b(?P<key>[a-zA-Z_:][-a-zA-Z0-9_:.]*)\s*=\s*(?P<quote>['\"])(?P<value>.*?)\2", re.DOTALL)
+PRICE_PATTERN = re.compile(
+    r"(?:￥|¥|CNY|RMB|HK\$|USD|\$|€|£)\s*\d[\d,]*(?:\.\d{1,2})?",
+    re.IGNORECASE,
+)
+
+
+def first_non_empty(*values: Any) -> str:
+    for value in values:
+        if value is None:
+            continue
+        text = clean_fragment_text(str(value))
+        if text:
+            return text
+    return ""
+
+
+def parse_tag_attributes(raw_attrs: str) -> dict[str, str]:
+    attributes: dict[str, str] = {}
+    for match in TITLE_ATTR_PATTERN.finditer(raw_attrs or ""):
+        attributes[match.group("key").lower()] = html_module.unescape(match.group("value") or "").strip()
+    return attributes
+
+
+def normalize_candidate_title(value: Any) -> str:
+    text = clean_fragment_text(str(value or ""))
+    text = re.sub(r"\s+", " ", text).strip(" \t\r\n|•·-_/")
+    return text[:120]
+
+
+def normalize_candidate_url(source_url: str, href: str) -> str:
+    candidate = href.strip()
+    if not candidate:
+        return ""
+    resolved = urljoin(source_url, candidate)
+    resolved, _ = urldefrag(resolved)
+    return resolved
+
+
+def is_action_url(url: str) -> bool:
+    lowered = url.lower()
+    return any(part in lowered for part in ("cart.php?a=add", "/cart/add", "/checkout", "/order", "add-to-cart", "addtocart"))
+
+
+def is_likely_product_title(title: str) -> bool:
+    candidate = normalize_candidate_title(title)
+    if len(candidate) < 2:
+        return False
+    lowered = normalize_signal_text(candidate)
+    if lowered in DISCOVERY_GENERIC_TEXTS or lowered in DISCOVERY_ACTION_TEXTS:
+        return False
+    if any(token in lowered for token in ("next", "previous", "breadcrumb", "menu", "login", "cart", "checkout")) and len(candidate) < 24:
+        return False
+    return bool(re.search(r"[\u4e00-\u9fffA-Za-z0-9]", candidate))
+
+
+def extract_page_title(html_text: str) -> str:
+    match = re.search(r"<title[^>]*>(?P<body>.*?)</title>", html_text, re.IGNORECASE | re.DOTALL)
+    if match:
+        title = normalize_candidate_title(match.group("body"))
+        if title:
+            return title
+    heading = HEADING_PATTERN.search(html_text)
+    if heading:
+        title = normalize_candidate_title(heading.group("body"))
+        if title:
+            return title
+    return ""
+
+
+def extract_price_hint(fragment: str) -> str:
+    match = PRICE_PATTERN.search(html_module.unescape(fragment))
+    if match:
+        return normalize_candidate_title(match.group(0))
+    return ""
+
+
+def infer_source_item_key(source_url: str, title: str, monitor_url: str, item_url: str) -> str:
+    raw = f"{source_url}|{title}|{monitor_url}|{item_url}".lower().encode("utf-8", errors="ignore")
+    return hashlib.sha1(raw).hexdigest()[:20]
+
+
+def extract_heading_before(match_start: int, html_text: str, limit: int = 700) -> str:
+    segment = html_text[max(0, match_start - limit) : match_start]
+    titles = []
+    for heading in HEADING_PATTERN.finditer(segment):
+        title = normalize_candidate_title(heading.group("body"))
+        if title and is_likely_product_title(title):
+            titles.append(title)
+    return titles[-1] if titles else ""
+
+
+def extract_jsonld_catalog_candidates(html_text: str, source_url: str) -> list[dict[str, str]]:
+    candidates: list[dict[str, str]] = []
+
+    def add_candidate(title: str, monitor_url: str, item_url: str, price_hint: str, stock_hint: str, restock_hint: str, raw_payload: Any) -> None:
+        normalized_title = normalize_candidate_title(title)
+        if not is_likely_product_title(normalized_title):
+            return
+        monitor_url = normalize_candidate_url(source_url, monitor_url) if monitor_url else source_url
+        item_url = normalize_candidate_url(source_url, item_url) if item_url else monitor_url
+        key = infer_source_item_key(source_url, normalized_title, monitor_url, item_url)
+        candidates.append(
+            {
+                "source_item_key": key,
+                "title": normalized_title,
+                "keyword": normalized_title,
+                "monitor_url": monitor_url or source_url,
+                "item_url": item_url or monitor_url or source_url,
+                "price_hint": price_hint[:120],
+                "stock_hint": stock_hint[:80],
+                "restock_hint": restock_hint[:120],
+                "raw_payload": json.dumps(raw_payload, ensure_ascii=False)[:4000],
+            }
+        )
+
+    for match in JSON_SCRIPT_PATTERN.finditer(html_text):
+        body = html_module.unescape(match.group("body") or "").strip()
+        if not body:
+            continue
+        body = re.sub(r"(?is)^\s*(?:<!--|//<!\[CDATA\[)", "", body).strip()
+        body = re.sub(r"(?is)(?:-->|//\]\]>)\s*$", "", body).strip()
+        if "=" in body and not body.lstrip().startswith(("{", "[")):
+            body = body.split("=", 1)[1].strip().rstrip(";")
+        if not body.startswith(("{", "[")):
+            continue
+        try:
+            payload = json.loads(body)
+        except json.JSONDecodeError:
+            continue
+
+        def visit(value: Any) -> None:
+            if isinstance(value, dict):
+                type_value = normalize_signal_text(value.get("@type"))
+                if type_value in {"product", "itemlist", "listitem", "offer", "aggregateoffer"} or any(
+                    key in value for key in ("name", "title", "url", "offers")
+                ):
+                    offers = value.get("offers") if isinstance(value.get("offers"), dict) else {}
+                    title = first_non_empty(value.get("name"), value.get("title"), value.get("headline"))
+                    url = first_non_empty(value.get("url"), value.get("mainEntityOfPage"), value.get("item", {}).get("url") if isinstance(value.get("item"), dict) else "")
+                    price_hint = first_non_empty(
+                        value.get("price"),
+                        offers.get("price") if isinstance(offers, dict) else "",
+                        value.get("priceRange"),
+                    )
+                    stock_hint = first_non_empty(
+                        offers.get("availability") if isinstance(offers, dict) else "",
+                        value.get("availability"),
+                        value.get("stock"),
+                    )
+                    restock_hint = first_non_empty(
+                        offers.get("availabilityDate") if isinstance(offers, dict) else "",
+                        value.get("availabilityDate"),
+                        value.get("restockDate"),
+                        value.get("backOrderDate"),
+                    )
+                    if title:
+                        add_candidate(title, url or source_url, url or source_url, price_hint, stock_hint, restock_hint, value)
+                if "itemListElement" in value and isinstance(value["itemListElement"], list):
+                    for element in value["itemListElement"]:
+                        if isinstance(element, dict):
+                            item_value = element.get("item") if isinstance(element.get("item"), dict) else element
+                            visit(item_value)
+                for child in value.values():
+                    visit(child)
+            elif isinstance(value, list):
+                for child in value:
+                    visit(child)
+
+        visit(payload)
+
+    return candidates
+
+
+def discover_catalog_items(html_text: str, source_url: str) -> list[dict[str, str]]:
+    candidates: dict[str, dict[str, str]] = {}
+    source_url = source_url.strip()
+    if not html_text or not source_url:
+        return []
+
+    page_title = extract_page_title(html_text)
+    price_hint_global = extract_price_hint(html_text)
+
+    def register_candidate(
+        title: str,
+        monitor_url: str,
+        item_url: str,
+        snippet: str,
+        raw_payload: Any,
+        price_hint: str = "",
+        stock_hint: str = "",
+        restock_hint: str = "",
+    ) -> None:
+        normalized_title = normalize_candidate_title(title)
+        if not is_likely_product_title(normalized_title):
+            return
+        normalized_monitor = normalize_candidate_url(source_url, monitor_url) if monitor_url else source_url
+        normalized_item = normalize_candidate_url(source_url, item_url) if item_url else normalized_monitor
+        key = infer_source_item_key(source_url, normalized_title, normalized_monitor, normalized_item)
+        if key in candidates:
+            existing = candidates[key]
+            if len(snippet) > len(existing.get("raw_snippet", "")):
+                existing["raw_snippet"] = snippet[:4000]
+            if price_hint and not existing.get("price_hint"):
+                existing["price_hint"] = price_hint[:120]
+            if stock_hint and not existing.get("stock_hint"):
+                existing["stock_hint"] = stock_hint[:80]
+            if restock_hint and not existing.get("restock_hint"):
+                existing["restock_hint"] = restock_hint[:120]
+            return
+        candidates[key] = {
+            "source_item_key": key,
+            "title": normalized_title,
+            "keyword": normalized_title,
+            "monitor_url": normalized_monitor or source_url,
+            "item_url": normalized_item or normalized_monitor or source_url,
+            "price_hint": (price_hint or price_hint_global)[:120],
+            "stock_hint": stock_hint[:80],
+            "restock_hint": restock_hint[:120],
+            "raw_snippet": snippet[:4000],
+            "raw_payload": json.dumps(raw_payload, ensure_ascii=False)[:4000],
+        }
+
+    for json_candidate in extract_jsonld_catalog_candidates(html_text, source_url):
+        register_candidate(
+            json_candidate["title"],
+            json_candidate["monitor_url"],
+            json_candidate["item_url"],
+            json_candidate.get("raw_payload", ""),
+            json_candidate,
+            json_candidate.get("price_hint", ""),
+            json_candidate.get("stock_hint", ""),
+            json_candidate.get("restock_hint", ""),
+        )
+
+    for anchor in ANCHOR_PATTERN.finditer(html_text):
+        attrs = parse_tag_attributes(anchor.group("attrs") or "")
+        href = (attrs.get("href") or "").strip()
+        if not href:
+            continue
+        lowered_href = href.lower()
+        if any(part in lowered_href for part in DISCOVERY_SKIP_URL_PARTS) and not is_action_url(lowered_href):
+            continue
+        item_url = normalize_candidate_url(source_url, href)
+        monitor_url = source_url if is_action_url(href) else item_url
+        snippet_start = max(0, anchor.start() - 500)
+        snippet_end = min(len(html_text), anchor.end() + 1200)
+        snippet = html_text[snippet_start:snippet_end]
+        heading_title = extract_heading_before(anchor.start(), html_text)
+        body_title = normalize_candidate_title(anchor.group("body"))
+        title = first_non_empty(
+            attrs.get("data-title"),
+            attrs.get("aria-label"),
+            attrs.get("title"),
+            heading_title,
+            body_title,
+        )
+        if not title:
+            continue
+        cleaned_snippet = clean_fragment_text(snippet)
+        stock_value, stock_detail = parse_stock(snippet)
+        stock_hint = "" if stock_value is None else str(stock_value)
+        restock_hint = ""
+        if "补货" in stock_detail or "restock" in stock_detail.lower() or "到货" in stock_detail:
+            restock_hint = stock_detail
+        price_hint = extract_price_hint(snippet)
+        register_candidate(
+            title,
+            monitor_url,
+            item_url,
+            snippet,
+            {
+                "href": href,
+                "text": body_title,
+                "heading": heading_title,
+                "snippet_text": cleaned_snippet,
+            },
+            price_hint,
+            stock_hint,
+            restock_hint,
+        )
+
+    if not candidates and page_title:
+        register_candidate(
+            page_title,
+            source_url,
+            source_url,
+            html_text[:2000],
+            {"fallback": True, "page_title": page_title},
+            price_hint_global,
+            "",
+            "",
+        )
+
+    return list(candidates.values())
+
+
 def make_app() -> Flask:
     app = Flask(__name__)
     if ENABLE_PROXY_FIX:
@@ -1736,6 +2674,28 @@ def make_app() -> Flask:
             settings_payload = normalize_settings(load_settings(connection))
             tasks = connection.execute("SELECT * FROM tasks ORDER BY id DESC").fetchall()
             admin = connection.execute("SELECT username FROM admins LIMIT 1").fetchone()
+            source_rows = connection.execute("SELECT * FROM merchant_sources ORDER BY id DESC").fetchall()
+            item_rows = connection.execute("SELECT * FROM merchant_items ORDER BY updated_at DESC, id DESC LIMIT 120").fetchall()
+            task_source_rows = connection.execute(
+                "SELECT id, name, source_item_id FROM tasks WHERE source_item_id IS NOT NULL"
+            ).fetchall()
+            source_item_counts = {
+                row["source_id"]: row["count"]
+                for row in connection.execute(
+                    "SELECT source_id, COUNT(*) AS count FROM merchant_items GROUP BY source_id"
+                ).fetchall()
+            }
+            linked_counts = {
+                row["source_id"]: row["count"]
+                for row in connection.execute(
+                    """
+                    SELECT mi.source_id AS source_id, COUNT(*) AS count
+                    FROM merchant_items mi
+                    JOIN tasks t ON t.source_item_id = mi.id
+                    GROUP BY mi.source_id
+                    """
+                ).fetchall()
+            }
             logs = connection.execute(
                 """
                 SELECT level, scope, message, created_at
@@ -1744,20 +2704,58 @@ def make_app() -> Flask:
                 LIMIT 30
                 """
             ).fetchall()
-
+        task_lookup = {
+            int(row["source_item_id"]): row
+            for row in task_source_rows
+            if row["source_item_id"] is not None
+        }
+        source_rows_by_id = {row["id"]: row for row in source_rows}
+        catalog_sources = [
+            to_source_payload(
+                row,
+                source_item_counts.get(row["id"], 0),
+                linked_counts.get(row["id"], 0),
+            )
+            for row in source_rows
+        ]
+        catalog_items = [
+            to_merchant_item_payload(
+                row,
+                source_rows_by_id.get(row["source_id"]),
+                task_lookup.get(int(row["id"])),
+            )
+            for row in item_rows
+        ]
         in_stock_count = sum(1 for task in tasks if task["last_state"] == "in_stock")
         sold_out_count = sum(1 for task in tasks if task["last_state"] == "sold_out")
         unknown_count = sum(1 for task in tasks if task["last_state"] not in {"in_stock", "sold_out"})
+        catalog_new_count = sum(1 for item in item_rows if item["item_state"] == "new")
+        catalog_updated_count = sum(1 for item in item_rows if item["item_state"] == "updated")
+        catalog_archived_count = sum(1 for item in item_rows if item["item_state"] == "archived")
 
         return jsonify(
             {
                 "ok": True,
                 "tasks": [to_task_payload(task) for task in tasks],
+                "merchant": {
+                    "sources": catalog_sources,
+                    "items": catalog_items,
+                    "metrics": {
+                        "total_sources": len(source_rows),
+                        "active_sources": sum(1 for row in source_rows if row["active"]),
+                        "total_items": len(item_rows),
+                        "new_items": catalog_new_count,
+                        "updated_items": catalog_updated_count,
+                        "archived_items": catalog_archived_count,
+                        "linked_tasks": len(task_lookup),
+                    },
+                },
                 "settings": {
                     "telegram_bot_token_masked": mask_secret(settings_payload["telegram_bot_token"]),
                     "telegram_chat_id": settings_payload["telegram_chat_id"],
                     "monitor_debug_port": settings_payload["monitor_debug_port"],
                     "test_debug_port": settings_payload["test_debug_port"],
+                    "catalog_debug_port": settings_payload["catalog_debug_port"],
                     "poll_interval_seconds": settings_payload["poll_interval_seconds"],
                     "request_timeout_seconds": settings_payload["request_timeout_seconds"],
                     "telegram_ready": bool(
@@ -1799,34 +2797,8 @@ def make_app() -> Flask:
             return jsonify({"ok": False, "message": message}), 400
 
         timestamp = now_iso()
-        values = (
-            str(payload["name"]).strip(),
-            normalize_task_group(payload.get("group_name")),
-            str(payload["monitor_url"]).strip(),
-            str(payload["target_keyword"]).strip(),
-            str(payload["restock_template"]).strip(),
-            str(payload["soldout_template"]).strip(),
-            str(payload.get("button_1_text", "")).strip(),
-            str(payload.get("button_1_url", "")).strip(),
-            str(payload.get("button_2_text", "")).strip(),
-            str(payload.get("button_2_url", "")).strip(),
-            1 if payload.get("enabled", True) else 0,
-            timestamp,
-            timestamp,
-        )
         with open_connection() as connection:
-            cursor = connection.execute(
-                """
-                INSERT INTO tasks (
-                    name, group_name, monitor_url, target_keyword, restock_template, soldout_template,
-                    button_1_text, button_1_url, button_2_text, button_2_url,
-                    enabled, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                values,
-            )
-            connection.commit()
-            task_id = cursor.lastrowid
+            task_id = insert_task_record(connection, payload, timestamp)
         log_activity("info", "tasks", f"已创建任务 #{task_id}。")
         return jsonify({"ok": True, "message": "任务已创建。", "task_id": task_id})
 
@@ -1841,15 +2813,18 @@ def make_app() -> Flask:
 
         timestamp = now_iso()
         with open_connection() as connection:
-            existing = connection.execute("SELECT id FROM tasks WHERE id = ?", (task_id,)).fetchone()
+            existing = connection.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()
             if not existing:
                 return jsonify({"ok": False, "message": "任务不存在。"}), 404
+            source_fields = normalize_task_source_fields(payload, existing)
             connection.execute(
                 """
                 UPDATE tasks
                 SET name = ?, group_name = ?, monitor_url = ?, target_keyword = ?, restock_template = ?,
                     soldout_template = ?, button_1_text = ?, button_1_url = ?,
-                    button_2_text = ?, button_2_url = ?, enabled = ?, updated_at = ?
+                    button_2_text = ?, button_2_url = ?, source_item_id = ?, source_item_key = ?,
+                    source_source_url = ?, source_source_name = ?, source_item_url = ?, source_snapshot = ?,
+                    source_last_sync_at = ?, enabled = ?, updated_at = ?
                 WHERE id = ?
                 """,
                 (
@@ -1857,12 +2832,19 @@ def make_app() -> Flask:
                     normalize_task_group(payload.get("group_name")),
                     str(payload["monitor_url"]).strip(),
                     str(payload["target_keyword"]).strip(),
-                    str(payload["restock_template"]).strip(),
-                    str(payload["soldout_template"]).strip(),
+                    str(payload["restock_template"]).strip() or DEFAULT_RESTOCK_TEMPLATE,
+                    str(payload["soldout_template"]).strip() or DEFAULT_SOLDOUT_TEMPLATE,
                     str(payload.get("button_1_text", "")).strip(),
                     str(payload.get("button_1_url", "")).strip(),
                     str(payload.get("button_2_text", "")).strip(),
                     str(payload.get("button_2_url", "")).strip(),
+                    source_fields["source_item_id"],
+                    source_fields["source_item_key"],
+                    source_fields["source_source_url"],
+                    source_fields["source_source_name"],
+                    source_fields["source_item_url"],
+                    source_fields["source_snapshot"],
+                    source_fields["source_last_sync_at"] or timestamp,
                     1 if payload.get("enabled", True) else 0,
                     timestamp,
                     task_id,
@@ -1913,6 +2895,115 @@ def make_app() -> Flask:
             return jsonify({"ok": False, "message": str(exc)}), 400
         return jsonify({"ok": True, "message": "测试消息已发送。", "result": result})
 
+    @app.route("/api/merchant/import", methods=["POST"])
+    @login_required
+    @limiter.limit("6 per minute")
+    def import_merchant_source():
+        payload = read_json()
+        source_url = str(payload.get("source_url", "")).strip()
+        source_name = str(payload.get("source_name", "")).strip()
+        auto_promote = bool(payload.get("auto_promote", True))
+        if not source_url:
+            return jsonify({"ok": False, "message": "商家页面链接不能为空。"}), 400
+        if not validate_http_url(source_url):
+            return jsonify({"ok": False, "message": "商家页面链接必须是有效的 http(s) 地址。"}), 400
+
+        try:
+            result = app.extensions["monitor_engine"].import_merchant_source(
+                source_url,
+                source_name,
+                app.extensions["monitor_engine"].get_runtime_settings(),
+                auto_promote=auto_promote,
+            )
+        except Exception as exc:
+            return jsonify({"ok": False, "message": str(exc)}), 400
+
+        log_activity(
+            "info",
+            "catalog",
+            f"已导入商家来源 {result.source_name}，发现 {result.scanned_count} 个候选商品，自动生成 {result.promoted_count} 个任务。",
+        )
+        return jsonify(
+            {
+                "ok": True,
+                "message": "商家页面已导入。",
+                "result": {
+                    "source_id": result.source_id,
+                    "source_url": result.source_url,
+                    "source_name": result.source_name,
+                    "scanned_count": result.scanned_count,
+                    "upserted_count": result.upserted_count,
+                    "promoted_count": result.promoted_count,
+                    "archived_count": result.archived_count,
+                    "last_sync_at": result.last_sync_at,
+                    "items": result.items,
+                },
+            }
+        )
+
+    @app.route("/api/merchant/sources/<int:source_id>/sync", methods=["POST"])
+    @login_required
+    @limiter.limit("6 per minute")
+    def resync_merchant_source(source_id: int):
+        payload = read_json()
+        auto_promote = bool(payload.get("auto_promote", True))
+        with open_connection() as connection:
+            source = connection.execute("SELECT * FROM merchant_sources WHERE id = ?", (source_id,)).fetchone()
+        if not source:
+            return jsonify({"ok": False, "message": "商家来源不存在。"}), 404
+        try:
+            result = app.extensions["monitor_engine"].import_merchant_source(
+                source["source_url"],
+                source["source_name"],
+                app.extensions["monitor_engine"].get_runtime_settings(),
+                auto_promote=auto_promote,
+            )
+        except Exception as exc:
+            with open_connection() as connection:
+                connection.execute(
+                    "UPDATE merchant_sources SET last_error = ?, updated_at = ? WHERE id = ?",
+                    (str(exc)[:1000], now_iso(), source_id),
+                )
+                connection.commit()
+            return jsonify({"ok": False, "message": str(exc)}), 400
+
+        log_activity("info", "catalog", f"已同步商家来源 #{source_id}，发现 {result.scanned_count} 个候选商品。")
+        return jsonify(
+            {
+                "ok": True,
+                "message": "商家来源已同步。",
+                "result": {
+                    "source_id": result.source_id,
+                    "source_url": result.source_url,
+                    "source_name": result.source_name,
+                    "scanned_count": result.scanned_count,
+                    "upserted_count": result.upserted_count,
+                    "promoted_count": result.promoted_count,
+                    "archived_count": result.archived_count,
+                    "last_sync_at": result.last_sync_at,
+                    "items": result.items,
+                },
+            }
+        )
+
+    @app.route("/api/merchant/sources/<int:source_id>/toggle", methods=["POST"])
+    @login_required
+    @limiter.limit("8 per minute")
+    def toggle_merchant_source(source_id: int):
+        payload = read_json()
+        active = bool(payload.get("active", True))
+        with open_connection() as connection:
+            source = connection.execute("SELECT id, source_name, active FROM merchant_sources WHERE id = ?", (source_id,)).fetchone()
+            if not source:
+                return jsonify({"ok": False, "message": "商家来源不存在。"}), 404
+            connection.execute(
+                "UPDATE merchant_sources SET active = ?, updated_at = ? WHERE id = ?",
+                (1 if active else 0, now_iso(), source_id),
+            )
+            connection.commit()
+        log_activity("info", "catalog", f"商家来源 #{source_id} 已{'启用' if active else '停用'}。")
+        return jsonify({"ok": True, "message": "商家来源状态已更新。", "result": {"source_id": source_id, "active": active}})
+
     @app.route("/api/settings/telegram", methods=["POST"])
     @login_required
     @limiter.limit(GENERAL_MUTATION_LIMIT)
@@ -1929,7 +3020,7 @@ def make_app() -> Flask:
         if chat_id:
             updates["telegram_chat_id"] = chat_id
 
-        for key in ("monitor_debug_port", "test_debug_port"):
+        for key in ("monitor_debug_port", "test_debug_port", "catalog_debug_port"):
             if key in payload:
                 try:
                     port = int(payload[key])
@@ -1941,9 +3032,10 @@ def make_app() -> Flask:
 
         monitor_port = int(updates.get("monitor_debug_port", current_settings["monitor_debug_port"]))
         test_port = int(updates.get("test_debug_port", current_settings["test_debug_port"]))
-        if monitor_port == test_port:
-            return jsonify({"ok": False, "message": "主监控端口和测试推送端口不能相同。"}), 400
-        if monitor_port == DEFAULT_APP_PORT or test_port == DEFAULT_APP_PORT:
+        catalog_port = int(updates.get("catalog_debug_port", current_settings["catalog_debug_port"]))
+        if len({monitor_port, test_port, catalog_port}) < 3:
+            return jsonify({"ok": False, "message": "三个浏览器调试端口不能重复。"}), 400
+        if DEFAULT_APP_PORT in {monitor_port, test_port, catalog_port}:
             return jsonify({"ok": False, "message": "浏览器调试端口不能与面板监听端口相同。"}), 400
 
         for key, minimum, maximum in (

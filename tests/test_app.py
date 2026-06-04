@@ -325,6 +325,112 @@ class PortalAppTestCase(unittest.TestCase):
         self.assertIn("system", payload)
         self.assertIn("version", payload["system"])
 
+    def test_merchant_import_discovers_products_and_promotes_tasks(self) -> None:
+        _, headers = self.login()
+        engine = self.app.extensions["monitor_engine"]
+
+        class FakeCatalogBrowser:
+            def __init__(self) -> None:
+                self.calls: list[tuple[str, int]] = []
+
+            def fetch_html(self, url: str, timeout_seconds: int) -> str:
+                self.calls.append((url, timeout_seconds))
+                return """
+                <html>
+                  <head><title>Acme Hosting</title></head>
+                  <body>
+                    <div class="package">
+                      <h3>HK-CMI Unlimited</h3>
+                      <p>库存 9</p>
+                      <a href="cart.php?a=add&pid=21">Order Now</a>
+                    </div>
+                    <div class="package">
+                      <h3>Tokyo NVMe</h3>
+                      <p>Only 2 left</p>
+                      <a href="/cart.php?a=add&pid=22">Order Now</a>
+                    </div>
+                  </body>
+                </html>
+                """
+
+            def rebuild(self, reason: str) -> None:
+                raise AssertionError(reason)
+
+        original_browser = engine.catalog_browser
+        fake_browser = FakeCatalogBrowser()
+        engine.catalog_browser = fake_browser
+        try:
+            result = engine.import_merchant_source(
+                "https://merchant.example.com/products",
+                "",
+                engine.get_runtime_settings(),
+                auto_promote=True,
+            )
+        finally:
+            engine.catalog_browser = original_browser
+
+        self.assertEqual(result.scanned_count, 2)
+        self.assertEqual(result.promoted_count, 2)
+        self.assertEqual(result.source_name, "Acme Hosting")
+        self.assertEqual(len(result.items), 2)
+        self.assertEqual(len(fake_browser.calls), 1)
+
+        with app_module.open_connection() as connection:
+            source_count = connection.execute("SELECT COUNT(*) FROM merchant_sources").fetchone()[0]
+            item_count = connection.execute("SELECT COUNT(*) FROM merchant_items").fetchone()[0]
+            task_count = connection.execute("SELECT COUNT(*) FROM tasks WHERE source_item_id IS NOT NULL").fetchone()[0]
+
+        self.assertEqual(source_count, 1)
+        self.assertEqual(item_count, 2)
+        self.assertEqual(task_count, 2)
+
+        snapshot = self.client.get(
+            f"{app_module.PORTAL_PATH}/api/snapshot",
+            headers=headers,
+            base_url=BASE_URL,
+        )
+        payload = snapshot.get_json()
+        self.assertEqual(payload["merchant"]["metrics"]["total_sources"], 1)
+        self.assertEqual(payload["merchant"]["metrics"]["total_items"], 2)
+        self.assertEqual(payload["merchant"]["metrics"]["linked_tasks"], 2)
+
+    def test_merchant_source_toggle_updates_activity_and_snapshot(self) -> None:
+        _, headers = self.login()
+        with app_module.open_connection() as connection:
+            connection.execute(
+                """
+                INSERT INTO merchant_sources (
+                    source_url, source_name, active, discovered_count, last_sync_at, last_error, created_at, updated_at
+                ) VALUES (?, ?, 1, 0, ?, '', ?, ?)
+                """,
+                (
+                    "https://merchant.example.com/products",
+                    "Merchant One",
+                    app_module.now_iso(),
+                    app_module.now_iso(),
+                    app_module.now_iso(),
+                ),
+            )
+            connection.commit()
+            source_id = connection.execute("SELECT id FROM merchant_sources LIMIT 1").fetchone()[0]
+
+        response = self.client.post(
+            f"{app_module.PORTAL_PATH}/api/merchant/sources/{source_id}/toggle",
+            headers=headers,
+            base_url=BASE_URL,
+            json={"active": False},
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(response.get_json()["result"]["active"])
+
+        refreshed = self.client.get(
+            f"{app_module.PORTAL_PATH}/api/snapshot",
+            headers=self.browser_headers(),
+            base_url=BASE_URL,
+        )
+        merchant_sources = refreshed.get_json()["merchant"]["sources"]
+        self.assertFalse(merchant_sources[0]["active"])
+
     def test_system_upgrade_endpoint_reports_unsupported_local_environment(self) -> None:
         app_module.UPGRADE_SERVICE_NAME = "noaff-monitor-missing-test-upgrade.service"
         _, headers = self.login()
@@ -567,7 +673,7 @@ class PortalAppTestCase(unittest.TestCase):
             json={"monitor_debug_port": 9223, "test_debug_port": 9223},
         )
         self.assertEqual(same_port.status_code, 400)
-        self.assertIn("不能相同", same_port.get_json()["message"])
+        self.assertIn("不能重复", same_port.get_json()["message"])
 
         app_port_collision = self.client.post(
             f"{app_module.PORTAL_PATH}/api/settings/telegram",
@@ -578,12 +684,94 @@ class PortalAppTestCase(unittest.TestCase):
         self.assertEqual(app_port_collision.status_code, 400)
         self.assertIn("面板监听端口", app_port_collision.get_json()["message"])
 
+        catalog_port_update = self.client.post(
+            f"{app_module.PORTAL_PATH}/api/settings/telegram",
+            headers=headers,
+            base_url=BASE_URL,
+            json={"catalog_debug_port": 9446},
+        )
+        self.assertEqual(catalog_port_update.status_code, 200)
+        self.assertTrue(catalog_port_update.get_json()["ok"])
+
     def test_browser_auto_heal_recognizes_chinese_connection_failure(self) -> None:
         self.assertTrue(
             app_module.should_auto_heal(
                 RuntimeError("浏览器连接失败。地址：127.0.0.1:9223 提示：用户文件夹和已打开的浏览器冲突")
             )
         )
+
+    def test_browser_fetch_html_recovers_from_cloudflare_challenge_page(self) -> None:
+        harness = app_module.BrowserHarness("catalog", 9444, True, "")
+
+        class FakeWait:
+            def doc_loaded(self, timeout=None, raise_err=None):
+                return True
+
+        class FakePage:
+            def __init__(self) -> None:
+                self.html = "<html><title>Just a moment...</title><body><div id=\"cf-turnstile\">Cloudflare</div></body></html>"
+                self.title = "Just a moment..."
+                self.wait = FakeWait()
+                self.refresh_calls = 0
+
+            def get(self, url, timeout=None, retry=None, interval=None):
+                return True
+
+            def refresh(self, ignore_cache=False):
+                self.refresh_calls += 1
+                self.html = "<html><title>Products</title><body><section>HK-CMI <strong>7</strong></section></body></html>"
+                self.title = "Products"
+
+            def quit(self, timeout=5, force=True, del_data=False):
+                return None
+
+        page = FakePage()
+        original_ensure_page = harness.ensure_page
+        try:
+            harness.ensure_page = lambda: page
+            html_text = harness.fetch_html("https://example.com/products", 10)
+        finally:
+            harness.ensure_page = original_ensure_page
+            harness.shutdown()
+
+        self.assertIn("Products", html_text)
+        self.assertEqual(page.refresh_calls, 1)
+
+    def test_browser_fetch_html_raises_after_persistent_cloudflare_challenge(self) -> None:
+        harness = app_module.BrowserHarness("catalog", 9444, True, "")
+
+        class FakeWait:
+            def doc_loaded(self, timeout=None, raise_err=None):
+                return True
+
+        class FakePage:
+            def __init__(self) -> None:
+                self.html = "<html><title>Just a moment...</title><body><div id=\"cf-turnstile\">Cloudflare</div></body></html>"
+                self.title = "Just a moment..."
+                self.wait = FakeWait()
+                self.refresh_calls = 0
+
+            def get(self, url, timeout=None, retry=None, interval=None):
+                return True
+
+            def refresh(self, ignore_cache=False):
+                self.refresh_calls += 1
+
+            def quit(self, timeout=5, force=True, del_data=False):
+                return None
+
+        page = FakePage()
+        original_ensure_page = harness.ensure_page
+        try:
+            harness.ensure_page = lambda: page
+            with self.assertRaises(RuntimeError) as ctx:
+                harness.fetch_html("https://example.com/products", 10)
+        finally:
+            harness.ensure_page = original_ensure_page
+            harness.shutdown()
+
+        self.assertIn("Cloudflare challenge", str(ctx.exception))
+        self.assertGreaterEqual(page.refresh_calls, 3)
 
     def test_browser_profile_lock_cleanup_removes_stale_chrome_locks(self) -> None:
         harness = app_module.BrowserHarness("unit", 9444, True, "")

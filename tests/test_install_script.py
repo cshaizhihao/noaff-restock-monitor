@@ -89,6 +89,7 @@ class InstallScriptTestCase(unittest.TestCase):
         self.assertIn("NOAFF installer validation passed.", output)
         self.assertIn("APP_BIND:          127.0.0.1:7777", output)
         self.assertIn("PUBLIC_HTTPS_PORT: 443", output)
+        self.assertIn("MONITOR/TEST/CAT CDP: 9223/9334/9445", output)
 
     def test_validate_only_accepts_ip_mode_without_domain(self) -> None:
         output = self.assert_shell_ok("ACCESS_MODE=ip APP_PORT=7777 bash install.sh --validate-only")
@@ -644,8 +645,9 @@ EOF
                 FQDN=monitor.example.com
                 CERTBOT_EMAIL=ops@noaff.dev
                 CF_RECORD_PROXIED=false
+                CATALOG_DEBUG_PORT=9446
                 write_env_file
-                grep -E '^(DEPLOY_MODE|ACCESS_MODE|ENABLE_NGINX|ENABLE_TLS|CERT_MODE|APP_PORT|PUBLIC_APP_PORT|FQDN|CERTBOT_EMAIL|CF_RECORD_PROXIED)=' "$APP_DIR/.env"
+                grep -E '^(DEPLOY_MODE|ACCESS_MODE|ENABLE_NGINX|ENABLE_TLS|CERT_MODE|APP_PORT|PUBLIC_APP_PORT|FQDN|CERTBOT_EMAIL|CF_RECORD_PROXIED|CATALOG_DEBUG_PORT)=' "$APP_DIR/.env"
                 """
             )
         )
@@ -654,6 +656,7 @@ EOF
         self.assertIn("PUBLIC_APP_PORT=8787", output)
         self.assertIn("FQDN=monitor.example.com", output)
         self.assertIn("CERTBOT_EMAIL=ops@noaff.dev", output)
+        self.assertIn("CATALOG_DEBUG_PORT=9446", output)
 
     def test_non_git_existing_app_dir_is_backed_up_and_data_restored(self) -> None:
         output = self.assert_shell_ok(

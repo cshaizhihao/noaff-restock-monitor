@@ -4,6 +4,7 @@
     let csrfToken = context.csrfToken || document.querySelector('meta[name="csrf-token"]')?.content || "";
     let snapshotTimer = null;
     let currentTasks = new Map();
+    let currentMerchant = { sources: [], items: [], metrics: {} };
     let currentSystem = null;
     let currentView = "tasks";
     let tasksRendered = false;
@@ -45,8 +46,20 @@
         settingsChatId: document.getElementById("settings-chat-id"),
         settingsMonitorPort: document.getElementById("settings-monitor-port"),
         settingsTestPort: document.getElementById("settings-test-port"),
+        settingsCatalogPort: document.getElementById("settings-catalog-port"),
         settingsPollInterval: document.getElementById("settings-poll-interval"),
         settingsTimeout: document.getElementById("settings-timeout"),
+        merchantForm: document.getElementById("merchant-form"),
+        merchantSourceUrl: document.getElementById("merchant-source-url"),
+        merchantSourceName: document.getElementById("merchant-source-name"),
+        merchantAutoPromote: document.getElementById("merchant-auto-promote"),
+        merchantImportButton: document.getElementById("merchant-import-button"),
+        merchantImportButtonLabel: document.getElementById("merchant-import-button-label"),
+        merchantMetricSources: document.getElementById("merchant-metric-sources"),
+        merchantMetricItems: document.getElementById("merchant-metric-items"),
+        merchantMetricLinked: document.getElementById("merchant-metric-linked"),
+        merchantSourceList: document.getElementById("merchant-source-list"),
+        merchantItemList: document.getElementById("merchant-item-list"),
         systemVersion: document.getElementById("system-version"),
         systemBranch: document.getElementById("system-branch"),
         upgradeServiceState: document.getElementById("upgrade-service-state"),
@@ -309,6 +322,7 @@
         syncInputValue(els.settingsChatId, settings.telegram_chat_id || "");
         syncInputValue(els.settingsMonitorPort, settings.monitor_debug_port || 9223);
         syncInputValue(els.settingsTestPort, settings.test_debug_port || 9334);
+        syncInputValue(els.settingsCatalogPort, settings.catalog_debug_port || 9445);
         syncInputValue(els.settingsPollInterval, settings.poll_interval_seconds || 45);
         syncInputValue(els.settingsTimeout, settings.request_timeout_seconds || 25);
     }
@@ -345,6 +359,100 @@
     function renderAdmin(admin) {
         els.adminIdentity.textContent = admin.username ? `管理员：${admin.username}` : "管理员";
         syncInputValue(els.profileUsername, admin.username || "");
+    }
+
+    function merchantStateMeta(itemState) {
+        if (itemState === "new") return ["border-emerald-500/20 bg-emerald-500/10 text-emerald-200", "新发现"];
+        if (itemState === "updated") return ["border-sky-500/20 bg-sky-500/10 text-sky-200", "已更新"];
+        if (itemState === "archived") return ["border-slate-700 bg-slate-900/70 text-slate-400", "已归档"];
+        return ["border-slate-700 bg-slate-900/70 text-slate-400", "未知"];
+    }
+
+    function renderMerchant(merchant) {
+        currentMerchant = merchant || { sources: [], items: [], metrics: {} };
+        const sources = Array.isArray(currentMerchant.sources) ? currentMerchant.sources : [];
+        const items = Array.isArray(currentMerchant.items) ? currentMerchant.items : [];
+        const metrics = currentMerchant.metrics || {};
+
+        if (els.merchantMetricSources) els.merchantMetricSources.textContent = metrics.total_sources ?? 0;
+        if (els.merchantMetricItems) els.merchantMetricItems.textContent = metrics.total_items ?? 0;
+        if (els.merchantMetricLinked) els.merchantMetricLinked.textContent = metrics.linked_tasks ?? 0;
+
+        if (els.merchantSourceList) {
+            if (!sources.length) {
+                els.merchantSourceList.innerHTML = '<p class="text-sm text-slate-500">暂无导入来源，先填一个商家商品页试试。</p>';
+            } else {
+                els.merchantSourceList.innerHTML = sources.map((source) => {
+                    const statusClass = source.active ? "text-emerald-300" : "text-slate-500";
+                    const statusText = source.active ? "ACTIVE" : "PAUSED";
+                    const lastSync = source.last_sync_at ? formatTime(source.last_sync_at) : "尚未同步";
+                    const lastError = source.last_error ? `<p class="mt-2 truncate-two text-sm text-rose-300">${escapeHtml(source.last_error)}</p>` : "";
+                    return `
+                        <article class="rounded-xl border border-slate-800/80 bg-slate-950/50 p-4">
+                            <div class="flex flex-wrap items-start justify-between gap-3">
+                                <div class="min-w-0">
+                                    <h4 class="truncate text-sm font-bold text-white">${escapeHtml(source.source_name || source.source_url)}</h4>
+                                    <p class="mt-1 truncate font-mono text-[11px] text-slate-500">${escapeHtml(source.source_url)}</p>
+                                </div>
+                                <span class="font-mono text-[11px] ${statusClass}">${statusText}</span>
+                            </div>
+                            <div class="mt-3 flex flex-wrap gap-2 text-[11px] font-mono text-slate-400">
+                                <span class="rounded-full border border-slate-700 bg-slate-900/80 px-2.5 py-1">商品 ${escapeHtml(source.item_count ?? 0)}</span>
+                                <span class="rounded-full border border-slate-700 bg-slate-900/80 px-2.5 py-1">关联 ${escapeHtml(source.linked_count ?? 0)}</span>
+                                <span class="rounded-full border border-slate-700 bg-slate-900/80 px-2.5 py-1">最后同步 ${escapeHtml(lastSync)}</span>
+                            </div>
+                            ${lastError}
+                            <div class="mt-3 flex justify-end">
+                                <div class="flex flex-wrap gap-2">
+                                    <button type="button" class="ghost-button !min-h-9 !rounded-lg !px-3 !py-2 text-[12px]" data-merchant-action="sync-source" data-source-id="${source.id}">
+                                        同步
+                                    </button>
+                                    <button type="button" class="ghost-button !min-h-9 !rounded-lg !px-3 !py-2 text-[12px]" data-merchant-action="toggle-source" data-source-id="${source.id}" data-active="${source.active ? 'true' : 'false'}">
+                                        ${source.active ? "停用" : "启用"}
+                                    </button>
+                                </div>
+                            </div>
+                        </article>
+                    `;
+                }).join("");
+            }
+        }
+
+        if (els.merchantItemList) {
+            if (!items.length) {
+                els.merchantItemList.innerHTML = '<p class="text-sm text-slate-500">暂无商品记录，导入后会自动生成并联动到任务池。</p>';
+            } else {
+                els.merchantItemList.innerHTML = items.map((item) => {
+                    const [badgeClass, badgeText] = merchantStateMeta(item.item_state);
+                    const linkedTask = item.task_id && currentTasks.get(String(item.task_id));
+                    const sourceLabel = item.source_name || item.source_url || "未知来源";
+                    const actionLabel = linkedTask ? "打开任务" : "未关联";
+                    return `
+                        <article class="rounded-xl border border-slate-800/80 bg-slate-950/50 p-4">
+                            <div class="flex flex-wrap items-start justify-between gap-3">
+                                <div class="min-w-0">
+                                    <h4 class="truncate text-sm font-bold text-white">${escapeHtml(item.title)}</h4>
+                                    <p class="mt-1 truncate font-mono text-[11px] text-slate-500">${escapeHtml(sourceLabel)}</p>
+                                </div>
+                                <span class="rounded-full border px-2.5 py-1 font-mono text-[11px] ${badgeClass}">${badgeText}</span>
+                            </div>
+                            <div class="mt-3 grid gap-2 text-[11px] font-mono text-slate-400 sm:grid-cols-2">
+                                <span class="truncate rounded-lg border border-slate-800 bg-slate-900/70 px-2.5 py-1">关键词：${escapeHtml(item.keyword)}</span>
+                                <span class="truncate rounded-lg border border-slate-800 bg-slate-900/70 px-2.5 py-1">价格：${escapeHtml(item.price_hint || "-")}</span>
+                                <span class="truncate rounded-lg border border-slate-800 bg-slate-900/70 px-2.5 py-1">库存：${escapeHtml(item.stock_hint || "-")}</span>
+                                <span class="truncate rounded-lg border border-slate-800 bg-slate-900/70 px-2.5 py-1">补货：${escapeHtml(item.restock_hint || "-")}</span>
+                            </div>
+                            <div class="mt-3 flex flex-wrap items-center justify-between gap-3">
+                                <p class="truncate font-mono text-[11px] text-slate-500">${escapeHtml(item.item_url || item.monitor_url || "")}</p>
+                                <button type="button" class="ghost-button !min-h-9 !rounded-lg !px-3 !py-2 text-[12px]" data-merchant-action="open-task" data-task-id="${item.task_id || ""}" ${linkedTask ? "" : "disabled"}>
+                                    ${actionLabel}
+                                </button>
+                            </div>
+                        </article>
+                    `;
+                }).join("");
+            }
+        }
     }
 
     function renderLogs(logs) {
@@ -410,6 +518,7 @@
                     <div class="mb-5 pr-28">
                         <h3 class="mb-2 truncate text-xl font-bold text-white" title="${escapeHtml(task.name)}">${escapeHtml(task.name)}</h3>
                         <p class="truncate font-mono text-[13px] text-slate-500" title="${escapeHtml(task.monitor_url)}">${escapeHtml(task.monitor_url)}</p>
+                        ${task.source_source_name ? `<p class="mt-2 truncate font-mono text-[11px] text-slate-600">来源：${escapeHtml(task.source_source_name)}${task.source_item_url ? ` · ${escapeHtml(task.source_item_url)}` : ""}</p>` : ""}
                     </div>
 
                     <div class="keyword-chip mb-4">
@@ -547,6 +656,7 @@
         renderAdmin(data.admin || {});
         renderLogs(data.logs || []);
         renderTasks(data.tasks || [], initial);
+        renderMerchant(data.merchant || {});
     }
 
     async function loadSnapshot(initial = false) {
@@ -583,6 +693,52 @@
             button_2_url: els.taskButton2Url.value.trim(),
             enabled: els.taskEnabled.checked
         };
+    }
+
+    function collectMerchantPayload() {
+        return {
+            source_url: els.merchantSourceUrl.value.trim(),
+            source_name: els.merchantSourceName.value.trim(),
+            auto_promote: Boolean(els.merchantAutoPromote?.checked)
+        };
+    }
+
+    async function handleMerchantAction(button) {
+        const action = button.dataset.merchantAction;
+        if (action === "open-task") {
+            const taskId = button.dataset.taskId;
+            const task = currentTasks.get(String(taskId));
+            if (task) {
+                openTaskModal(task);
+            }
+            return;
+        }
+        if (action !== "sync-source" && action !== "toggle-source") return;
+        const sourceId = button.dataset.sourceId;
+        if (!sourceId) return;
+
+        button.disabled = true;
+        try {
+            if (action === "sync-source") {
+                await apiFetch(`/api/merchant/sources/${sourceId}/sync`, {
+                    method: "POST",
+                    body: JSON.stringify({ auto_promote: true })
+                });
+                showToast("商家来源已同步。");
+            } else {
+                const nextActive = button.dataset.active !== "true";
+                await apiFetch(`/api/merchant/sources/${sourceId}/toggle`, {
+                    method: "POST",
+                    body: JSON.stringify({ active: nextActive })
+                });
+                showToast(nextActive ? "商家来源已启用。" : "商家来源已停用。");
+            }
+            await loadSnapshot(false);
+        } catch (error) {
+            showToast(error.message, "error");
+        } finally {
+            button.disabled = false;
+        }
     }
 
     async function handleTaskAction(button) {
@@ -744,6 +900,20 @@
         }
     });
 
+    els.merchantSourceList?.addEventListener("click", (event) => {
+        const actionButton = event.target.closest("[data-merchant-action]");
+        if (actionButton) {
+            handleMerchantAction(actionButton);
+        }
+    });
+
+    els.merchantItemList?.addEventListener("click", (event) => {
+        const actionButton = event.target.closest("[data-merchant-action]");
+        if (actionButton) {
+            handleMerchantAction(actionButton);
+        }
+    });
+
     els.taskForm?.addEventListener("submit", async (event) => {
         event.preventDefault();
         const submit = els.taskSubmitButton;
@@ -773,6 +943,7 @@
             telegram_chat_id: els.settingsChatId.value.trim(),
             monitor_debug_port: Number(els.settingsMonitorPort.value),
             test_debug_port: Number(els.settingsTestPort.value),
+            catalog_debug_port: Number(els.settingsCatalogPort.value),
             poll_interval_seconds: Number(els.settingsPollInterval.value),
             request_timeout_seconds: Number(els.settingsTimeout.value)
         };
@@ -791,6 +962,34 @@
             showToast(error.message, "error");
         } finally {
             submit.disabled = false;
+        }
+    });
+
+    els.merchantForm?.addEventListener("submit", async (event) => {
+        event.preventDefault();
+        const submit = event.submitter;
+        submit.disabled = true;
+        const originalLabel = els.merchantImportButtonLabel?.textContent || "";
+        if (els.merchantImportButtonLabel) {
+            els.merchantImportButtonLabel.textContent = "导入中...";
+        }
+        try {
+            const data = await apiFetch("/api/merchant/import", {
+                method: "POST",
+                body: JSON.stringify(collectMerchantPayload())
+            });
+            showToast(`商家页面已导入：${data.result?.scanned_count ?? 0} 个候选商品，自动生成 ${data.result?.promoted_count ?? 0} 个任务。`);
+            if (els.merchantSourceName) {
+                els.merchantSourceName.value = "";
+            }
+            await loadSnapshot(false);
+        } catch (error) {
+            showToast(error.message, "error");
+        } finally {
+            submit.disabled = false;
+            if (els.merchantImportButtonLabel) {
+                els.merchantImportButtonLabel.textContent = originalLabel || "开始导入";
+            }
         }
     });
 

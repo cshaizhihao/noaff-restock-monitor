@@ -107,6 +107,7 @@ ACCESS_MODE=domain-direct FQDN=monitor.example.com CERTBOT_EMAIL=your-real-email
 
 - 🎛️ 监控任务 CRUD
 - 🧩 商品名称、监控链接、精准关键词、补货文案、售罄文案
+- 🏪 商家页面一键导入、来源同步与启停管理
 - 🔗 两组 Telegram 底部透明按钮
 - 🔐 管理员账号密码后台修改
 - 📊 AJAX 无刷新轮询，骨架屏加载
@@ -156,6 +157,7 @@ ACCESS_MODE=domain-direct FQDN=monitor.example.com CERTBOT_EMAIL=your-real-email
 | `CERTBOT_EMAIL` | 启用 HTTPS 时需要 | 空 |
 | `MONITOR_DEBUG_PORT` | 主监控浏览器端口 | `9223` |
 | `TEST_DEBUG_PORT` | 测试推送浏览器端口 | `9334` |
+| `CATALOG_DEBUG_PORT` | 商家导入浏览器端口 | `9445` |
 
 域名模式会自动清理用户输入中的协议、端口和路径，例如 `https://monitor.example.com:20443/xxx` 会归一化为 `monitor.example.com`，最终面板地址固定输出为 `https://monitor.example.com`。
 
