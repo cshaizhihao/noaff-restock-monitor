@@ -2079,7 +2079,7 @@ with sqlite3.connect(db_path) as connection:
 
 path = pathlib.Path(bootstrap_path)
 path.parent.mkdir(parents=True, exist_ok=True)
-path.write_text(f"username={username}\npassword={password}\npanel_path=/\n", encoding="utf-8")
+path.write_text(f"username={username}\npassword={password}\n", encoding="utf-8")
 PY
 
   chmod 600 "$bootstrap_path" || true
@@ -2090,7 +2090,6 @@ PY
   log "管理员密码已重置。"
   echo "用户名:    ${username}"
   echo "临时凭据:  ${bootstrap_path}"
-  echo "面板地址:  /"
   warn "请登录后立即在后台修改密码，并删除 ${bootstrap_path}。"
 }
 

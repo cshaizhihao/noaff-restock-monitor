@@ -73,6 +73,12 @@ class PortalAppTestCase(unittest.TestCase):
         text = app_module.BOOTSTRAP_CREDENTIALS_PATH.read_text(encoding="utf-8")
         return dict(line.split("=", 1) for line in text.strip().splitlines())
 
+    def test_bootstrap_credentials_file_is_minimal(self) -> None:
+        text = app_module.BOOTSTRAP_CREDENTIALS_PATH.read_text(encoding="utf-8")
+        self.assertIn("username=", text)
+        self.assertIn("password=", text)
+        self.assertNotIn("panel_path=", text)
+
     def get_portal_csrf(self) -> str:
         response = self.client.get("/", headers={"User-Agent": BROWSER_UA}, base_url=BASE_URL)
         self.assertEqual(response.status_code, 200)

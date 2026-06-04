@@ -833,7 +833,7 @@ PY
         self.assertIn("operator True", output)
         self.assertIn("username=operator", output)
         self.assertIn("password=NewStrongPass123", output)
-        self.assertIn("panel_path=/", output)
+        self.assertNotIn("panel_path=", output)
 
 
 if __name__ == "__main__":

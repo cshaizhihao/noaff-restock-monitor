@@ -819,7 +819,7 @@ def initialize_database() -> None:
             )
             connection.commit()
             BOOTSTRAP_CREDENTIALS_PATH.write_text(
-                f"username={username}\npassword={password}\npanel_path=/\n",
+                f"username={username}\npassword={password}\n",
                 encoding="utf-8",
             )
             log_activity("warning", "auth", "首次启动已创建管理员账号，请尽快修改密码并删除 bootstrap_admin.txt。")
