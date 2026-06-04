@@ -1063,6 +1063,10 @@ def to_task_payload(row: sqlite3.Row) -> dict[str, Any]:
         "last_checked_at": row["last_checked_at"] or "",
         "last_error": sanitize_telegram_error(row["last_error"] or ""),
         "last_error_kind": classify_browser_error(row["last_error"] or ""),
+        "last_error_detail": summarize_task_error(
+            sanitize_telegram_error(row["last_error"] or ""),
+            classify_browser_error(row["last_error"] or ""),
+        ),
         "created_at": row["created_at"],
         "updated_at": row["updated_at"],
     }
@@ -1318,6 +1322,17 @@ def sanitize_telegram_error(value: str, token: str = "") -> str:
             f"Telegram {method} 失败（HTTP {status}）："
             "请检查 Chat ID、机器人是否已加入群组/频道，以及推送文案 HTML。"
         )
+    return text
+
+
+def summarize_task_error(message: str, kind: str = "") -> str:
+    text = re.sub(r"\s+", " ", str(message or "")).strip()
+    if not text:
+        return ""
+    if kind == "cloudflare_challenge":
+        stripped = re.sub(r"^.*?[:：]\s*", "", text).strip()
+        if stripped:
+            return stripped
     return text
 
 

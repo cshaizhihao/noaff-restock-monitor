@@ -885,6 +885,7 @@ class PortalAppTestCase(unittest.TestCase):
         payload = app_module.to_task_payload(row)
         self.assertEqual(payload["last_error_kind"], "cloudflare_challenge")
         self.assertIn("Cloudflare 验证页拦截", payload["last_error"])
+        self.assertEqual(payload["last_error_detail"], "https://example.com/products")
 
     def test_task_payload_classifies_browser_disconnect_errors(self) -> None:
         timestamp = app_module.now_iso()
@@ -914,6 +915,7 @@ class PortalAppTestCase(unittest.TestCase):
         payload = app_module.to_task_payload(row)
         self.assertEqual(payload["last_error_kind"], "browser_connection")
         self.assertIn("与页面的连接已断开", payload["last_error"])
+        self.assertEqual(payload["last_error_detail"], "与页面的连接已断开。版本: 4.1.1.4")
 
     def test_update_settings_rejects_debug_port_collisions(self) -> None:
         _, headers = self.login()

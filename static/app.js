@@ -133,7 +133,8 @@
     function formatTaskLogLine(task, logHint) {
         if (task.last_error) {
             const label = errorKindLabel(task.last_error_kind);
-            return label ? `> ${label}：${task.last_error}` : `> ${task.last_error}`;
+            const detail = task.last_error_detail || task.last_error;
+            return label ? `> ${label}${detail ? `：${detail}` : ""}` : `> ${detail}`;
         }
         return `> ${logHint} ${formatTime(task.last_checked_at)}`;
     }
