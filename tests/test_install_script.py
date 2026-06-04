@@ -587,6 +587,8 @@ class InstallScriptTestCase(unittest.TestCase):
         self.assertIn("backupFileInput", app_js)
         self.assertIn("exportBackup", app_js)
         self.assertIn("restoreBackup", app_js)
+        self.assertNotIn("cdn.tailwindcss.com", portal_html)
+        self.assertIn('tailwind.css', portal_html)
         self.assertIn('id="backup-export-button"', portal_html)
         self.assertIn('id="backup-file-input"', portal_html)
         self.assertIn('id="backup-restore-button"', portal_html)

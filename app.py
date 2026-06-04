@@ -2845,7 +2845,7 @@ def make_app() -> Flask:
         response.headers["X-Robots-Tag"] = "noindex, nofollow"
         response.headers["Content-Security-Policy"] = (
             "default-src 'self'; "
-            "script-src 'self' https://cdn.tailwindcss.com 'unsafe-inline'; "
+            "script-src 'self' 'unsafe-inline'; "
             "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
             "img-src 'self' data:; "
             "connect-src 'self'; "
