@@ -649,7 +649,7 @@ class InstallScriptTestCase(unittest.TestCase):
             )
         )
         self.assertNotEqual(result.returncode, 0)
-        self.assertIn("Docker app failed health check", result.stderr)
+        self.assertIn("Docker 应用健康检查失败", result.stderr)
 
     def test_docker_summary_prefers_domain_without_port_or_entry_path(self) -> None:
         output = self.assert_shell_ok(

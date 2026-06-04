@@ -962,7 +962,7 @@ class PortalAppTestCase(unittest.TestCase):
             harness.ensure_page = original_ensure_page
             harness.shutdown()
 
-        self.assertIn("Cloudflare challenge", str(ctx.exception))
+        self.assertIn("Cloudflare 验证页", str(ctx.exception))
         self.assertGreaterEqual(page.refresh_calls, 3)
 
     def test_browser_profile_lock_cleanup_removes_stale_chrome_locks(self) -> None:

@@ -676,8 +676,8 @@ validate_required_inputs() {
     validate_certbot_email
   fi
   if [[ "$CERT_MODE" == "dns" ]]; then
-    [[ -n "$CF_ZONE_NAME" || -n "$CF_ZONE_ID" ]] || die "CF_ZONE_NAME or CF_ZONE_ID is required for Cloudflare DNS-01."
-    [[ -n "$CF_API_TOKEN" ]] || die "CF_API_TOKEN is required for Cloudflare DNS-01."
+    [[ -n "$CF_ZONE_NAME" || -n "$CF_ZONE_ID" ]] || die "Cloudflare DNS-01 需要提供 CF_ZONE_NAME 或 CF_ZONE_ID。"
+    [[ -n "$CF_API_TOKEN" ]] || die "Cloudflare DNS-01 需要提供 CF_API_TOKEN。"
   fi
 }
 
@@ -1342,7 +1342,7 @@ wait_for_application_ready() {
   if [[ "$DEPLOY_MODE" == "docker" ]]; then
     docker_compose ps || true
     docker_compose logs --tail=120 noaff || true
-    die "Docker app failed health check. The installer stopped before reporting success."
+    die "Docker 应用健康检查失败，安装器已在宣布成功前停止。"
   fi
 
   systemctl status "${APP_NAME}" --no-pager || true
@@ -1405,8 +1405,8 @@ cf_api() {
 }
 
 resolve_zone_id() {
-  [[ -n "$CF_API_TOKEN" ]] || die "CF_API_TOKEN is required for Cloudflare DNS and certificate automation."
-  [[ -n "$CF_ZONE_ID" || -n "$CF_ZONE_NAME" ]] || die "Set CF_ZONE_NAME or CF_ZONE_ID."
+  [[ -n "$CF_API_TOKEN" ]] || die "Cloudflare DNS 和证书自动化需要提供 CF_API_TOKEN。"
+  [[ -n "$CF_ZONE_ID" || -n "$CF_ZONE_NAME" ]] || die "请设置 CF_ZONE_NAME 或 CF_ZONE_ID。"
 
   if [[ -n "$CF_ZONE_ID" ]]; then
     return
@@ -1423,7 +1423,7 @@ result = data.get("result") or []
 print(result[0]["id"] if result else "")
 PY
 )"
-  [[ -n "$CF_ZONE_ID" ]] || die "Cloudflare zone '${CF_ZONE_NAME}' was not found or is not active. Add the zone to Cloudflare and point your nameservers first."
+  [[ -n "$CF_ZONE_ID" ]] || die "未找到 Cloudflare 区域 '${CF_ZONE_NAME}'，或该区域未处于激活状态。请先将域名加入 Cloudflare 并指向正确的 nameserver。"
 }
 
 upsert_dns_record() {
@@ -1461,10 +1461,10 @@ PY
 )"
 
   if [[ -n "$record_id" ]]; then
-    log "Updating Cloudflare ${record_type} record for ${record_name}"
+    log "正在更新 Cloudflare ${record_type} 记录：${record_name}"
     cf_api PUT "/zones/${CF_ZONE_ID}/dns_records/${record_id}" "$payload" >/dev/null
   else
-    log "Creating Cloudflare ${record_type} record for ${record_name}"
+    log "正在创建 Cloudflare ${record_type} 记录：${record_name}"
     cf_api POST "/zones/${CF_ZONE_ID}/dns_records" "$payload" >/dev/null
   fi
 }
@@ -1489,7 +1489,7 @@ print(json.dumps({"value": sys.argv[1]}))
 PY
 )"
     if ! cf_api PATCH "/zones/${CF_ZONE_ID}/settings/ssl" "$ssl_payload" >/dev/null 2>&1; then
-      warn "Could not set Cloudflare SSL mode to '${CF_SSL_MODE}'. Add Zone Settings:Edit permission or configure SSL mode manually."
+      warn "无法将 Cloudflare SSL 模式设置为 '${CF_SSL_MODE}'。请补充 Zone Settings:Edit 权限，或手动配置 SSL 模式。"
     fi
   fi
 }
@@ -1536,15 +1536,15 @@ issue_certificate_dns() {
     domain="$(printf '%s' "$domain" | xargs)"
     [[ -n "$domain" ]] && args+=("-d" "$domain")
   done
-  [[ "${#args[@]}" -gt 0 ]] || die "No valid TLS domains were provided."
+  [[ "${#args[@]}" -gt 0 ]] || die "未找到有效的 TLS 域名。"
 
   local primary_domain
   primary_domain="$(printf '%s' "$domains_csv" | cut -d',' -f1 | xargs)"
 
   if [[ -f "/etc/letsencrypt/live/${primary_domain}/fullchain.pem" ]]; then
-    log "Existing certificate found for ${primary_domain}; running keep-until-expiring renewal check"
+    log "发现 ${primary_domain} 的现有证书，开始执行续期保活检查。"
   else
-    log "Issuing initial Let's Encrypt certificate for ${domains_csv}"
+    log "正在为 ${domains_csv} 申请首张 Let's Encrypt 证书。"
   fi
 
   local extra_flags=()
@@ -1593,7 +1593,7 @@ EOF
 
 issue_certificate_http() {
   validate_certbot_email
-  [[ "$PUBLIC_HTTP_PORT" == "80" ]] || die "HTTP-01 certificate mode requires PUBLIC_HTTP_PORT=80."
+  [[ "$PUBLIC_HTTP_PORT" == "80" ]] || die "HTTP-01 证书模式要求 PUBLIC_HTTP_PORT=80。"
 
   local domains_csv args=()
   domains_csv="$(build_tls_domains)"
@@ -1603,7 +1603,7 @@ issue_certificate_http() {
     domain="$(printf '%s' "$domain" | xargs)"
     [[ -n "$domain" ]] && args+=("-d" "$domain")
   done
-  [[ "${#args[@]}" -gt 0 ]] || die "No valid TLS domains were provided."
+  [[ "${#args[@]}" -gt 0 ]] || die "未找到有效的 TLS 域名。"
 
   write_acme_challenge_nginx
 

@@ -1457,7 +1457,7 @@ class BrowserHarness:
             time.sleep(0.9)
             html_text = page.html or ""
             if not html_text:
-                raise RuntimeError(f"{self.role} browser returned empty HTML")
+                raise RuntimeError(f"{self.role} 浏览器返回了空 HTML")
             page_title = ""
             try:
                 page_title = page.title or ""
@@ -1488,7 +1488,7 @@ class BrowserHarness:
                         page_title = ""
                     if not looks_like_cloudflare_challenge(html_text, page_title, url):
                         return html_text
-                raise RuntimeError(f"{self.role} browser is blocked by Cloudflare challenge at {url}")
+                raise RuntimeError(f"{self.role} 浏览器被 Cloudflare 验证页拦截：{url}")
             return html_text
 
     def rebuild(self, reason: str) -> None:
