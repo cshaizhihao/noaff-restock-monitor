@@ -1,7 +1,6 @@
 (() => {
-    const context = window.APP_CONTEXT || {};
     const root = document.getElementById("app-root");
-    let csrfToken = context.csrfToken || document.querySelector('meta[name="csrf-token"]')?.content || "";
+    let csrfToken = document.querySelector('meta[name="csrf-token"]')?.content || "";
     let snapshotTimer = null;
     let currentTasks = new Map();
     let currentMerchant = { sources: [], items: [], metrics: {} };
@@ -1341,5 +1340,5 @@
 
     resetTaskForm();
     setNav("tasks");
-    setView(context.loggedIn === true || root?.dataset.loggedIn === "true");
+    setView(root?.dataset.loggedIn === "true");
 })();

@@ -2845,7 +2845,7 @@ def make_app() -> Flask:
         response.headers["X-Robots-Tag"] = "noindex, nofollow"
         response.headers["Content-Security-Policy"] = (
             "default-src 'self'; "
-            "script-src 'self' 'unsafe-inline'; "
+            "script-src 'self'; "
             "style-src 'self' 'unsafe-inline'; "
             "img-src 'self' data:; "
             "connect-src 'self'; "

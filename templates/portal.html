@@ -487,12 +487,6 @@
         <div id="toast-stack" class="pointer-events-none fixed right-4 top-4 z-50 flex w-[min(92vw,24rem)] flex-col gap-3"></div>
     </div>
 
-    <script>
-        window.APP_CONTEXT = {
-            loggedIn: {{ logged_in | tojson }},
-            csrfToken: {{ csrf_token | tojson }}
-        };
-    </script>
     <script src="{{ url_for('static', filename='app.js') }}" defer></script>
 </body>
 </html>
