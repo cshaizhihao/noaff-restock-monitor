@@ -40,7 +40,7 @@ curl -H 'Cache-Control: no-cache' -fsSL https://raw.githubusercontent.com/cshaiz
 - 干净机器：可选 **原生安装**
 - 没有域名：直接走 **IP + 端口**
 
-安装器会根据机器环境和你的输入自动完成 Docker / 原生 / 域名 / Cloudflare 分流；平时只保留上面的主命令即可，想改成无人值守时再用下方环境变量表覆盖默认值。
+安装器会根据机器环境和你的输入自动完成 Docker / 原生 / 域名 / Cloudflare 分流；如果系统尚未安装 Python 3，也会先自动补齐基础运行时。平时只保留上面的主命令即可，想改成无人值守时再用下方环境变量表覆盖默认值。
 
 ## ✨ 核心能力
 

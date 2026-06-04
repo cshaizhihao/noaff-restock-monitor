@@ -91,6 +91,30 @@ class InstallScriptTestCase(unittest.TestCase):
         self.assertIn("PUBLIC_HTTPS_PORT: 443", output)
         self.assertIn("MONITOR/TEST/CAT CDP: 9223/9334/9445", output)
 
+    def test_python_runtime_bootstrap_installs_python3_when_missing(self) -> None:
+        output = self.assert_shell_ok(
+            textwrap.dedent(
+                r"""
+                set -Eeuo pipefail
+                export NOAFF_INSTALL_LIBRARY_MODE=true
+                source ./install.sh
+                command_exists() {
+                  [[ "$1" != "python3" ]]
+                }
+                apt_get_update() {
+                  printf 'update-called\n'
+                }
+                apt_install() {
+                  printf 'apt-install:%s\n' "$*"
+                }
+                ensure_python_runtime
+                """
+            )
+        )
+        self.assertIn("检测到系统尚未安装 Python 3", output)
+        self.assertIn("update-called", output)
+        self.assertIn("apt-install:python3", output)
+
     def test_validate_only_accepts_ip_mode_without_domain(self) -> None:
         output = self.assert_shell_ok("ACCESS_MODE=ip APP_PORT=7777 bash install.sh --validate-only")
         self.assertIn("ACCESS_MODE:       ip", output)

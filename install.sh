@@ -490,6 +490,20 @@ apt_install() {
   apt-get install -y "$@"
 }
 
+apt_get_update() {
+  apt-get update
+}
+
+ensure_python_runtime() {
+  if command_exists python3; then
+    return 0
+  fi
+  log "检测到系统尚未安装 Python 3，先补齐运行时。"
+  export DEBIAN_FRONTEND=noninteractive
+  apt_get_update
+  apt_install python3
+}
+
 normalize_access_mode() {
   case "$DEPLOY_MODE" in
     native|docker)
@@ -2559,6 +2573,7 @@ main() {
     chmod 644 "$INSTALL_LOG"
     exec > >(tee -a "$INSTALL_LOG") 2>&1
   fi
+  ensure_python_runtime
   load_existing_env_defaults
   if bool_is_true "$UNINSTALL_ONLY"; then
     uninstall_noaff_installation
