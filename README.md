@@ -40,40 +40,7 @@ curl -H 'Cache-Control: no-cache' -fsSL https://raw.githubusercontent.com/cshaiz
 - 干净机器：可选 **原生安装**
 - 没有域名：直接走 **IP + 端口**
 
-<details>
-<summary><strong>高级用法（可选）</strong></summary>
-
-静默 Docker 安装：
-
-```bash
-curl -H 'Cache-Control: no-cache' -fsSL https://raw.githubusercontent.com/cshaizhihao/noaff-restock-monitor/master/install.sh -o install.sh && DEPLOY_MODE=docker PUBLIC_APP_PORT=7777 bash install.sh
-```
-
-Docker + 已解析域名（需要已有 Nginx / Caddy 手动反代）：
-
-```bash
-curl -H 'Cache-Control: no-cache' -fsSL https://raw.githubusercontent.com/cshaizhihao/noaff-restock-monitor/master/install.sh -o install.sh && DEPLOY_MODE=docker FQDN=monitor.example.com PUBLIC_APP_PORT=7777 bash install.sh
-```
-
-原生域名直连安装：
-
-```bash
-curl -H 'Cache-Control: no-cache' -fsSL https://raw.githubusercontent.com/cshaizhihao/noaff-restock-monitor/master/install.sh -o install.sh && ACCESS_MODE=domain-direct FQDN=monitor.example.com CERTBOT_EMAIL=your-real-email@gmail.com bash install.sh
-```
-
-Cloudflare 小黄云 + Token 自动安装：
-
-```bash
-curl -H 'Cache-Control: no-cache' -fsSL https://raw.githubusercontent.com/cshaizhihao/noaff-restock-monitor/master/install.sh -o install.sh && ACCESS_MODE=domain-cf FQDN=monitor.example.com CF_ZONE_NAME=example.com CF_API_TOKEN=cf_xxx CERTBOT_EMAIL=your-real-email@gmail.com bash install.sh
-```
-
-预检模式：
-
-```bash
-ACCESS_MODE=domain-direct FQDN=monitor.example.com CERTBOT_EMAIL=your-real-email@gmail.com bash install.sh --validate-only
-```
-
-</details>
+安装器会根据机器环境和你的输入自动完成 Docker / 原生 / 域名 / Cloudflare 分流；平时只保留上面的主命令即可，想改成无人值守时再用下方环境变量表覆盖默认值。
 
 ## ✨ 核心能力
 
