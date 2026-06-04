@@ -554,6 +554,15 @@ class InstallScriptTestCase(unittest.TestCase):
         self.assertIn('const cardClass = animateCards ? "task-card reveal" : "task-card"', app_js)
         self.assertIn("renderSnapshot(data, initial)", app_js)
 
+    def test_dashboard_polling_skips_unchanged_logs_and_merchant_sections(self) -> None:
+        app_js = (ROOT_DIR / "static" / "app.js").read_text(encoding="utf-8")
+        self.assertIn("let logsSignature = null", app_js)
+        self.assertIn("let merchantSignature = null", app_js)
+        self.assertIn("const nextLogsSignature = Array.isArray(logs)", app_js)
+        self.assertIn("if (logsSignature !== null && nextLogsSignature === logsSignature) {", app_js)
+        self.assertIn("const nextMerchantSignature = [", app_js)
+        self.assertIn("if (merchantSignature !== null && nextMerchantSignature === merchantSignature) {", app_js)
+
     def test_dashboard_supports_collapsible_task_groups(self) -> None:
         app_js = (ROOT_DIR / "static" / "app.js").read_text(encoding="utf-8")
         portal_html = (ROOT_DIR / "templates" / "portal.html").read_text(encoding="utf-8")

@@ -9,6 +9,8 @@
     let currentView = "tasks";
     let tasksRendered = false;
     let taskIdsSignature = "";
+    let logsSignature = null;
+    let merchantSignature = null;
 
     const els = {
         loginShell: document.getElementById("login-shell"),
@@ -373,6 +375,41 @@
         const sources = Array.isArray(currentMerchant.sources) ? currentMerchant.sources : [];
         const items = Array.isArray(currentMerchant.items) ? currentMerchant.items : [];
         const metrics = currentMerchant.metrics || {};
+        const nextMerchantSignature = [
+            taskIdsSignature,
+            sources.map((source) => [
+                source.id ?? "",
+                source.active ? "1" : "0",
+                source.source_name || "",
+                source.source_url || "",
+                source.item_count ?? 0,
+                source.linked_count ?? 0,
+                source.last_sync_at || "",
+                source.last_error || ""
+            ].join(":")).join("|"),
+            items.map((item) => [
+                item.id ?? "",
+                item.source_id ?? "",
+                item.item_state || "",
+                item.task_id ?? "",
+                item.title || "",
+                item.keyword || "",
+                item.monitor_url || "",
+                item.item_url || ""
+            ].join(":")).join("|"),
+            [
+                metrics.total_sources ?? 0,
+                metrics.total_items ?? 0,
+                metrics.linked_tasks ?? 0,
+                metrics.new_items ?? 0,
+                metrics.updated_items ?? 0,
+                metrics.archived_items ?? 0
+            ].join(":")
+        ].join("||");
+        if (merchantSignature !== null && nextMerchantSignature === merchantSignature) {
+            return;
+        }
+        merchantSignature = nextMerchantSignature;
 
         if (els.merchantMetricSources) els.merchantMetricSources.textContent = metrics.total_sources ?? 0;
         if (els.merchantMetricItems) els.merchantMetricItems.textContent = metrics.total_items ?? 0;
@@ -456,6 +493,18 @@
     }
 
     function renderLogs(logs) {
+        const nextLogsSignature = Array.isArray(logs)
+            ? logs.map((log) => [
+                log.level || "",
+                log.scope || "",
+                log.message || "",
+                log.created_at || ""
+            ].join(":")).join("|")
+            : "";
+        if (logsSignature !== null && nextLogsSignature === logsSignature) {
+            return;
+        }
+        logsSignature = nextLogsSignature;
         if (!logs.length) {
             els.logStream.innerHTML = '<p class="text-sm text-slate-500">暂无活动日志。</p>';
             return;
