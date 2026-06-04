@@ -45,7 +45,9 @@
         settingsForm: document.getElementById("settings-form"),
         settingsBotToken: document.getElementById("settings-bot-token"),
         settingsBotTokenMask: document.getElementById("settings-bot-token-mask"),
-        settingsChatId: document.getElementById("settings-chat-id"),
+        settingsChatIds: document.getElementById("settings-chat-ids"),
+        settingsChatIdsHint: document.getElementById("settings-chat-ids-hint"),
+        settingsChatIdsCount: document.getElementById("settings-chat-ids-count"),
         settingsMonitorPort: document.getElementById("settings-monitor-port"),
         settingsTestPort: document.getElementById("settings-test-port"),
         settingsCatalogPort: document.getElementById("settings-catalog-port"),
@@ -54,12 +56,16 @@
         merchantForm: document.getElementById("merchant-form"),
         merchantSourceUrl: document.getElementById("merchant-source-url"),
         merchantSourceName: document.getElementById("merchant-source-name"),
+        merchantGroup: document.getElementById("merchant-group"),
+        merchantGroupCustomWrap: document.getElementById("merchant-group-custom-wrap"),
+        merchantGroupCustom: document.getElementById("merchant-group-custom"),
         merchantAutoPromote: document.getElementById("merchant-auto-promote"),
         merchantImportButton: document.getElementById("merchant-import-button"),
         merchantImportButtonLabel: document.getElementById("merchant-import-button-label"),
         merchantMetricSources: document.getElementById("merchant-metric-sources"),
         merchantMetricItems: document.getElementById("merchant-metric-items"),
         merchantMetricLinked: document.getElementById("merchant-metric-linked"),
+        merchantItemFilter: document.getElementById("merchant-item-filter"),
         merchantSourceList: document.getElementById("merchant-source-list"),
         merchantItemList: document.getElementById("merchant-item-list"),
         systemVersion: document.getElementById("system-version"),
@@ -85,6 +91,8 @@
         taskId: document.getElementById("task-id"),
         taskName: document.getElementById("task-name"),
         taskGroup: document.getElementById("task-group"),
+        taskGroupCustomWrap: document.getElementById("task-group-custom-wrap"),
+        taskGroupCustom: document.getElementById("task-group-custom"),
         taskUrl: document.getElementById("task-url"),
         taskKeyword: document.getElementById("task-keyword"),
         taskRestock: document.getElementById("task-restock"),
@@ -95,7 +103,14 @@
         taskButton2Url: document.getElementById("task-button-2-url"),
         taskEnabled: document.getElementById("task-enabled"),
         taskCancelButton: document.getElementById("task-cancel-button"),
-        taskSubmitButton: document.getElementById("task-submit-button")
+        taskSubmitButton: document.getElementById("task-submit-button"),
+        groupRenameModal: document.getElementById("group-rename-modal"),
+        groupRenameTitle: document.getElementById("group-rename-title"),
+        groupRenameClose: document.getElementById("group-rename-close"),
+        groupRenameForm: document.getElementById("group-rename-form"),
+        groupRenameInput: document.getElementById("group-rename-input"),
+        groupRenameCancel: document.getElementById("group-rename-cancel"),
+        groupRenameSubmit: document.getElementById("group-rename-submit")
     };
 
     const defaultTemplates = {
@@ -149,6 +164,7 @@
 
     const defaultTaskGroup = "默认分组";
     const taskGroupStoragePrefix = "noaff.taskGroupCollapsed.";
+    let pendingGroupRename = "";
 
     function normalizeTaskGroup(value) {
         const group = String(value ?? "").trim().replace(/\s+/g, " ");
@@ -173,6 +189,116 @@
         } catch (error) {
             // Ignore storage failures; collapsing is a convenience only.
         }
+    }
+
+    function collectGroupNames(tasks, extraGroupNames = []) {
+        const groups = new Set([defaultTaskGroup]);
+        tasks.forEach((task) => {
+            groups.add(normalizeTaskGroup(task.group_name));
+        });
+        extraGroupNames.forEach((groupName) => {
+            const normalized = normalizeTaskGroup(groupName);
+            if (normalized) {
+                groups.add(normalized);
+            }
+        });
+        return Array.from(groups);
+    }
+
+    function updateGroupVisibility(selectEl, customWrapEl, customInputEl) {
+        if (!selectEl || !customWrapEl || !customInputEl) {
+            return;
+        }
+        const customMode = selectEl.value === "__custom__";
+        customWrapEl.classList.toggle("hidden", !customMode);
+        if (customMode) {
+            wireDirtyTracking(customInputEl);
+        }
+    }
+
+    function renderGroupOptions(selectEl, customWrapEl, customInputEl, tasks, extraGroupNames = []) {
+        if (!selectEl) {
+            return;
+        }
+        const currentSelectValue = selectEl.value || defaultTaskGroup;
+        const currentCustomValue = customInputEl?.value || "";
+        const groupNames = collectGroupNames(tasks, extraGroupNames);
+        if (currentSelectValue !== "__custom__" && !groupNames.includes(currentSelectValue)) {
+            groupNames.push(currentSelectValue);
+        }
+        const nextSignature = groupNames.join("\u0000");
+        if (selectEl.dataset.groupOptionsSignature === nextSignature && selectEl.dataset.groupOptionsReady === "1") {
+            updateGroupVisibility(selectEl, customWrapEl, customInputEl);
+            return;
+        }
+        selectEl.dataset.groupOptionsSignature = nextSignature;
+        selectEl.innerHTML = `${groupNames
+            .map((groupName) => `<option value="${escapeHtml(groupName)}">${escapeHtml(groupName)}</option>`)
+            .join("")}<option value="__custom__">新建分组…</option>`;
+        selectEl.dataset.groupOptionsReady = "1";
+        if (currentSelectValue === "__custom__") {
+            selectEl.value = "__custom__";
+            syncInputValue(customInputEl, currentCustomValue);
+        } else {
+            selectEl.value = groupNames.includes(currentSelectValue) ? currentSelectValue : defaultTaskGroup;
+            syncInputValue(customInputEl, "");
+        }
+        updateGroupVisibility(selectEl, customWrapEl, customInputEl);
+    }
+
+    function setGroupSelection(selectEl, customWrapEl, customInputEl, groupName, tasks, extraGroupNames = []) {
+        if (!selectEl) {
+            return;
+        }
+        renderGroupOptions(selectEl, customWrapEl, customInputEl, tasks, extraGroupNames);
+        const normalized = normalizeTaskGroup(groupName);
+        const groupNames = collectGroupNames(tasks, extraGroupNames);
+        if (groupNames.includes(normalized)) {
+            selectEl.value = normalized;
+            syncInputValue(customInputEl, "");
+        } else {
+            selectEl.value = "__custom__";
+            syncInputValue(customInputEl, normalized);
+        }
+        updateGroupVisibility(selectEl, customWrapEl, customInputEl);
+    }
+
+    function readGroupValue(selectEl, customInputEl) {
+        if (!selectEl) {
+            return defaultTaskGroup;
+        }
+        if (selectEl.value === "__custom__") {
+            const customGroup = String(customInputEl?.value || "").trim();
+            return customGroup ? normalizeTaskGroup(customGroup) : "";
+        }
+        return normalizeTaskGroup(selectEl.value);
+    }
+
+    function renderTaskGroupOptions(tasks, extraGroupNames = []) {
+        renderGroupOptions(els.taskGroup, els.taskGroupCustomWrap, els.taskGroupCustom, tasks, extraGroupNames);
+    }
+
+    function renderMerchantGroupOptions(tasks, extraGroupNames = []) {
+        renderGroupOptions(els.merchantGroup, els.merchantGroupCustomWrap, els.merchantGroupCustom, tasks, extraGroupNames);
+    }
+
+    function setTaskGroupSelection(groupName, extraGroupNames = []) {
+        setGroupSelection(els.taskGroup, els.taskGroupCustomWrap, els.taskGroupCustom, groupName, Array.from(currentTasks.values()), extraGroupNames);
+    }
+
+    function readTaskGroupValue() {
+        return readGroupValue(els.taskGroup, els.taskGroupCustom);
+    }
+
+    function readMerchantGroupValue() {
+        return readGroupValue(els.merchantGroup, els.merchantGroupCustom);
+    }
+
+    function splitTelegramChatIds(value) {
+        return String(value ?? "")
+            .split(/\r?\n/)
+            .map((chatId) => chatId.trim())
+            .filter(Boolean);
     }
 
     function formatTime(value) {
@@ -353,6 +479,7 @@
     }
 
     async function apiFetch(path, options = {}) {
+        const method = String(options.method || "GET").toUpperCase();
         const headers = {
             Accept: "application/json",
             "X-Requested-With": "XMLHttpRequest",
@@ -377,6 +504,16 @@
         if (data.csrf_token) {
             csrfToken = data.csrf_token;
             document.querySelector('meta[name="csrf-token"]')?.setAttribute("content", csrfToken);
+        }
+        const responseMessage = String(data.message || "").trim();
+        const gateBlocked = method !== "GET" && response.status === 404
+            && path.startsWith("/api/")
+            && (!responseMessage || responseMessage.toUpperCase() === "NOT FOUND");
+        if (gateBlocked) {
+            window.setTimeout(() => window.location.reload(), 900);
+            const err = new Error("页面会话已失效，正在刷新页面...");
+            err.status = response.status;
+            throw err;
         }
         if (!response.ok || data.ok === false) {
             const err = new Error(data.message || "请求失败。");
@@ -422,11 +559,12 @@
     }
 
     function openTaskModal(task = null) {
+        renderTaskGroupOptions(Array.from(currentTasks.values()), task ? [task.group_name] : []);
         if (task) {
             els.taskModalTitle.textContent = "编辑监控节点";
             els.taskId.value = task.id;
             els.taskName.value = task.name || "";
-            els.taskGroup.value = normalizeTaskGroup(task.group_name);
+            setTaskGroupSelection(task.group_name, [task.group_name]);
             els.taskUrl.value = task.monitor_url || "";
             els.taskKeyword.value = task.target_keyword || "";
             els.taskRestock.value = task.restock_template || defaultTemplates.restock;
@@ -455,10 +593,16 @@
     function resetTaskForm() {
         els.taskForm.reset();
         els.taskId.value = "";
-        els.taskGroup.value = "";
+        if (els.taskGroup) {
+            els.taskGroup.value = defaultTaskGroup;
+        }
+        if (els.taskGroupCustom) {
+            syncInputValue(els.taskGroupCustom, "");
+        }
         els.taskRestock.value = defaultTemplates.restock;
         els.taskSoldout.value = defaultTemplates.soldout;
         els.taskEnabled.checked = true;
+        updateGroupVisibility(els.taskGroup, els.taskGroupCustomWrap, els.taskGroupCustom);
     }
 
     function renderMetrics(metrics) {
@@ -480,7 +624,17 @@
         els.settingsBotTokenMask.textContent = settings.telegram_bot_token_masked
             ? `当前 Token：${settings.telegram_bot_token_masked}`
             : "当前未配置 Bot Token";
-        syncInputValue(els.settingsChatId, settings.telegram_chat_id || "");
+        const chatIdsText = settings.telegram_chat_ids_text || settings.telegram_chat_id || "";
+        const chatIds = splitTelegramChatIds(chatIdsText);
+        syncInputValue(els.settingsChatIds, chatIdsText);
+        if (els.settingsChatIdsHint) {
+            els.settingsChatIdsHint.textContent = chatIds.length
+                ? `已配置 ${chatIds.length} 个群聊。支持多群聊，一行一个 Chat ID。`
+                : "支持多群聊，一行一个 Chat ID。";
+        }
+        if (els.settingsChatIdsCount) {
+            els.settingsChatIdsCount.textContent = `${chatIds.length} 群聊`;
+        }
         syncInputValue(els.settingsMonitorPort, settings.monitor_debug_port || 9223);
         syncInputValue(els.settingsTestPort, settings.test_debug_port || 9334);
         syncInputValue(els.settingsCatalogPort, settings.catalog_debug_port || 9445);
@@ -529,24 +683,96 @@
         return ["border-slate-700 bg-slate-900/70 text-slate-400", "未知"];
     }
 
+    function merchantItemFilterCounts(items) {
+        const counts = {
+            all: items.length,
+            linked: 0,
+            unlinked: 0,
+            new: 0,
+            updated: 0,
+            archived: 0
+        };
+        items.forEach((item) => {
+            if (item.task_id) {
+                counts.linked += 1;
+            } else {
+                counts.unlinked += 1;
+            }
+            if (item.item_state === "new") counts.new += 1;
+            if (item.item_state === "updated") counts.updated += 1;
+            if (item.item_state === "archived") counts.archived += 1;
+        });
+        return counts;
+    }
+
+    function merchantItemFilterLabel(value, counts) {
+        switch (value) {
+            case "linked":
+                return `已关联任务 (${counts.linked})`;
+            case "unlinked":
+                return `未关联任务 (${counts.unlinked})`;
+            case "new":
+                return `仅新发现 (${counts.new})`;
+            case "updated":
+                return `仅已更新 (${counts.updated})`;
+            case "archived":
+                return `仅已归档 (${counts.archived})`;
+            default:
+                return `全部商品 (${counts.all})`;
+        }
+    }
+
+    function renderMerchantItemFilterOptions(items) {
+        if (!els.merchantItemFilter) {
+            return "all";
+        }
+        const counts = merchantItemFilterCounts(items);
+        const current = els.merchantItemFilter.value || "all";
+        const options = ["all", "linked", "unlinked", "new", "updated", "archived"];
+        els.merchantItemFilter.innerHTML = options
+            .map((value) => `<option value="${value}">${escapeHtml(merchantItemFilterLabel(value, counts))}</option>`)
+            .join("");
+        els.merchantItemFilter.value = options.includes(current) ? current : "all";
+        return els.merchantItemFilter.value;
+    }
+
+    function filterMerchantItems(items, filterValue) {
+        switch (filterValue) {
+            case "linked":
+                return items.filter((item) => Boolean(item.task_id));
+            case "unlinked":
+                return items.filter((item) => !item.task_id);
+            case "new":
+            case "updated":
+            case "archived":
+                return items.filter((item) => item.item_state === filterValue);
+            default:
+                return items;
+        }
+    }
+
     function renderMerchant(merchant) {
         currentMerchant = merchant || { sources: [], items: [], metrics: {} };
         const sources = Array.isArray(currentMerchant.sources) ? currentMerchant.sources : [];
         const items = Array.isArray(currentMerchant.items) ? currentMerchant.items : [];
         const metrics = currentMerchant.metrics || {};
+        const filterValue = renderMerchantItemFilterOptions(items);
+        const filteredItems = filterMerchantItems(items, filterValue);
         const nextMerchantSignature = [
             taskIdsSignature,
+            filterValue,
             sources.map((source) => [
                 source.id ?? "",
                 source.active ? "1" : "0",
                 source.source_name || "",
                 source.source_url || "",
+                source.group_name || "",
                 source.item_count ?? 0,
                 source.linked_count ?? 0,
                 source.last_sync_at || "",
                 source.last_error || ""
             ].join(":")).join("|"),
-            items.map((item) => [
+            filteredItems.map((item) => [
                 item.id ?? "",
                 item.source_id ?? "",
                 item.item_state || "",
@@ -593,6 +819,7 @@
                                 <span class="font-mono text-[11px] ${statusClass}">${statusText}</span>
                             </div>
                             <div class="mt-3 flex flex-wrap gap-2 text-[11px] font-mono text-slate-400">
+                                <span class="rounded-full border border-indigo-900/60 bg-indigo-500/10 px-2.5 py-1">分组 ${escapeHtml(source.group_name || defaultTaskGroup)}</span>
                                 <span class="rounded-full border border-slate-700 bg-slate-900/80 px-2.5 py-1">商品 ${escapeHtml(source.item_count ?? 0)}</span>
                                 <span class="rounded-full border border-slate-700 bg-slate-900/80 px-2.5 py-1">关联 ${escapeHtml(source.linked_count ?? 0)}</span>
                                 <span class="rounded-full border border-slate-700 bg-slate-900/80 px-2.5 py-1">最后同步 ${escapeHtml(lastSync)}</span>
@@ -615,10 +842,10 @@
         }
 
         if (els.merchantItemList) {
-            if (!items.length) {
-                els.merchantItemList.innerHTML = '<p class="text-sm text-slate-500">暂无商品记录，导入后会自动生成并联动到任务池。</p>';
+            if (!filteredItems.length) {
+                els.merchantItemList.innerHTML = '<p class="text-sm text-slate-500">当前筛选条件下没有商品记录。</p>';
             } else {
-                els.merchantItemList.innerHTML = items.map((item) => {
+                els.merchantItemList.innerHTML = filteredItems.map((item) => {
                     const [badgeClass, badgeText] = merchantStateMeta(item.item_state);
                     const linkedTask = item.task_id && currentTasks.get(String(item.task_id));
                     const sourceLabel = item.source_name || item.source_url || "未知来源";
@@ -841,6 +1068,7 @@
         const groupSections = groupTasks(tasks).map((group) => {
             const collapsed = isTaskGroupCollapsed(group.name);
             const errorCount = group.tasks.filter((task) => task.last_error).length;
+            const canRenameGroup = group.name !== defaultTaskGroup;
             const summaryBadge = `
                 <span class="rounded-full border border-slate-700 bg-slate-900/80 px-2.5 py-1 font-mono text-[11px] text-slate-400" data-task-group-count>${group.tasks.length} 个任务</span>
                 <span class="rounded-full border border-rose-900/70 bg-rose-500/10 px-2.5 py-1 font-mono text-[11px] text-rose-300${errorCount ? "" : " hidden"}" data-task-group-error>${errorCount} 错误</span>`;
@@ -849,17 +1077,32 @@
 
             return `
                 <section class="${groupClass} rounded-2xl border border-slate-800/90 bg-slate-950/35 p-4 shadow-[0_20px_60px_rgba(0,0,0,0.18)] md:p-5" data-task-group-section data-task-group-name="${escapeHtml(group.name)}">
-                    <button type="button" class="flex w-full items-center justify-between gap-4 text-left" data-group-toggle="true" data-group-name="${escapeHtml(group.name)}">
-                        <div class="min-w-0">
-                            <div class="flex flex-wrap items-center gap-2">
-                                <h3 class="truncate text-lg font-extrabold text-white">${escapeHtml(group.name)}</h3>
-                                ${summaryBadge}
+                    <div class="flex items-start justify-between gap-3">
+                        <button type="button" class="flex min-w-0 flex-1 items-center justify-between gap-4 text-left" data-group-toggle="true" data-group-name="${escapeHtml(group.name)}">
+                            <div class="min-w-0">
+                                <div class="flex flex-wrap items-center gap-2">
+                                    <h3 class="truncate text-lg font-extrabold text-white">${escapeHtml(group.name)}</h3>
+                                    ${summaryBadge}
+                                </div>
                             </div>
-                        </div>
-                        <svg class="h-5 w-5 shrink-0 text-slate-400 transition-transform ${collapsed ? "" : "rotate-180"}" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/>
-                        </svg>
-                    </button>
+                            <svg class="h-5 w-5 shrink-0 text-slate-400 transition-transform ${collapsed ? "" : "rotate-180"}" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/>
+                            </svg>
+                        </button>
+                        <button
+                            type="button"
+                            class="icon-button !h-9 !w-9 shrink-0 ${canRenameGroup ? "" : "opacity-40"}"
+                            title="${canRenameGroup ? "重命名分组" : "默认分组不可重命名"}"
+                            aria-label="${canRenameGroup ? "重命名分组" : "默认分组不可重命名"}"
+                            data-group-action="rename"
+                            data-group-name="${escapeHtml(group.name)}"
+                            ${canRenameGroup ? "" : "disabled"}
+                        >
+                            <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/>
+                            </svg>
+                        </button>
+                    </div>
                     ${groupCards}
                 </section>
             `;
@@ -878,6 +1121,10 @@
         renderLogs(data.logs || []);
         renderTasks(data.tasks || [], initial);
         renderMerchant(data.merchant || {});
+        const merchantSources = Array.isArray(data.merchant?.sources) ? data.merchant.sources : [];
+        const extraGroupNames = merchantSources.map((source) => source.group_name || defaultTaskGroup);
+        renderTaskGroupOptions(data.tasks || [], extraGroupNames);
+        renderMerchantGroupOptions(data.tasks || [], extraGroupNames);
     }
 
     async function loadSnapshot(initial = false) {
@@ -901,9 +1148,13 @@
     }
 
     function collectTaskPayload() {
+        const groupName = readTaskGroupValue();
+        if (!groupName) {
+            throw new Error("请输入新的分组名称。");
+        }
         return {
             name: els.taskName.value.trim(),
-            group_name: normalizeTaskGroup(els.taskGroup.value),
+            group_name: groupName,
             monitor_url: els.taskUrl.value.trim(),
             target_keyword: els.taskKeyword.value.trim(),
             restock_template: els.taskRestock.value.trim(),
@@ -917,9 +1168,14 @@
     }
 
     function collectMerchantPayload() {
+        const groupName = readMerchantGroupValue();
+        if (!groupName) {
+            throw new Error("请输入新的分组名称。");
+        }
         return {
             source_url: els.merchantSourceUrl.value.trim(),
             source_name: els.merchantSourceName.value.trim(),
+            group_name: groupName,
             auto_promote: Boolean(els.merchantAutoPromote?.checked)
         };
     }
@@ -982,6 +1238,71 @@
             showToast(error.message, "error");
         } finally {
             button.disabled = false;
+        }
+    }
+
+    function openTaskGroupRenameModal(groupName) {
+        const normalizedGroup = normalizeTaskGroup(groupName);
+        if (!normalizedGroup || normalizedGroup === defaultTaskGroup) {
+            showToast("默认分组暂不支持重命名。", "error");
+            return;
+        }
+        pendingGroupRename = normalizedGroup;
+        if (els.groupRenameTitle) {
+            els.groupRenameTitle.textContent = `重命名分组：${normalizedGroup}`;
+        }
+        syncInputValue(els.groupRenameInput, normalizedGroup);
+        els.groupRenameModal?.classList.remove("hidden");
+        document.body.style.overflow = "hidden";
+        window.setTimeout(() => els.groupRenameInput?.focus(), 40);
+    }
+
+    function closeTaskGroupRenameModal() {
+        pendingGroupRename = "";
+        els.groupRenameModal?.classList.add("hidden");
+        document.body.style.overflow = "";
+    }
+
+    async function submitTaskGroupRename(event) {
+        event.preventDefault();
+        const oldName = pendingGroupRename || normalizeTaskGroup(els.groupRenameInput?.value);
+        const nextName = normalizeTaskGroup(els.groupRenameInput?.value);
+        if (!oldName || oldName === defaultTaskGroup) {
+            showToast("默认分组暂不支持重命名。", "error");
+            return;
+        }
+        if (!nextName) {
+            showToast("新的分组名称不能为空。", "error");
+            return;
+        }
+        if (nextName === oldName) {
+            closeTaskGroupRenameModal();
+            return;
+        }
+        const submitButton = els.groupRenameSubmit;
+        submitButton.disabled = true;
+        try {
+            const data = await apiFetch("/api/task-groups/rename", {
+                method: "POST",
+                body: JSON.stringify({
+                    old_name: oldName,
+                    new_name: nextName
+                })
+            });
+            const collapsed = isTaskGroupCollapsed(oldName);
+            setTaskGroupCollapsed(nextName, collapsed);
+            try {
+                window.localStorage.removeItem(taskGroupStorageKey(oldName));
+            } catch (error) {
+                // Ignore storage cleanup failures.
+            }
+            showToast(data.message || "分组已重命名。");
+            closeTaskGroupRenameModal();
+            await loadSnapshot(false);
+        } catch (error) {
+            showToast(error.message, "error");
+        } finally {
+            submitButton.disabled = false;
         }
     }
 
@@ -1187,8 +1508,28 @@
             closeTaskModal();
         }
     });
+    els.taskGroup?.addEventListener("change", () => {
+        updateGroupVisibility(els.taskGroup, els.taskGroupCustomWrap, els.taskGroupCustom);
+        if (els.taskGroup?.value === "__custom__") {
+            window.setTimeout(() => els.taskGroupCustom?.focus(), 0);
+        }
+    });
+    els.merchantGroup?.addEventListener("change", () => {
+        updateGroupVisibility(els.merchantGroup, els.merchantGroupCustomWrap, els.merchantGroupCustom);
+        if (els.merchantGroup?.value === "__custom__") {
+            window.setTimeout(() => els.merchantGroupCustom?.focus(), 0);
+        }
+    });
 
     els.tasksGrid?.addEventListener("click", (event) => {
+        const groupAction = event.target.closest("[data-group-action]");
+        if (groupAction) {
+            const groupName = groupAction.dataset.groupName || defaultTaskGroup;
+            if (groupAction.dataset.groupAction === "rename") {
+                openTaskGroupRenameModal(groupName);
+            }
+            return;
+        }
         const groupToggle = event.target.closest("[data-group-toggle]");
         if (groupToggle) {
             const groupName = groupToggle.dataset.groupName || defaultTaskGroup;
@@ -1221,6 +1562,14 @@
         }
     });
 
+    els.merchantItemFilter?.addEventListener("change", () => {
+        renderMerchant(currentMerchant);
+    });
+
+    els.groupRenameForm?.addEventListener("submit", submitTaskGroupRename);
+    els.groupRenameCancel?.addEventListener("click", closeTaskGroupRenameModal);
+    els.groupRenameClose?.addEventListener("click", closeTaskGroupRenameModal);
+
     els.taskForm?.addEventListener("submit", async (event) => {
         event.preventDefault();
         const submit = els.taskSubmitButton;
@@ -1247,7 +1596,7 @@
         const submit = event.submitter;
         submit.disabled = true;
         const payload = {
-            telegram_chat_id: els.settingsChatId.value.trim(),
+            telegram_chat_ids: els.settingsChatIds.value.trim(),
             monitor_debug_port: Number(els.settingsMonitorPort.value),
             test_debug_port: Number(els.settingsTestPort.value),
             catalog_debug_port: Number(els.settingsCatalogPort.value),
@@ -1289,6 +1638,13 @@
             if (els.merchantSourceName) {
                 els.merchantSourceName.value = "";
             }
+            if (els.merchantGroup) {
+                els.merchantGroup.value = defaultTaskGroup;
+            }
+            if (els.merchantGroupCustom) {
+                syncInputValue(els.merchantGroupCustom, "");
+            }
+            updateGroupVisibility(els.merchantGroup, els.merchantGroupCustomWrap, els.merchantGroupCustom);
             await loadSnapshot(false);
         } catch (error) {
             showToast(error.message, "error");
@@ -1330,9 +1686,17 @@
     window.addEventListener("keydown", (event) => {
         if (event.key === "Escape" && !els.taskModal.classList.contains("hidden")) {
             closeTaskModal();
+        } else if (event.key === "Escape" && !els.groupRenameModal.classList.contains("hidden")) {
+            closeTaskGroupRenameModal();
         }
     });
 
+    wireDirtyTracking(els.taskGroup);
+    wireDirtyTracking(els.taskGroupCustom);
+    wireDirtyTracking(els.merchantGroup);
+    wireDirtyTracking(els.merchantGroupCustom);
+    updateGroupVisibility(els.taskGroup, els.taskGroupCustomWrap, els.taskGroupCustom);
+    updateGroupVisibility(els.merchantGroup, els.merchantGroupCustomWrap, els.merchantGroupCustom);
     resetTaskForm();
     setNav("tasks");
     setView(root?.dataset.loggedIn === "true");

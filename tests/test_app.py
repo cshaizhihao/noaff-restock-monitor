@@ -369,18 +369,29 @@ class PortalAppTestCase(unittest.TestCase):
                 self.calls.append((url, timeout_seconds))
                 return """
                 <html>
-                  <head><title>Acme Hosting</title></head>
+                  <head><title>Geelinx | London BGP</title></head>
                   <body>
-                    <div class="package">
-                      <h3>HK-CMI Unlimited</h3>
-                      <p>库存 9</p>
-                      <a href="cart.php?a=add&pid=21">Order Now</a>
-                    </div>
-                    <div class="package">
-                      <h3>Tokyo NVMe</h3>
-                      <p>Only 2 left</p>
-                      <a href="/cart.php?a=add&pid=22">Order Now</a>
-                    </div>
+                    <nav class="topbar">
+                      <a href="/join">Join Channel</a>
+                      <a href="/">Main</a>
+                      <a href="/cart">Cart</a>
+                      <a href="/account">My</a>
+                    </nav>
+                    <aside class="sidebar">
+                      <a href="/cart?fid=1&gid=9" class="active">GB | London BGP 1#</a>
+                    </aside>
+                    <main class="catalog">
+                      <article class="product-card">
+                        <h3 class="product-title">GB.LON.BGP.Darwin</h3>
+                        <p>库存 9</p>
+                        <a href="cart.php?a=add&pid=21">Order Now</a>
+                      </article>
+                      <article class="product-card">
+                        <h3 class="product-title">GB.LON.BGP.Newton</h3>
+                        <p>Only 2 left</p>
+                        <a href="/cart.php?a=add&pid=22">Order Now</a>
+                      </article>
+                    </main>
                   </body>
                 </html>
                 """
@@ -395,6 +406,7 @@ class PortalAppTestCase(unittest.TestCase):
             result = engine.import_merchant_source(
                 "https://merchant.example.com/products",
                 "",
+                "London BGP",
                 engine.get_runtime_settings(),
                 auto_promote=True,
             )
@@ -403,7 +415,8 @@ class PortalAppTestCase(unittest.TestCase):
 
         self.assertEqual(result.scanned_count, 2)
         self.assertEqual(result.promoted_count, 2)
-        self.assertEqual(result.source_name, "Acme Hosting")
+        self.assertEqual(result.source_name, "Geelinx | London BGP")
+        self.assertEqual(sorted(item["title"] for item in result.items), ["GB.LON.BGP.Darwin", "GB.LON.BGP.Newton"])
         self.assertEqual(len(result.items), 2)
         self.assertEqual(len(fake_browser.calls), 1)
 
@@ -411,10 +424,12 @@ class PortalAppTestCase(unittest.TestCase):
             source_count = connection.execute("SELECT COUNT(*) FROM merchant_sources").fetchone()[0]
             item_count = connection.execute("SELECT COUNT(*) FROM merchant_items").fetchone()[0]
             task_count = connection.execute("SELECT COUNT(*) FROM tasks WHERE source_item_id IS NOT NULL").fetchone()[0]
+            source_group = connection.execute("SELECT group_name FROM merchant_sources LIMIT 1").fetchone()[0]
 
         self.assertEqual(source_count, 1)
         self.assertEqual(item_count, 2)
         self.assertEqual(task_count, 2)
+        self.assertEqual(source_group, "London BGP")
 
         snapshot = self.client.get(
             f"{app_module.PORTAL_PATH}/api/snapshot",
@@ -425,6 +440,64 @@ class PortalAppTestCase(unittest.TestCase):
         self.assertEqual(payload["merchant"]["metrics"]["total_sources"], 1)
         self.assertEqual(payload["merchant"]["metrics"]["total_items"], 2)
         self.assertEqual(payload["merchant"]["metrics"]["linked_tasks"], 2)
+
+    def test_task_group_rename_updates_tasks_and_merchant_sources(self) -> None:
+        _, headers = self.login()
+        timestamp = app_module.now_iso()
+        with app_module.open_connection() as connection:
+            connection.execute(
+                """
+                INSERT INTO tasks (
+                    name, group_name, monitor_url, target_keyword, restock_template, soldout_template,
+                    enabled, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?)
+                """,
+                (
+                    "Rename SKU",
+                    "原分组",
+                    "https://example.com/products/rename",
+                    "Rename SKU",
+                    "<b>{name}</b> {stock}",
+                    "<b>{name}</b> sold out",
+                    timestamp,
+                    timestamp,
+                ),
+            )
+            connection.execute(
+                """
+                INSERT INTO merchant_sources (
+                    source_url, source_name, group_name, active, discovered_count, last_sync_at, last_error, created_at, updated_at
+                ) VALUES (?, ?, ?, 1, 0, ?, '', ?, ?)
+                """,
+                (
+                    "https://merchant.example.com/rename",
+                    "Rename Merchant",
+                    "原分组",
+                    timestamp,
+                    timestamp,
+                    timestamp,
+                ),
+            )
+            connection.commit()
+
+        response = self.client.post(
+            f"{app_module.PORTAL_PATH}/api/task-groups/rename",
+            headers=headers,
+            base_url=BASE_URL,
+            json={"old_name": "原分组", "new_name": "新分组"},
+        )
+        self.assertEqual(response.status_code, 200)
+        payload = response.get_json()
+        self.assertTrue(payload["ok"])
+        self.assertEqual(payload["result"]["task_count"], 1)
+        self.assertEqual(payload["result"]["source_count"], 1)
+
+        with app_module.open_connection() as connection:
+            task_group = connection.execute("SELECT group_name FROM tasks LIMIT 1").fetchone()[0]
+            source_group = connection.execute("SELECT group_name FROM merchant_sources LIMIT 1").fetchone()[0]
+
+        self.assertEqual(task_group, "新分组")
+        self.assertEqual(source_group, "新分组")
 
     def test_merchant_item_promote_creates_linked_task(self) -> None:
         _, headers = self.login()
@@ -455,6 +528,7 @@ class PortalAppTestCase(unittest.TestCase):
             result = engine.import_merchant_source(
                 "https://merchant.example.com/products",
                 "",
+                "网络节点",
                 engine.get_runtime_settings(),
                 auto_promote=False,
             )
@@ -484,7 +558,7 @@ class PortalAppTestCase(unittest.TestCase):
 
         with app_module.open_connection() as connection:
             task_row = connection.execute(
-                "SELECT source_item_id, source_source_url, source_source_name FROM tasks LIMIT 1"
+                "SELECT source_item_id, source_source_url, source_source_name, group_name FROM tasks LIMIT 1"
             ).fetchone()
             task_count_after = connection.execute("SELECT COUNT(*) FROM tasks").fetchone()[0]
 
@@ -492,6 +566,7 @@ class PortalAppTestCase(unittest.TestCase):
         self.assertEqual(task_row["source_item_id"], item_id)
         self.assertEqual(task_row["source_source_url"], "https://merchant.example.com/products")
         self.assertEqual(task_row["source_source_name"], "Acme Hosting")
+        self.assertEqual(task_row["group_name"], "网络节点")
 
         snapshot = self.client.get(
             f"{app_module.PORTAL_PATH}/api/snapshot",
@@ -696,8 +771,9 @@ class PortalAppTestCase(unittest.TestCase):
                 self.edited: list[dict[str, object]] = []
 
             def send_message(self, token, chat_id, text, buttons=None) -> int:
-                self.sent.append({"token": token, "chat_id": chat_id, "text": text, "buttons": buttons})
-                return 901
+                message_id = 900 + len(self.sent) + 1
+                self.sent.append({"token": token, "chat_id": chat_id, "text": text, "buttons": buttons, "message_id": message_id})
+                return message_id
 
             def edit_message(self, token, chat_id, message_id, text, buttons=None) -> None:
                 self.edited.append(
@@ -711,7 +787,8 @@ class PortalAppTestCase(unittest.TestCase):
         stock_box = {"value": 5}
         settings_payload = {
             "telegram_bot_token": "token",
-            "telegram_chat_id": "chat",
+            "telegram_chat_id": "chat-a",
+            "telegram_chat_ids": "chat-a\nchat-b",
             "monitor_debug_port": 9223,
             "test_debug_port": 9334,
             "poll_interval_seconds": 45,
@@ -737,42 +814,46 @@ class PortalAppTestCase(unittest.TestCase):
             self.assertTrue(engine.process_task(fetch_task(), settings_payload, use_test_browser=False))
             with app_module.open_connection() as connection:
                 row = connection.execute(
-                    "SELECT last_stock, last_state, message_id FROM tasks WHERE id = ?",
+                    "SELECT last_stock, last_state, message_id, message_ids FROM tasks WHERE id = ?",
                     (task_id,),
                 ).fetchone()
             self.assertEqual(row["last_stock"], 5)
             self.assertEqual(row["last_state"], "in_stock")
             self.assertEqual(row["message_id"], 901)
-            self.assertEqual(len(fake_telegram.sent), 1)
+            self.assertEqual(json.loads(row["message_ids"]), {"chat-a": 901, "chat-b": 902})
+            self.assertEqual(len(fake_telegram.sent), 2)
             self.assertEqual(len(fake_telegram.edited), 0)
+            self.assertEqual({msg["chat_id"] for msg in fake_telegram.sent}, {"chat-a", "chat-b"})
 
             stock_box["value"] = 7
             self.assertTrue(engine.process_task(fetch_task(), settings_payload, use_test_browser=False))
             with app_module.open_connection() as connection:
                 row = connection.execute(
-                    "SELECT last_stock, last_state, message_id FROM tasks WHERE id = ?",
+                    "SELECT last_stock, last_state, message_id, message_ids FROM tasks WHERE id = ?",
                     (task_id,),
                 ).fetchone()
             self.assertEqual(row["last_stock"], 7)
             self.assertEqual(row["last_state"], "in_stock")
             self.assertEqual(row["message_id"], 901)
-            self.assertEqual(len(fake_telegram.sent), 1)
-            self.assertEqual(len(fake_telegram.edited), 1)
-            self.assertEqual(fake_telegram.edited[-1]["message_id"], 901)
+            self.assertEqual(json.loads(row["message_ids"]), {"chat-a": 901, "chat-b": 902})
+            self.assertEqual(len(fake_telegram.sent), 2)
+            self.assertEqual(len(fake_telegram.edited), 2)
+            self.assertEqual([entry["message_id"] for entry in fake_telegram.edited], [901, 902])
             self.assertIn("stock=7", fake_telegram.edited[-1]["text"])
 
             stock_box["value"] = 0
             self.assertTrue(engine.process_task(fetch_task(), settings_payload, use_test_browser=False))
             with app_module.open_connection() as connection:
                 row = connection.execute(
-                    "SELECT last_stock, last_state, message_id FROM tasks WHERE id = ?",
+                    "SELECT last_stock, last_state, message_id, message_ids FROM tasks WHERE id = ?",
                     (task_id,),
                 ).fetchone()
             self.assertEqual(row["last_stock"], 0)
             self.assertEqual(row["last_state"], "sold_out")
             self.assertIsNone(row["message_id"])
-            self.assertEqual(len(fake_telegram.sent), 1)
-            self.assertEqual(len(fake_telegram.edited), 2)
+            self.assertEqual(row["message_ids"], "")
+            self.assertEqual(len(fake_telegram.sent), 2)
+            self.assertEqual(len(fake_telegram.edited), 4)
             self.assertIn("sold out", fake_telegram.edited[-1]["text"])
         finally:
             engine.telegram = original_telegram

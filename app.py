@@ -206,6 +206,7 @@ DEFAULT_TASK_GROUP = "默认分组"
 
 SETTINGS_DEFAULTS = {
     "telegram_bot_token": os.getenv("TELEGRAM_BOT_TOKEN", "").strip(),
+    "telegram_chat_ids": os.getenv("TELEGRAM_CHAT_IDS", "").strip() or os.getenv("TELEGRAM_CHAT_ID", "").strip(),
     "telegram_chat_id": os.getenv("TELEGRAM_CHAT_ID", "").strip(),
     "monitor_debug_port": str(DEFAULT_MONITOR_PORT),
     "test_debug_port": str(DEFAULT_TEST_PORT),
@@ -421,6 +422,70 @@ def safe_format(template: str, values: dict[str, Any]) -> str:
 def normalize_task_group(value: Any) -> str:
     group_name = re.sub(r"\s+", " ", str(value or "").strip())
     return (group_name or DEFAULT_TASK_GROUP)[:48]
+
+
+def normalize_telegram_chat_ids(value: Any) -> list[str]:
+    if isinstance(value, (list, tuple, set)):
+        raw_values = [str(item).strip() for item in value]
+    else:
+        raw_text = str(value or "").replace("\r", "\n")
+        raw_values = [part.strip() for part in re.split(r"[\n,;]+", raw_text)]
+    chat_ids: list[str] = []
+    for chat_id in raw_values:
+        if chat_id and chat_id not in chat_ids:
+            chat_ids.append(chat_id)
+    return chat_ids
+
+
+def serialize_telegram_chat_ids(chat_ids: list[str]) -> str:
+    return "\n".join(normalize_telegram_chat_ids(chat_ids))
+
+
+def parse_message_id_map(value: Any, fallback_chat_ids: list[str] | None = None, legacy_message_id: Any = None) -> dict[str, int]:
+    message_ids: dict[str, int] = {}
+    fallback_chat_ids = normalize_telegram_chat_ids(fallback_chat_ids or [])
+    raw_text = str(value or "").strip()
+    if raw_text:
+        try:
+            parsed = json.loads(raw_text)
+        except json.JSONDecodeError:
+            parsed = {}
+        if isinstance(parsed, dict):
+            for chat_id, message_id in parsed.items():
+                try:
+                    message_ids[str(chat_id).strip()] = int(message_id)
+                except (TypeError, ValueError):
+                    continue
+        elif isinstance(parsed, list):
+            for entry in parsed:
+                if not isinstance(entry, dict):
+                    continue
+                chat_id = str(entry.get("chat_id", "")).strip()
+                try:
+                    message_id = int(entry.get("message_id"))
+                except (TypeError, ValueError):
+                    continue
+                if chat_id:
+                    message_ids[chat_id] = message_id
+    if not message_ids and legacy_message_id not in (None, "") and fallback_chat_ids:
+        try:
+            message_ids[fallback_chat_ids[0]] = int(legacy_message_id)
+        except (TypeError, ValueError):
+            pass
+    return message_ids
+
+
+def serialize_message_id_map(message_ids: dict[str, int]) -> str:
+    normalized: dict[str, int] = {}
+    for chat_id, message_id in message_ids.items():
+        chat_id_text = str(chat_id).strip()
+        try:
+            message_id_int = int(message_id)
+        except (TypeError, ValueError):
+            continue
+        if chat_id_text:
+            normalized[chat_id_text] = message_id_int
+    return json.dumps(normalized, ensure_ascii=False) if normalized else ""
 
 
 def is_browser_user_agent(user_agent: str | None) -> bool:
@@ -848,9 +913,13 @@ def normalize_settings(raw: dict[str, str]) -> dict[str, Any]:
     catalog_port = int(raw.get("catalog_debug_port") or DEFAULT_CATALOG_PORT)
     poll_interval = max(15, min(3600, int(raw.get("poll_interval_seconds") or DEFAULT_POLL_INTERVAL)))
     timeout_seconds = max(10, min(120, int(raw.get("request_timeout_seconds") or DEFAULT_TIMEOUT_SECONDS)))
+    chat_ids = normalize_telegram_chat_ids(raw.get("telegram_chat_ids") or raw.get("telegram_chat_id"))
+    legacy_chat_id = raw.get("telegram_chat_id", "").strip() or (chat_ids[0] if chat_ids else "")
     return {
         "telegram_bot_token": raw.get("telegram_bot_token", "").strip(),
-        "telegram_chat_id": raw.get("telegram_chat_id", "").strip(),
+        "telegram_chat_id": legacy_chat_id,
+        "telegram_chat_ids": chat_ids,
+        "telegram_chat_ids_text": serialize_telegram_chat_ids(chat_ids),
         "monitor_debug_port": monitor_port,
         "test_debug_port": test_port,
         "catalog_debug_port": catalog_port,
@@ -919,6 +988,7 @@ def initialize_database() -> None:
                 source_item_url TEXT DEFAULT '',
                 source_snapshot TEXT DEFAULT '',
                 source_last_sync_at TEXT,
+                message_ids TEXT DEFAULT '',
                 enabled INTEGER NOT NULL DEFAULT 1,
                 last_stock INTEGER,
                 last_state TEXT NOT NULL DEFAULT 'unknown',
@@ -941,6 +1011,7 @@ def initialize_database() -> None:
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 source_url TEXT NOT NULL UNIQUE,
                 source_name TEXT NOT NULL DEFAULT '',
+                group_name TEXT NOT NULL DEFAULT '默认分组',
                 active INTEGER NOT NULL DEFAULT 1,
                 discovered_count INTEGER NOT NULL DEFAULT 0,
                 last_sync_at TEXT,
@@ -978,6 +1049,8 @@ def initialize_database() -> None:
         ensure_column(connection, "tasks", "source_item_url", "TEXT DEFAULT ''")
         ensure_column(connection, "tasks", "source_snapshot", "TEXT DEFAULT ''")
         ensure_column(connection, "tasks", "source_last_sync_at", "TEXT")
+        ensure_column(connection, "tasks", "message_ids", "TEXT DEFAULT ''")
+        ensure_column(connection, "merchant_sources", "group_name", "TEXT NOT NULL DEFAULT '默认分组'")
 
         existing_admin = connection.execute("SELECT id FROM admins LIMIT 1").fetchone()
         if not existing_admin:
@@ -1056,6 +1129,7 @@ def to_task_payload(row: sqlite3.Row) -> dict[str, Any]:
         "source_item_url": (row["source_item_url"] or "") if "source_item_url" in keys else "",
         "source_snapshot": (row["source_snapshot"] or "") if "source_snapshot" in keys else "",
         "source_last_sync_at": (row["source_last_sync_at"] or "") if "source_last_sync_at" in keys else "",
+        "message_ids": (row["message_ids"] or "") if "message_ids" in keys else "",
         "enabled": bool(row["enabled"]),
         "last_stock": row["last_stock"],
         "last_state": row["last_state"],
@@ -1077,6 +1151,7 @@ def to_source_payload(row: sqlite3.Row, item_count: int = 0, linked_count: int =
         "id": row["id"],
         "source_url": row["source_url"],
         "source_name": row["source_name"] or "",
+        "group_name": row["group_name"] if "group_name" in row.keys() else DEFAULT_TASK_GROUP,
         "active": bool(row["active"]),
         "discovered_count": row["discovered_count"],
         "item_count": item_count,
@@ -1216,6 +1291,7 @@ def create_task_from_catalog_item(
     connection: sqlite3.Connection,
     source_id: int,
     source_title: str,
+    group_name: str,
     source_url: str,
     item_id: int,
     item: dict[str, Any],
@@ -1223,7 +1299,7 @@ def create_task_from_catalog_item(
     timestamp = now_iso()
     payload = {
         "name": item["title"],
-        "group_name": source_title,
+        "group_name": group_name,
         "monitor_url": item["monitor_url"],
         "target_keyword": item["keyword"],
         "restock_template": DEFAULT_RESTOCK_TEMPLATE,
@@ -1684,6 +1760,7 @@ class MonitoringEngine:
                 self.import_merchant_source(
                     source["source_url"],
                     source["source_name"],
+                    source["group_name"] if "group_name" in source.keys() else DEFAULT_TASK_GROUP,
                     settings_payload,
                     auto_promote=True,
                 )
@@ -1762,6 +1839,7 @@ class MonitoringEngine:
         self,
         source_url: str,
         source_name: str,
+        group_name: str,
         settings_payload: dict[str, Any],
         auto_promote: bool = True,
     ) -> MerchantImportResult:
@@ -1789,6 +1867,7 @@ class MonitoringEngine:
         source_title = normalize_candidate_title(source_name) or extract_page_title(html_text)
         if not source_title:
             source_title = urlparse(source_url).hostname or source_url
+        target_group_name = normalize_task_group(group_name)
 
         timestamp = now_iso()
         upserted_count = 0
@@ -1804,19 +1883,19 @@ class MonitoringEngine:
                 connection.execute(
                     """
                     UPDATE merchant_sources
-                    SET source_name = ?, active = 1, last_sync_at = ?, last_error = '', discovered_count = ?, updated_at = ?
+                    SET source_name = ?, group_name = ?, active = 1, last_sync_at = ?, last_error = '', discovered_count = ?, updated_at = ?
                     WHERE id = ?
                     """,
-                    (source_title, timestamp, len(discovered_items), timestamp, source_id),
+                    (source_title, target_group_name, timestamp, len(discovered_items), timestamp, source_id),
                 )
             else:
                 cursor = connection.execute(
                     """
                     INSERT INTO merchant_sources (
-                        source_url, source_name, active, discovered_count, last_sync_at, last_error, created_at, updated_at
-                    ) VALUES (?, ?, 1, ?, ?, '', ?, ?)
+                        source_url, source_name, group_name, active, discovered_count, last_sync_at, last_error, created_at, updated_at
+                    ) VALUES (?, ?, ?, 1, ?, ?, '', ?, ?)
                     """,
-                    (source_url, source_title, len(discovered_items), timestamp, timestamp, timestamp),
+                    (source_url, source_title, target_group_name, len(discovered_items), timestamp, timestamp, timestamp),
                 )
                 source_id = int(cursor.lastrowid)
 
@@ -1898,6 +1977,7 @@ class MonitoringEngine:
                         connection,
                         source_id=source_id,
                         source_title=source_title,
+                        group_name=target_group_name,
                         source_url=source_url,
                         item_id=item_id,
                         item=item,
@@ -1965,10 +2045,54 @@ class MonitoringEngine:
             items=persisted_items,
         )
 
+    def resolve_chat_ids(self, settings_payload: dict[str, Any]) -> list[str]:
+        return normalize_telegram_chat_ids(settings_payload.get("telegram_chat_ids") or settings_payload.get("telegram_chat_id"))
+
+    def send_messages_to_chats(
+        self,
+        token: str,
+        chat_ids: list[str],
+        text: str,
+        buttons: list[dict[str, str]] | None = None,
+    ) -> tuple[dict[str, int], list[str]]:
+        sent: dict[str, int] = {}
+        errors: list[str] = []
+        for chat_id in chat_ids:
+            try:
+                sent[chat_id] = self.telegram.send_message(token, chat_id, text, buttons)
+            except Exception as exc:
+                errors.append(f"{chat_id}: {sanitize_telegram_error(str(exc), token)}")
+        return sent, errors
+
+    def edit_messages_to_chats(
+        self,
+        token: str,
+        chat_ids: list[str],
+        message_id_map: dict[str, int],
+        text: str,
+        buttons: list[dict[str, str]] | None = None,
+    ) -> tuple[dict[str, int], list[str]]:
+        edited: dict[str, int] = {}
+        errors: list[str] = []
+        for chat_id in chat_ids:
+            message_id = message_id_map.get(chat_id)
+            if message_id is None:
+                continue
+            try:
+                self.telegram.edit_message(token, chat_id, int(message_id), text, buttons)
+                edited[chat_id] = int(message_id)
+            except Exception as exc:
+                errors.append(f"{chat_id}: {sanitize_telegram_error(str(exc), token)}")
+        return edited, errors
+
     def process_task(self, task: sqlite3.Row, settings_payload: dict[str, Any], use_test_browser: bool) -> bool:
         result = self.scrape_task(task, settings_payload, use_test_browser)
         if use_test_browser:
-            raise RuntimeError("测试推送不应进入 process_task 常规流程。")
+            raise RuntimeError("测试推送应走 run_test_push 流程，不进入常规状态机。")
+
+        chat_ids = self.resolve_chat_ids(settings_payload)
+        if not chat_ids:
+            raise RuntimeError("请先配置 Telegram Bot Token 和至少一个 Chat ID。")
 
         with open_connection() as connection:
             timestamp = now_iso()
@@ -1986,60 +2110,100 @@ class MonitoringEngine:
 
             buttons = build_buttons(task)
             message_values = message_template_values(task, result.stock)
-            message_id = task["message_id"]
+            message_id_map = parse_message_id_map(
+                task["message_ids"] if "message_ids" in task.keys() else "",
+                chat_ids,
+                task["message_id"] if "message_id" in task.keys() else None,
+            )
+            message_id_map = {chat_id: message_id for chat_id, message_id in message_id_map.items() if chat_id in chat_ids}
             last_stock = task["last_stock"]
             new_state = "in_stock" if result.stock > 0 else "sold_out"
             last_error = ""
+            operation_errors: list[str] = []
+            existing_message_ids = dict(message_id_map)
 
             try:
-                if result.stock > 0 and not message_id:
+                missing_chat_ids = [chat_id for chat_id in chat_ids if chat_id not in message_id_map]
+                if result.stock > 0 and missing_chat_ids:
                     text = safe_format(task["restock_template"], message_values)
-                    new_message_id = self.telegram.send_message(
+                    sent_map, send_errors = self.send_messages_to_chats(
                         settings_payload["telegram_bot_token"],
-                        settings_payload["telegram_chat_id"],
+                        missing_chat_ids,
                         text,
                         buttons,
                     )
-                    message_id = new_message_id
-                    log_activity("info", f"task:{task['id']}", f"{task['name']} 刚补货，已发送新消息。")
-                elif result.stock > 0 and message_id and last_stock != result.stock:
+                    if sent_map:
+                        message_id_map.update(sent_map)
+                        log_activity(
+                            "info",
+                            f"task:{task['id']}",
+                            f"{task['name']} 刚补货，已向 {len(sent_map)} 个群发送新消息。",
+                        )
+                    operation_errors.extend(send_errors)
+                if result.stock > 0 and existing_message_ids and last_stock != result.stock:
                     text = safe_format(task["restock_template"], message_values)
-                    self.telegram.edit_message(
+                    edited_map, edit_errors = self.edit_messages_to_chats(
                         settings_payload["telegram_bot_token"],
-                        settings_payload["telegram_chat_id"],
-                        int(message_id),
+                        chat_ids,
+                        existing_message_ids,
                         text,
                         buttons,
                     )
-                    log_activity("info", f"task:{task['id']}", f"{task['name']} 库存变化为 {result.stock}，已静默编辑消息。")
-                elif result.stock <= 0 and message_id:
+                    if edited_map:
+                        log_activity(
+                            "info",
+                            f"task:{task['id']}",
+                            f"{task['name']} 库存变化为 {result.stock}，已静默编辑 {len(edited_map)} 条消息。",
+                        )
+                    operation_errors.extend(edit_errors)
+                elif result.stock <= 0 and message_id_map:
                     text = safe_format(task["soldout_template"], message_values | {"status": telegram_html_value("sold_out")})
-                    self.telegram.edit_message(
+                    edited_map, edit_errors = self.edit_messages_to_chats(
                         settings_payload["telegram_bot_token"],
-                        settings_payload["telegram_chat_id"],
-                        int(message_id),
+                        chat_ids,
+                        message_id_map,
                         text,
                         buttons,
                     )
-                    message_id = None
-                    log_activity("warning", f"task:{task['id']}", f"{task['name']} 已售罄，已覆盖原消息。")
+                    if edited_map:
+                        log_activity(
+                            "warning",
+                            f"task:{task['id']}",
+                            f"{task['name']} 已售罄，已覆盖原消息并清空会话记录。",
+                        )
+                    message_id_map = {}
+                    operation_errors.extend(edit_errors)
             except Exception as exc:
                 last_error = sanitize_telegram_error(str(exc), settings_payload["telegram_bot_token"])
-                exc = RuntimeError(last_error)
-                log_activity("error", f"task:{task['id']}", f"{task['name']} Telegram 推送失败：{exc}")
+                log_activity("error", f"task:{task['id']}", f"{task['name']} Telegram 推送失败：{last_error}")
 
+            if operation_errors and not last_error:
+                last_error = "; ".join(operation_errors)[:1000]
+
+            first_chat_id = chat_ids[0] if chat_ids else ""
+            message_id = message_id_map.get(first_chat_id) if first_chat_id else None
             connection.execute(
                 """
                 UPDATE tasks
                 SET last_stock = ?,
                     last_state = ?,
                     message_id = ?,
+                    message_ids = ?,
                     last_checked_at = ?,
                     last_error = ?,
                     updated_at = ?
                 WHERE id = ?
                 """,
-                (result.stock, new_state, message_id, timestamp, last_error[:1000], timestamp, task["id"]),
+                (
+                    result.stock,
+                    new_state,
+                    message_id,
+                    serialize_message_id_map(message_id_map),
+                    timestamp,
+                    last_error[:1000],
+                    timestamp,
+                    task["id"],
+                ),
             )
             connection.commit()
         return True
@@ -2047,8 +2211,9 @@ class MonitoringEngine:
     def run_test_push(self, task_id: int) -> dict[str, Any]:
         settings_payload = self.get_runtime_settings()
         self.configure_browsers(settings_payload)
-        if not settings_payload["telegram_bot_token"] or not settings_payload["telegram_chat_id"]:
-            raise RuntimeError("请先配置 Telegram Bot Token 和 Chat ID。")
+        chat_ids = self.resolve_chat_ids(settings_payload)
+        if not settings_payload["telegram_bot_token"] or not chat_ids:
+            raise RuntimeError("请先配置 Telegram Bot Token 和至少一个 Chat ID。")
 
         with open_connection() as connection:
             task = connection.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()
@@ -2060,25 +2225,31 @@ class MonitoringEngine:
         preview_values = message_template_values(task, result.stock)
         preview_values["status"] = "test"
         preview_text = (
-            f"【TEST】{task['name']}\n"
+            f"【测试推送】{task['name']}\n"
             f"隔离测试端口：{settings_payload['test_debug_port']}\n"
-            f"当前识别库存：{stock_text}\n\n"
+            f"识别库存：{stock_text}\n\n"
             f"{safe_format(task['restock_template'], preview_values)}"
         )
-        message_id = self.telegram.send_message(
+        sent_map, send_errors = self.send_messages_to_chats(
             settings_payload["telegram_bot_token"],
-            settings_payload["telegram_chat_id"],
+            chat_ids,
             preview_text,
             build_buttons(task),
         )
+        if send_errors and not sent_map:
+            raise RuntimeError("; ".join(send_errors)[:1000])
+        if send_errors and sent_map:
+            log_activity("warning", f"task:{task_id}", "; ".join(send_errors)[:1000])
+        first_chat_id = chat_ids[0]
+        message_id = sent_map.get(first_chat_id)
         log_activity("info", f"task:{task_id}", f"{task['name']} 已通过测试浏览器发送测试消息（message_id={message_id}）。")
         return {
             "message_id": message_id,
+            "message_ids": sent_map,
             "stock": result.stock,
             "detail": result.detail,
             "test_port": settings_payload["test_debug_port"],
         }
-
 
 def build_buttons(task: sqlite3.Row | dict[str, Any]) -> list[dict[str, str]]:
     buttons: list[dict[str, str]] = []
@@ -2472,6 +2643,11 @@ DISCOVERY_GENERIC_TEXTS = {
     "index",
     "about",
     "contact",
+    "main",
+    "my",
+    "join",
+    "channel",
+    "join channel",
     "login",
     "logout",
     "sign in",
@@ -2488,13 +2664,58 @@ DISCOVERY_GENERIC_TEXTS = {
     "previous",
     "back",
 }
-HEADING_PATTERN = re.compile(r"<h[1-6]\b[^>]*>(?P<body>.*?)</h[1-6]>", re.IGNORECASE | re.DOTALL)
+HEADING_PATTERN = re.compile(r"<h[1-6]\b(?P<attrs>[^>]*)>(?P<body>.*?)</h[1-6]>", re.IGNORECASE | re.DOTALL)
 ANCHOR_PATTERN = re.compile(r"<a\b(?P<attrs>[^>]*)>(?P<body>.*?)</a>", re.IGNORECASE | re.DOTALL)
 TITLE_ATTR_PATTERN = re.compile(r"\b(?P<key>[a-zA-Z_:][-a-zA-Z0-9_:.]*)\s*=\s*(?P<quote>['\"])(?P<value>.*?)\2", re.DOTALL)
+CONTEXT_ATTR_PATTERN = re.compile(
+    r"\b(?:class|id|role|aria-label|data-section|data-testid|data-role)\s*=\s*(?P<quote>['\"])(?P<value>.*?)\1",
+    re.IGNORECASE | re.DOTALL,
+)
+DISCOVERY_CONTEXT_POSITIVE_MARKERS = (
+    "product",
+    "package",
+    "plan",
+    "pricing",
+    "price",
+    "offer",
+    "item",
+    "card",
+    "listing",
+    "catalog",
+    "service",
+    "sku",
+    "inventory",
+    "shop",
+)
+DISCOVERY_CONTEXT_NEGATIVE_MARKERS = (
+    "nav",
+    "navbar",
+    "breadcrumb",
+    "menu",
+    "sidebar",
+    "footer",
+    "header",
+    "topbar",
+    "toolbar",
+    "mobile",
+    "drawer",
+    "pagination",
+    "pager",
+    "filter",
+    "sort",
+    "login",
+    "logout",
+    "account",
+    "cart",
+    "checkout",
+    "search",
+)
 PRICE_PATTERN = re.compile(
     r"(?:￥|¥|CNY|RMB|HK\$|USD|\$|€|£)\s*\d[\d,]*(?:\.\d{1,2})?",
     re.IGNORECASE,
 )
+DISCOVERY_GENERIC_TEXTS_NORMALIZED = {normalize_signal_text(text) for text in DISCOVERY_GENERIC_TEXTS}
+DISCOVERY_ACTION_TEXTS_NORMALIZED = {normalize_signal_text(text) for text in DISCOVERY_ACTION_TEXTS}
 
 
 def first_non_empty(*values: Any) -> str:
@@ -2512,6 +2733,31 @@ def parse_tag_attributes(raw_attrs: str) -> dict[str, str]:
     for match in TITLE_ATTR_PATTERN.finditer(raw_attrs or ""):
         attributes[match.group("key").lower()] = html_module.unescape(match.group("value") or "").strip()
     return attributes
+
+
+def collect_context_blob(fragment: str) -> str:
+    values: list[str] = []
+    for match in CONTEXT_ATTR_PATTERN.finditer(fragment or ""):
+        value = normalize_signal_text(match.group("value"))
+        if value:
+            values.append(value)
+    return " ".join(values)
+
+
+def is_discovery_candidate(title: str, fragment: str, cleaned_fragment: str, stock_value: int | None, price_hint: str, restock_hint: str) -> bool:
+    normalized_title = normalize_candidate_title(title)
+    if not is_likely_product_title(normalized_title):
+        return False
+    context_blob = normalize_signal_text(f"{cleaned_fragment} {collect_context_blob(fragment)}")
+    has_positive_context = any(marker in context_blob for marker in DISCOVERY_CONTEXT_POSITIVE_MARKERS)
+    has_negative_context = any(marker in context_blob for marker in DISCOVERY_CONTEXT_NEGATIVE_MARKERS)
+    has_stock_signal = stock_value is not None and not has_negative_context
+    has_signal = bool(price_hint or restock_hint or has_stock_signal or has_orderable_marker(fragment, cleaned_fragment))
+    if has_negative_context and not has_positive_context:
+        return False
+    if not has_positive_context and not has_signal:
+        return False
+    return True
 
 
 def normalize_candidate_title(value: Any) -> str:
@@ -2539,7 +2785,7 @@ def is_likely_product_title(title: str) -> bool:
     if len(candidate) < 2:
         return False
     lowered = normalize_signal_text(candidate)
-    if lowered in DISCOVERY_GENERIC_TEXTS or lowered in DISCOVERY_ACTION_TEXTS:
+    if lowered in DISCOVERY_GENERIC_TEXTS_NORMALIZED or lowered in DISCOVERY_ACTION_TEXTS_NORMALIZED:
         return False
     if any(token in lowered for token in ("next", "previous", "breadcrumb", "menu", "login", "cart", "checkout")) and len(candidate) < 24:
         return False
@@ -2680,11 +2926,17 @@ def discover_catalog_items(html_text: str, source_url: str) -> list[dict[str, st
         snippet: str,
         raw_payload: Any,
         price_hint: str = "",
+        stock_value: int | None = None,
         stock_hint: str = "",
         restock_hint: str = "",
+        structured: bool = False,
     ) -> None:
         normalized_title = normalize_candidate_title(title)
-        if not is_likely_product_title(normalized_title):
+        cleaned_snippet = clean_fragment_text(snippet)
+        if structured:
+            if not is_likely_product_title(normalized_title):
+                return
+        elif not is_discovery_candidate(normalized_title, snippet, cleaned_snippet, stock_value, price_hint, restock_hint):
             return
         normalized_monitor = normalize_candidate_url(source_url, monitor_url) if monitor_url else source_url
         normalized_item = normalize_candidate_url(source_url, item_url) if item_url else normalized_monitor
@@ -2713,6 +2965,24 @@ def discover_catalog_items(html_text: str, source_url: str) -> list[dict[str, st
             "raw_payload": json.dumps(raw_payload, ensure_ascii=False)[:4000],
         }
 
+    def extract_best_links(fragment: str, start_offset: int = 0, max_gap: int = 420) -> tuple[str, str]:
+        fallback_url = source_url
+        for anchor in ANCHOR_PATTERN.finditer(fragment):
+            if anchor.start() < start_offset:
+                continue
+            if anchor.start() > start_offset + max_gap:
+                break
+            attrs = parse_tag_attributes(anchor.group("attrs") or "")
+            href = (attrs.get("href") or "").strip()
+            if not href:
+                continue
+            candidate_url = normalize_candidate_url(source_url, href)
+            if is_action_url(href):
+                return source_url, candidate_url
+            if fallback_url == source_url:
+                fallback_url = candidate_url
+        return fallback_url, fallback_url
+
     for json_candidate in extract_jsonld_catalog_candidates(html_text, source_url):
         register_candidate(
             json_candidate["title"],
@@ -2721,8 +2991,47 @@ def discover_catalog_items(html_text: str, source_url: str) -> list[dict[str, st
             json_candidate.get("raw_payload", ""),
             json_candidate,
             json_candidate.get("price_hint", ""),
+            None,
             json_candidate.get("stock_hint", ""),
             json_candidate.get("restock_hint", ""),
+            True,
+        )
+
+    for heading in HEADING_PATTERN.finditer(html_text):
+        attrs = parse_tag_attributes(heading.group("attrs") or "")
+        title = first_non_empty(
+            attrs.get("data-title"),
+            attrs.get("aria-label"),
+            attrs.get("title"),
+            heading.group("body"),
+        )
+        if not title:
+            continue
+        snippet_start = max(0, heading.start() - 180)
+        snippet_end = min(len(html_text), heading.end() + 600)
+        snippet = html_text[snippet_start:snippet_end]
+        cleaned_snippet = clean_fragment_text(snippet)
+        stock_value, stock_detail = parse_stock(snippet)
+        stock_hint = "" if stock_value is None else str(stock_value)
+        restock_hint = ""
+        if "补货" in stock_detail or "restock" in stock_detail.lower() or "到货" in stock_detail:
+            restock_hint = stock_detail
+        price_hint = extract_price_hint(snippet)
+        monitor_url, item_url = extract_best_links(snippet, max(0, heading.end() - snippet_start), 320)
+        register_candidate(
+            title,
+            monitor_url,
+            item_url,
+            snippet,
+            {
+                "source": "heading",
+                "title": title,
+                "heading": cleaned_snippet,
+            },
+            price_hint,
+            stock_value,
+            stock_hint,
+            restock_hint,
         )
 
     for anchor in ANCHOR_PATTERN.finditer(html_text):
@@ -2735,8 +3044,8 @@ def discover_catalog_items(html_text: str, source_url: str) -> list[dict[str, st
             continue
         item_url = normalize_candidate_url(source_url, href)
         monitor_url = source_url if is_action_url(href) else item_url
-        snippet_start = max(0, anchor.start() - 500)
-        snippet_end = min(len(html_text), anchor.end() + 1200)
+        snippet_start = max(0, anchor.start() - 160)
+        snippet_end = min(len(html_text), anchor.end() + 450)
         snippet = html_text[snippet_start:snippet_end]
         heading_title = extract_heading_before(anchor.start(), html_text)
         body_title = normalize_candidate_title(anchor.group("body"))
@@ -2768,6 +3077,7 @@ def discover_catalog_items(html_text: str, source_url: str) -> list[dict[str, st
                 "snippet_text": cleaned_snippet,
             },
             price_hint,
+            stock_value,
             stock_hint,
             restock_hint,
         )
@@ -2782,6 +3092,7 @@ def discover_catalog_items(html_text: str, source_url: str) -> list[dict[str, st
             price_hint_global,
             "",
             "",
+            True,
         )
 
     return list(candidates.values())
@@ -3002,13 +3313,15 @@ def make_app() -> Flask:
                 "settings": {
                     "telegram_bot_token_masked": mask_secret(settings_payload["telegram_bot_token"]),
                     "telegram_chat_id": settings_payload["telegram_chat_id"],
+                    "telegram_chat_ids": settings_payload["telegram_chat_ids"],
+                    "telegram_chat_ids_text": settings_payload["telegram_chat_ids_text"],
                     "monitor_debug_port": settings_payload["monitor_debug_port"],
                     "test_debug_port": settings_payload["test_debug_port"],
                     "catalog_debug_port": settings_payload["catalog_debug_port"],
                     "poll_interval_seconds": settings_payload["poll_interval_seconds"],
                     "request_timeout_seconds": settings_payload["request_timeout_seconds"],
                     "telegram_ready": bool(
-                        settings_payload["telegram_bot_token"] and settings_payload["telegram_chat_id"]
+                        settings_payload["telegram_bot_token"] and settings_payload["telegram_chat_ids"]
                     ),
                 },
                 "admin": {
@@ -3134,6 +3447,50 @@ def make_app() -> Flask:
         log_activity("info", "tasks", f"任务 #{task_id} 已{'启用' if enabled else '停用'}。")
         return jsonify({"ok": True, "message": "任务状态已切换。"})
 
+    @app.route("/api/task-groups/rename", methods=["POST"])
+    @login_required
+    @limiter.limit(GENERAL_MUTATION_LIMIT)
+    def rename_task_group():
+        payload = read_json()
+        old_name = normalize_task_group(payload.get("old_name"))
+        new_name = normalize_task_group(payload.get("new_name"))
+        if not new_name:
+            return jsonify({"ok": False, "message": "新的分组名称不能为空。"}), 400
+        if old_name == new_name:
+            return jsonify({"ok": True, "message": "分组名称未变化。", "result": {"old_name": old_name, "new_name": new_name}})
+        if old_name == DEFAULT_TASK_GROUP:
+            return jsonify({"ok": False, "message": "默认分组暂不支持重命名。"}), 400
+
+        timestamp = now_iso()
+        with open_connection() as connection:
+            task_count = connection.execute("SELECT COUNT(*) FROM tasks WHERE group_name = ?", (old_name,)).fetchone()[0]
+            source_count = connection.execute("SELECT COUNT(*) FROM merchant_sources WHERE group_name = ?", (old_name,)).fetchone()[0]
+            if not task_count and not source_count:
+                return jsonify({"ok": False, "message": "分组不存在。"}), 404
+            connection.execute(
+                "UPDATE tasks SET group_name = ?, updated_at = ? WHERE group_name = ?",
+                (new_name, timestamp, old_name),
+            )
+            connection.execute(
+                "UPDATE merchant_sources SET group_name = ?, updated_at = ? WHERE group_name = ?",
+                (new_name, timestamp, old_name),
+            )
+            connection.commit()
+
+        log_activity("info", "tasks", f'分组「{old_name}」已重命名为「{new_name}」。')
+        return jsonify(
+            {
+                "ok": True,
+                "message": "分组已重命名。",
+                "result": {
+                    "old_name": old_name,
+                    "new_name": new_name,
+                    "task_count": int(task_count),
+                    "source_count": int(source_count),
+                },
+            }
+        )
+
     @app.route("/api/test-push/<int:task_id>", methods=["POST"])
     @login_required
     @limiter.limit("8 per minute")
@@ -3161,6 +3518,7 @@ def make_app() -> Flask:
             result = app.extensions["monitor_engine"].import_merchant_source(
                 source_url,
                 source_name,
+                str(payload.get("group_name", "")).strip(),
                 app.extensions["monitor_engine"].get_runtime_settings(),
                 auto_promote=auto_promote,
             )
@@ -3204,6 +3562,7 @@ def make_app() -> Flask:
             result = app.extensions["monitor_engine"].import_merchant_source(
                 source["source_url"],
                 source["source_name"],
+                source["group_name"] if "group_name" in source.keys() else DEFAULT_TASK_GROUP,
                 app.extensions["monitor_engine"].get_runtime_settings(),
                 auto_promote=auto_promote,
             )
@@ -3261,7 +3620,7 @@ def make_app() -> Flask:
         with open_connection() as connection:
             item = connection.execute(
                 """
-                SELECT mi.*, ms.source_url, ms.source_name
+                SELECT mi.*, ms.source_url, ms.source_name, ms.group_name
                 FROM merchant_items mi
                 JOIN merchant_sources ms ON ms.id = mi.source_id
                 WHERE mi.id = ?
@@ -3316,6 +3675,7 @@ def make_app() -> Flask:
                     connection,
                     source_id=int(item["source_id"]),
                     source_title=str(item["source_name"] or item["source_url"]),
+                    group_name=str(item["group_name"] or DEFAULT_TASK_GROUP),
                     source_url=str(item["source_url"]),
                     item_id=int(item["id"]),
                     item=item_payload,
@@ -3349,9 +3709,10 @@ def make_app() -> Flask:
         if bot_token:
             updates["telegram_bot_token"] = bot_token
 
-        chat_id = str(payload.get("telegram_chat_id", "")).strip()
-        if chat_id:
-            updates["telegram_chat_id"] = chat_id
+        chat_ids_value = payload.get("telegram_chat_ids", payload.get("telegram_chat_id", ""))
+        chat_ids = normalize_telegram_chat_ids(chat_ids_value)
+        updates["telegram_chat_ids"] = serialize_telegram_chat_ids(chat_ids)
+        updates["telegram_chat_id"] = chat_ids[0] if chat_ids else ""
 
         for key in ("monitor_debug_port", "test_debug_port", "catalog_debug_port"):
             if key in payload:

@@ -228,8 +228,12 @@
                                             <p id="settings-bot-token-mask" class="mt-2 text-xs text-slate-500"></p>
                                         </div>
                                         <div>
-                                            <label for="settings-chat-id" class="form-label">Telegram Chat ID</label>
-                                            <input id="settings-chat-id" type="text" class="input-dark">
+                                            <label for="settings-chat-ids" class="form-label">Telegram Chat ID 列表</label>
+                                            <textarea id="settings-chat-ids" rows="3" class="input-dark min-h-24 resize-y" placeholder="一行一个 Chat ID"></textarea>
+                                            <div class="mt-2 flex flex-wrap items-center gap-2">
+                                                <p id="settings-chat-ids-hint" class="text-xs text-slate-500">支持多群聊，一行一个 Chat ID。</p>
+                                                <span id="settings-chat-ids-count" class="rounded-full border border-slate-700 bg-slate-950/70 px-2.5 py-1 font-mono text-[11px] text-slate-400">0 群聊</span>
+                                            </div>
                                         </div>
                                         <div class="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
                                             <div>
@@ -268,6 +272,17 @@
                                             <label for="merchant-source-name" class="form-label">来源名称</label>
                                             <input id="merchant-source-name" type="text" class="input-dark" placeholder="留空自动识别">
                                         </div>
+                                        <div>
+                                            <label for="merchant-group" class="form-label">导入分组</label>
+                                            <select id="merchant-group" class="input-dark">
+                                                <option value="默认分组">默认分组</option>
+                                                <option value="__custom__">新建分组…</option>
+                                            </select>
+                                        </div>
+                                        <div id="merchant-group-custom-wrap" class="hidden">
+                                            <label for="merchant-group-custom" class="form-label">新建分组名称</label>
+                                            <input id="merchant-group-custom" type="text" class="input-dark" maxlength="48" placeholder="输入新的分组名称">
+                                        </div>
                                         <label class="flex items-center gap-3 rounded-lg border border-slate-700/60 bg-slate-950/50 px-4 py-3 text-sm text-slate-300">
                                             <input id="merchant-auto-promote" type="checkbox" class="h-4 w-4 rounded border-slate-700 bg-slate-950 text-indigo-500" checked>
                                             导入后自动创建任务
@@ -301,7 +316,20 @@
                                             </div>
                                         </div>
                                         <div>
-                                            <p class="mb-3 text-xs font-bold uppercase tracking-widest text-slate-500">商品列表</p>
+                                            <div class="mb-3 flex flex-wrap items-center justify-between gap-3">
+                                                <p class="text-xs font-bold uppercase tracking-widest text-slate-500">商品列表</p>
+                                                <div class="flex items-center gap-2">
+                                                    <label for="merchant-item-filter" class="text-[11px] font-bold uppercase tracking-widest text-slate-500">筛选</label>
+                                                    <select id="merchant-item-filter" class="input-dark w-44 !min-h-10 !py-2 text-sm">
+                                                        <option value="all">全部商品</option>
+                                                        <option value="linked">已关联任务</option>
+                                                        <option value="unlinked">未关联任务</option>
+                                                        <option value="new">仅新发现</option>
+                                                        <option value="updated">仅已更新</option>
+                                                        <option value="archived">仅已归档</option>
+                                                    </select>
+                                                </div>
+                                            </div>
                                             <div class="terminal-box max-h-72 overflow-y-auto p-4">
                                                 <div id="merchant-item-list" class="space-y-3"></div>
                                             </div>
@@ -440,7 +468,14 @@
                     </div>
                     <div>
                         <label for="task-group" class="form-label">任务分组</label>
-                        <input id="task-group" type="text" class="input-dark" maxlength="48" placeholder="默认分组">
+                        <select id="task-group" class="input-dark">
+                            <option value="默认分组">默认分组</option>
+                            <option value="__custom__">新建分组…</option>
+                        </select>
+                    </div>
+                    <div id="task-group-custom-wrap" class="hidden">
+                        <label for="task-group-custom" class="form-label">新建分组名称</label>
+                        <input id="task-group-custom" type="text" class="input-dark" maxlength="48" placeholder="输入新的分组名称">
                     </div>
                     <div>
                         <label for="task-keyword" class="form-label">精准狙击关键词</label>
@@ -479,6 +514,33 @@
                     <div class="flex flex-wrap justify-end gap-3 pt-2">
                         <button id="task-cancel-button" type="button" class="ghost-button">取消</button>
                         <button id="task-submit-button" type="submit" class="primary-button">保存节点</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+
+        <div id="group-rename-modal" class="modal-shell hidden">
+            <div class="modal-panel max-w-xl">
+                <div class="mb-6 flex items-start justify-between gap-4">
+                    <div>
+                        <h3 id="group-rename-title" class="text-2xl font-extrabold tracking-tight text-white">重命名分组</h3>
+                        <p class="mt-1 font-mono text-xs text-slate-500">只会改组名，不会动任务内容。</p>
+                    </div>
+                    <button id="group-rename-close" type="button" class="icon-button" aria-label="关闭">
+                        <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+                        </svg>
+                    </button>
+                </div>
+
+                <form id="group-rename-form" class="grid gap-4">
+                    <div>
+                        <label for="group-rename-input" class="form-label">新的分组名称</label>
+                        <input id="group-rename-input" type="text" class="input-dark" maxlength="48" required>
+                    </div>
+                    <div class="flex flex-wrap justify-end gap-3 pt-2">
+                        <button id="group-rename-cancel" type="button" class="ghost-button">取消</button>
+                        <button id="group-rename-submit" type="submit" class="primary-button">确认重命名</button>
                     </div>
                 </form>
             </div>
