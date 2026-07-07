@@ -381,6 +381,8 @@ class InstallScriptTestCase(unittest.TestCase):
             )
         self.assertIn(f"include {temp_path}/allow.conf;", output)
         self.assertNotIn(f"include {temp_path}/realip.conf;", output)
+        self.assertIn("try_files /__noaff_https_redirect__ @noaff_https_redirect;", output)
+        self.assertIn("location @noaff_https_redirect", output)
         self.assertIn("proxy_set_header X-Real-IP $http_cf_connecting_ip;", output)
         self.assertIn("proxy_set_header X-Forwarded-For $http_cf_connecting_ip;", output)
 

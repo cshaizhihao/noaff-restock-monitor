@@ -1889,6 +1889,10 @@ $(bool_is_true "$ORIGIN_LOCKDOWN_TO_CLOUDFLARE" && printf '    include %s;\n' "$
     }
 
     location / {
+        try_files /__noaff_https_redirect__ @noaff_https_redirect;
+    }
+
+    location @noaff_https_redirect {
         return 301 ${redirect_target}\$request_uri;
     }
 }
