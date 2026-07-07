@@ -80,7 +80,7 @@ bash -n install.sh
 
 Current result:
 
-- 101 tests passing
+- 104 tests passing
 - Python compile check passing
 - `install.sh` syntax check passing
 

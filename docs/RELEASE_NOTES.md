@@ -110,7 +110,7 @@ bash -n install.sh
 
 Current baseline:
 
-- 101 tests passing
+- 104 tests passing
 - Python compile check passing
 - `install.sh` bash syntax check passing
 

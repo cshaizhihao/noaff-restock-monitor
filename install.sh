@@ -1829,12 +1829,18 @@ configure_nginx() {
     return
   fi
 
-  local domains_csv primary_domain
+  local domains_csv primary_domain proxy_real_ip_header proxy_forwarded_for_header
   domains_csv="$(build_tls_domains)"
   primary_domain="$(printf '%s' "$domains_csv" | cut -d',' -f1 | xargs)"
   local server_names
   server_names="$(printf '%s' "$domains_csv" | tr ',' ' ')"
   local redirect_target="https://\$host"
+  proxy_real_ip_header="\$remote_addr"
+  proxy_forwarded_for_header="\$proxy_add_x_forwarded_for"
+  if bool_is_true "$ORIGIN_LOCKDOWN_TO_CLOUDFLARE"; then
+    proxy_real_ip_header="\$http_cf_connecting_ip"
+    proxy_forwarded_for_header="\$http_cf_connecting_ip"
+  fi
 
   mkdir -p /var/www/html
 
@@ -1844,6 +1850,7 @@ server {
     listen ${PUBLIC_HTTP_PORT};
     listen [::]:${PUBLIC_HTTP_PORT};
     server_name ${server_names};
+$(bool_is_true "$ORIGIN_LOCKDOWN_TO_CLOUDFLARE" && printf '    include %s;\n' "$CF_ALLOW_SNIPPET")
 
     client_max_body_size 2m;
 
@@ -1851,8 +1858,8 @@ server {
         proxy_pass http://${APP_HOST}:${APP_PORT};
         proxy_http_version 1.1;
         proxy_set_header Host \$host;
-        proxy_set_header X-Real-IP \$remote_addr;
-        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Real-IP ${proxy_real_ip_header};
+        proxy_set_header X-Forwarded-For ${proxy_forwarded_for_header};
         proxy_set_header X-Forwarded-Proto http;
         proxy_set_header X-Forwarded-Host \$host;
         proxy_set_header X-Forwarded-Port ${PUBLIC_HTTP_PORT};
@@ -1874,7 +1881,6 @@ server {
     listen ${PUBLIC_HTTP_PORT};
     listen [::]:${PUBLIC_HTTP_PORT};
     server_name ${server_names};
-$(bool_is_true "$ORIGIN_LOCKDOWN_TO_CLOUDFLARE" && printf '    include %s;\n' "$CF_REALIP_SNIPPET")
 $(bool_is_true "$ORIGIN_LOCKDOWN_TO_CLOUDFLARE" && printf '    include %s;\n' "$CF_ALLOW_SNIPPET")
 
     location /.well-known/acme-challenge/ {
@@ -1896,7 +1902,6 @@ server {
     ssl_certificate /etc/letsencrypt/live/${primary_domain}/fullchain.pem;
     ssl_certificate_key /etc/letsencrypt/live/${primary_domain}/privkey.pem;
     include ${SSL_SNIPPET};
-$(bool_is_true "$ORIGIN_LOCKDOWN_TO_CLOUDFLARE" && printf '    include %s;\n' "$CF_REALIP_SNIPPET")
 $(bool_is_true "$ORIGIN_LOCKDOWN_TO_CLOUDFLARE" && printf '    include %s;\n' "$CF_ALLOW_SNIPPET")
 
     client_max_body_size 2m;
@@ -1910,8 +1915,8 @@ $(bool_is_true "$ORIGIN_LOCKDOWN_TO_CLOUDFLARE" && printf '    include %s;\n' "$
         proxy_pass http://${APP_HOST}:${APP_PORT};
         proxy_http_version 1.1;
         proxy_set_header Host \$host;
-        proxy_set_header X-Real-IP \$remote_addr;
-        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Real-IP ${proxy_real_ip_header};
+        proxy_set_header X-Forwarded-For ${proxy_forwarded_for_header};
         proxy_set_header X-Forwarded-Proto https;
         proxy_set_header X-Forwarded-Host \$host;
         proxy_set_header X-Forwarded-Port ${PUBLIC_HTTPS_PORT};

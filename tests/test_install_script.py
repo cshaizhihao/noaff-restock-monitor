@@ -349,6 +349,41 @@ class InstallScriptTestCase(unittest.TestCase):
         self.assertGreaterEqual(output.count("location /.well-known/acme-challenge/"), 2)
         self.assertIn('root ${ACME_WEBROOT};', output)
 
+    def test_cloudflare_lockdown_does_not_block_real_visitors_after_realip(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir).as_posix()
+            output = self.assert_shell_ok(
+                textwrap.dedent(
+                    f"""
+                    set -Eeuo pipefail
+                    export NOAFF_INSTALL_LIBRARY_MODE=true
+                    export ENABLE_NGINX=true
+                    export ENABLE_TLS=true
+                    export ORIGIN_LOCKDOWN_TO_CLOUDFLARE=true
+                    export FQDN=monitor.example.com
+                    export TLS_DOMAINS=monitor.example.com
+                    export APP_HOST=127.0.0.1
+                    export APP_PORT=7777
+                    export PUBLIC_HTTP_PORT=80
+                    export PUBLIC_HTTPS_PORT=443
+                    source ./install.sh
+                    NGINX_SITE_PATH='{temp_path}/site.conf'
+                    NGINX_SITE_LINK='{temp_path}/site-link.conf'
+                    SSL_SNIPPET='{temp_path}/ssl.conf'
+                    CF_REALIP_SNIPPET='{temp_path}/realip.conf'
+                    CF_ALLOW_SNIPPET='{temp_path}/allow.conf'
+                    ACME_WEBROOT='{temp_path}/acme'
+                    restart_nginx_safely() {{ :; }}
+                    configure_nginx
+                    cat "$NGINX_SITE_PATH"
+                    """
+                )
+            )
+        self.assertIn(f"include {temp_path}/allow.conf;", output)
+        self.assertNotIn(f"include {temp_path}/realip.conf;", output)
+        self.assertIn("proxy_set_header X-Real-IP $http_cf_connecting_ip;", output)
+        self.assertIn("proxy_set_header X-Forwarded-For $http_cf_connecting_ip;", output)
+
     def test_nginx_restart_can_reclaim_only_stale_nginx_ports(self) -> None:
         output = self.assert_shell_ok(
             textwrap.dedent(
@@ -605,7 +640,7 @@ class InstallScriptTestCase(unittest.TestCase):
         self.assertIn("does not bypass Cloudflare / Turnstile / CAPTCHA", release_notes)
         self.assertIn("Cloudflare / Turnstile / CAPTCHA challenge pages are treated as protected sources", release_notes)
         self.assertIn("Webhook tokens are stored as HMAC hashes", release_notes)
-        self.assertIn("101 tests passing", release_notes)
+        self.assertIn("104 tests passing", release_notes)
 
     def test_dashboard_polling_does_not_replay_task_reveal_animation(self) -> None:
         app_js = (ROOT_DIR / "static" / "app.js").read_text(encoding="utf-8")
