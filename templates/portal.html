@@ -827,16 +827,31 @@
                             <input id="task-url" type="url" class="input-dark" required>
                         </div>
                     </div>
-                    <div>
-                        <label for="task-group" class="form-label">任务分组</label>
-                        <select id="task-group" class="input-dark">
-                            <option value="默认分组">默认分组</option>
-                            <option value="__custom__">新建分组…</option>
-                        </select>
+                    <div class="grid gap-4 lg:grid-cols-2">
+                        <div>
+                            <label for="task-group" class="form-label">主分组</label>
+                            <select id="task-group" class="input-dark">
+                                <option value="默认分组">默认分组</option>
+                                <option value="__custom__">新建分组…</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label for="task-subgroup" class="form-label">子分组</label>
+                            <select id="task-subgroup" class="input-dark">
+                                <option value="默认子分组">默认子分组</option>
+                                <option value="__custom__">新建子分组…</option>
+                            </select>
+                        </div>
                     </div>
-                    <div id="task-group-custom-wrap" class="hidden">
-                        <label for="task-group-custom" class="form-label">新建分组名称</label>
-                        <input id="task-group-custom" type="text" class="input-dark" maxlength="48" placeholder="输入新的分组名称">
+                    <div class="grid gap-4 lg:grid-cols-2">
+                        <div id="task-group-custom-wrap" class="hidden">
+                            <label for="task-group-custom" class="form-label">新建主分组名称</label>
+                            <input id="task-group-custom" type="text" class="input-dark" maxlength="48" placeholder="例如 DMIT">
+                        </div>
+                        <div id="task-subgroup-custom-wrap" class="hidden">
+                            <label for="task-subgroup-custom" class="form-label">新建子分组名称</label>
+                            <input id="task-subgroup-custom" type="text" class="input-dark" maxlength="48" placeholder="例如 香港 / Premium / AS3">
+                        </div>
                     </div>
                     <div class="grid gap-4 lg:grid-cols-[1fr_0.75fr]">
                         <div>

@@ -135,6 +135,7 @@ class PortalAppTestCase(unittest.TestCase):
                 connection.close()
 
             self.assertIn("fetch_strategy", columns)
+            self.assertIn("subgroup_name", columns)
             self.assertIn("source_config", columns)
             self.assertIn("blocked_count", columns)
             self.assertIn("last_blocked_at", columns)
@@ -409,6 +410,7 @@ class PortalAppTestCase(unittest.TestCase):
             json={
                 "name": "HK VM",
                 "group_name": "Geelinx JP",
+                "subgroup_name": "Tokyo / Premium",
                 "monitor_url": "https://example.com/cart.php?gid=1",
                 "target_keyword": "HK-CMI",
                 "fetch_strategy": "static_http",
@@ -434,6 +436,7 @@ class PortalAppTestCase(unittest.TestCase):
         self.assertEqual(payload["metrics"]["total"], 1)
         self.assertEqual(len(payload["tasks"]), 1)
         self.assertEqual(payload["tasks"][0]["group_name"], "Geelinx JP")
+        self.assertEqual(payload["tasks"][0]["subgroup_name"], "Tokyo / Premium")
         self.assertEqual(payload["tasks"][0]["fetch_strategy"], "static_http")
         self.assertEqual(json.loads(payload["tasks"][0]["source_config"]), {"mode": "public"})
         self.assertEqual(payload["tasks"][0]["blocked_count"], 0)
@@ -449,6 +452,7 @@ class PortalAppTestCase(unittest.TestCase):
             json={
                 "name": "HK VM",
                 "group_name": "Geelinx JP",
+                "subgroup_name": "Osaka / Budget",
                 "monitor_url": "https://example.com/cart.php?gid=1",
                 "target_keyword": "HK-CMI",
                 "fetch_strategy": "whmcs",
@@ -470,6 +474,7 @@ class PortalAppTestCase(unittest.TestCase):
             base_url=BASE_URL,
         )
         self.assertEqual(updated.get_json()["tasks"][0]["fetch_strategy"], "whmcs")
+        self.assertEqual(updated.get_json()["tasks"][0]["subgroup_name"], "Osaka / Budget")
 
         invalid_strategy = self.client.post(
             f"{app_module.PORTAL_PATH}/api/tasks",
@@ -746,6 +751,90 @@ class PortalAppTestCase(unittest.TestCase):
 
         self.assertEqual(task_group, "新分组")
         self.assertEqual(source_group, "新分组")
+
+    def test_task_group_subgroup_and_bulk_delete_endpoints(self) -> None:
+        _, headers = self.login()
+        timestamp = app_module.now_iso()
+        with app_module.open_connection() as connection:
+            task_ids = []
+            for name, group_name, subgroup_name in (
+                ("HK Starter", "IDC-A", "香港"),
+                ("US Starter", "IDC-A", "洛杉矶"),
+                ("JP Starter", "IDC-B", "东京"),
+                ("SG Starter", "IDC-B", "新加坡"),
+            ):
+                cursor = connection.execute(
+                    """
+                    INSERT INTO tasks (
+                        name, group_name, subgroup_name, monitor_url, target_keyword,
+                        restock_template, soldout_template, enabled, created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
+                    """,
+                    (
+                        name,
+                        group_name,
+                        subgroup_name,
+                        f"https://example.com/{name.lower().replace(' ', '-')}",
+                        name,
+                        "{name} restock",
+                        "{name} soldout",
+                        timestamp,
+                        timestamp,
+                    ),
+                )
+                task_ids.append(cursor.lastrowid)
+            connection.execute(
+                """
+                INSERT INTO merchant_sources (
+                    source_url, source_name, group_name, active, discovered_count, last_sync_at, last_error, created_at, updated_at
+                ) VALUES (?, ?, ?, 1, 0, ?, '', ?, ?)
+                """,
+                ("https://merchant.example.com/idc-a", "IDC-A", "IDC-A", timestamp, timestamp, timestamp),
+            )
+            connection.commit()
+
+        bulk = self.client.post(
+            f"{app_module.PORTAL_PATH}/api/tasks/bulk-delete",
+            headers=headers,
+            base_url=BASE_URL,
+            json={"task_ids": [task_ids[2], task_ids[3], task_ids[3], "bad"]},
+        )
+        self.assertEqual(bulk.status_code, 200)
+        self.assertEqual(bulk.get_json()["result"]["deleted_count"], 2)
+
+        delete_subgroup = self.client.post(
+            f"{app_module.PORTAL_PATH}/api/task-subgroups/delete",
+            headers=headers,
+            base_url=BASE_URL,
+            json={"group_name": "IDC-A", "subgroup_name": "香港"},
+        )
+        self.assertEqual(delete_subgroup.status_code, 200)
+        self.assertEqual(delete_subgroup.get_json()["result"]["task_count"], 1)
+
+        delete_default = self.client.post(
+            f"{app_module.PORTAL_PATH}/api/task-groups/delete",
+            headers=headers,
+            base_url=BASE_URL,
+            json={"group_name": app_module.DEFAULT_TASK_GROUP},
+        )
+        self.assertEqual(delete_default.status_code, 400)
+
+        delete_group = self.client.post(
+            f"{app_module.PORTAL_PATH}/api/task-groups/delete",
+            headers=headers,
+            base_url=BASE_URL,
+            json={"group_name": "IDC-A"},
+        )
+        self.assertEqual(delete_group.status_code, 200)
+        self.assertEqual(delete_group.get_json()["result"]["task_count"], 1)
+        self.assertEqual(delete_group.get_json()["result"]["source_count"], 1)
+
+        with app_module.open_connection() as connection:
+            remaining_tasks = connection.execute("SELECT COUNT(*) FROM tasks").fetchone()[0]
+            source_group = connection.execute("SELECT group_name FROM merchant_sources WHERE source_name = ?", ("IDC-A",)).fetchone()[0]
+
+        self.assertEqual(remaining_tasks, 0)
+        self.assertEqual(source_group, app_module.DEFAULT_TASK_GROUP)
 
     def test_merchant_item_promote_creates_linked_task(self) -> None:
         _, headers = self.login()

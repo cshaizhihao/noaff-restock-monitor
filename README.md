@@ -293,7 +293,7 @@ curl -X POST 'https://your-panel.example.com/api/webhooks/restock/123' \
 后台包含：
 
 - 监控任务创建、编辑、启停、删除。
-- 分组管理和分组重命名。
+- 主分组 / 子分组管理、分组重命名、删除分组、批量删除任务。
 - 采集策略选择。
 - 受保护来源提示和冷却时间展示。
 - Manual 快捷标记。

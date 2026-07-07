@@ -228,6 +228,7 @@ BROWSER_LOCK_FILENAMES = (
     "SingletonSocket",
 )
 DEFAULT_TASK_GROUP = "默认分组"
+DEFAULT_TASK_SUBGROUP = "默认子分组"
 
 SETTINGS_DEFAULTS = {
     "telegram_bot_token": os.getenv("TELEGRAM_BOT_TOKEN", "").strip(),
@@ -608,6 +609,11 @@ def safe_format(template: str, values: dict[str, Any]) -> str:
 def normalize_task_group(value: Any) -> str:
     group_name = re.sub(r"\s+", " ", str(value or "").strip())
     return (group_name or DEFAULT_TASK_GROUP)[:48]
+
+
+def normalize_task_subgroup(value: Any) -> str:
+    subgroup_name = re.sub(r"\s+", " ", str(value or "").strip())
+    return (subgroup_name or DEFAULT_TASK_SUBGROUP)[:48]
 
 
 def mapping_value(source: Any, key: str, default: Any = None) -> Any:
@@ -1559,6 +1565,7 @@ def initialize_database() -> None:
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 name TEXT NOT NULL,
                 group_name TEXT NOT NULL DEFAULT '默认分组',
+                subgroup_name TEXT NOT NULL DEFAULT '默认子分组',
                 monitor_url TEXT NOT NULL,
                 target_keyword TEXT NOT NULL,
                 fetch_strategy TEXT NOT NULL DEFAULT 'browser',
@@ -1638,6 +1645,7 @@ def initialize_database() -> None:
             """
         )
         ensure_column(connection, "tasks", "group_name", "TEXT NOT NULL DEFAULT '默认分组'")
+        ensure_column(connection, "tasks", "subgroup_name", "TEXT NOT NULL DEFAULT '默认子分组'")
         ensure_column(connection, "tasks", "source_item_id", "INTEGER")
         ensure_column(connection, "tasks", "source_item_key", "TEXT DEFAULT ''")
         ensure_column(connection, "tasks", "source_source_url", "TEXT DEFAULT ''")
@@ -1720,6 +1728,7 @@ def to_task_payload(row: sqlite3.Row) -> dict[str, Any]:
         "id": row["id"],
         "name": row["name"],
         "group_name": normalize_task_group(row["group_name"] if "group_name" in keys else ""),
+        "subgroup_name": normalize_task_subgroup(row["subgroup_name"] if "subgroup_name" in keys else ""),
         "monitor_url": row["monitor_url"],
         "target_keyword": row["target_keyword"],
         "fetch_strategy": normalize_fetch_strategy(row["fetch_strategy"] if "fetch_strategy" in keys else ""),
@@ -1887,6 +1896,7 @@ def build_task_insert_values(payload: dict[str, Any], source_fields: dict[str, A
     return (
         str(payload["name"]).strip(),
         normalize_task_group(payload.get("group_name")),
+        normalize_task_subgroup(payload.get("subgroup_name")),
         str(payload["monitor_url"]).strip(),
         str(payload["target_keyword"]).strip(),
         normalize_fetch_strategy(payload.get("fetch_strategy")),
@@ -1915,11 +1925,11 @@ def insert_task_record(connection: sqlite3.Connection, payload: dict[str, Any], 
     cursor = connection.execute(
         """
         INSERT INTO tasks (
-            name, group_name, monitor_url, target_keyword, fetch_strategy, source_config, restock_template, soldout_template,
+            name, group_name, subgroup_name, monitor_url, target_keyword, fetch_strategy, source_config, restock_template, soldout_template,
             button_1_text, button_1_url, button_2_text, button_2_url,
             source_item_id, source_item_key, source_source_url, source_source_name, source_item_url,
             source_snapshot, source_last_sync_at, enabled, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         build_task_insert_values(payload, source_fields, timestamp),
     )
@@ -1954,6 +1964,7 @@ def create_task_from_catalog_item(
     payload = {
         "name": item["title"],
         "group_name": group_name,
+        "subgroup_name": item.get("subgroup_name") or DEFAULT_TASK_SUBGROUP,
         "monitor_url": item["monitor_url"],
         "target_keyword": item["keyword"],
         "restock_template": DEFAULT_RESTOCK_TEMPLATE,
@@ -5622,7 +5633,7 @@ def make_app() -> Flask:
             connection.execute(
                 """
                 UPDATE tasks
-                SET name = ?, group_name = ?, monitor_url = ?, target_keyword = ?, fetch_strategy = ?,
+                SET name = ?, group_name = ?, subgroup_name = ?, monitor_url = ?, target_keyword = ?, fetch_strategy = ?,
                     source_config = ?, restock_template = ?, soldout_template = ?, button_1_text = ?, button_1_url = ?,
                     button_2_text = ?, button_2_url = ?, source_item_id = ?, source_item_key = ?,
                     source_source_url = ?, source_source_name = ?, source_item_url = ?, source_snapshot = ?,
@@ -5632,6 +5643,7 @@ def make_app() -> Flask:
                 (
                     str(payload["name"]).strip(),
                     normalize_task_group(payload.get("group_name")),
+                    normalize_task_subgroup(payload.get("subgroup_name")),
                     str(payload["monitor_url"]).strip(),
                     str(payload["target_keyword"]).strip(),
                     normalize_fetch_strategy(payload.get("fetch_strategy")),
@@ -5670,6 +5682,42 @@ def make_app() -> Flask:
             connection.commit()
         log_activity("warning", "tasks", f"已删除任务 #{task_id} ({task['name']})。")
         return jsonify({"ok": True, "message": "任务已删除。"})
+
+    @app.route("/api/tasks/bulk-delete", methods=["POST"])
+    @login_required
+    @limiter.limit(GENERAL_MUTATION_LIMIT)
+    def bulk_delete_tasks():
+        payload = read_json()
+        raw_ids = payload.get("task_ids")
+        if not isinstance(raw_ids, list):
+            return jsonify({"ok": False, "message": "请选择要删除的任务。"}), 400
+        task_ids: list[int] = []
+        for raw_id in raw_ids:
+            try:
+                task_id = int(raw_id)
+            except (TypeError, ValueError):
+                continue
+            if task_id > 0 and task_id not in task_ids:
+                task_ids.append(task_id)
+        if not task_ids:
+            return jsonify({"ok": False, "message": "请选择要删除的任务。"}), 400
+        if len(task_ids) > 200:
+            return jsonify({"ok": False, "message": "单次最多删除 200 个任务。"}), 400
+
+        placeholders = ",".join("?" for _ in task_ids)
+        with open_connection() as connection:
+            existing = connection.execute(
+                f"SELECT id, name FROM tasks WHERE id IN ({placeholders})",
+                task_ids,
+            ).fetchall()
+            if not existing:
+                return jsonify({"ok": False, "message": "选中的任务不存在。"}), 404
+            connection.execute(f"DELETE FROM tasks WHERE id IN ({placeholders})", task_ids)
+            connection.commit()
+
+        deleted_count = len(existing)
+        log_activity("warning", "tasks", f"已批量删除 {deleted_count} 个任务。")
+        return jsonify({"ok": True, "message": f"已删除 {deleted_count} 个任务。", "result": {"deleted_count": deleted_count}})
 
     @app.route("/api/tasks/<int:task_id>/toggle", methods=["POST"])
     @login_required
@@ -5730,6 +5778,71 @@ def make_app() -> Flask:
                     "task_count": int(task_count),
                     "source_count": int(source_count),
                 },
+            }
+        )
+
+    @app.route("/api/task-groups/delete", methods=["POST"])
+    @login_required
+    @limiter.limit(GENERAL_MUTATION_LIMIT)
+    def delete_task_group():
+        payload = read_json()
+        group_name = normalize_task_group(payload.get("group_name"))
+        if not group_name:
+            return jsonify({"ok": False, "message": "分组名称不能为空。"}), 400
+        if group_name == DEFAULT_TASK_GROUP:
+            return jsonify({"ok": False, "message": "默认分组暂不支持整体删除。"}), 400
+
+        timestamp = now_iso()
+        with open_connection() as connection:
+            task_count = connection.execute("SELECT COUNT(*) FROM tasks WHERE group_name = ?", (group_name,)).fetchone()[0]
+            source_count = connection.execute("SELECT COUNT(*) FROM merchant_sources WHERE group_name = ?", (group_name,)).fetchone()[0]
+            if not task_count and not source_count:
+                return jsonify({"ok": False, "message": "分组不存在。"}), 404
+            connection.execute("DELETE FROM tasks WHERE group_name = ?", (group_name,))
+            connection.execute(
+                "UPDATE merchant_sources SET group_name = ?, updated_at = ? WHERE group_name = ?",
+                (DEFAULT_TASK_GROUP, timestamp, group_name),
+            )
+            connection.commit()
+
+        log_activity("warning", "tasks", f"分组「{group_name}」已删除，移除了 {int(task_count)} 个任务。")
+        return jsonify(
+            {
+                "ok": True,
+                "message": f"分组已删除，移除了 {int(task_count)} 个任务。",
+                "result": {"group_name": group_name, "task_count": int(task_count), "source_count": int(source_count)},
+            }
+        )
+
+    @app.route("/api/task-subgroups/delete", methods=["POST"])
+    @login_required
+    @limiter.limit(GENERAL_MUTATION_LIMIT)
+    def delete_task_subgroup():
+        payload = read_json()
+        group_name = normalize_task_group(payload.get("group_name"))
+        subgroup_name = normalize_task_subgroup(payload.get("subgroup_name"))
+        if not group_name or not subgroup_name:
+            return jsonify({"ok": False, "message": "分组和子分组不能为空。"}), 400
+
+        with open_connection() as connection:
+            task_count = connection.execute(
+                "SELECT COUNT(*) FROM tasks WHERE group_name = ? AND subgroup_name = ?",
+                (group_name, subgroup_name),
+            ).fetchone()[0]
+            if not task_count:
+                return jsonify({"ok": False, "message": "子分组不存在或没有任务。"}), 404
+            connection.execute(
+                "DELETE FROM tasks WHERE group_name = ? AND subgroup_name = ?",
+                (group_name, subgroup_name),
+            )
+            connection.commit()
+
+        log_activity("warning", "tasks", f"子分组「{group_name} / {subgroup_name}」已删除，移除了 {int(task_count)} 个任务。")
+        return jsonify(
+            {
+                "ok": True,
+                "message": f"子分组已删除，移除了 {int(task_count)} 个任务。",
+                "result": {"group_name": group_name, "subgroup_name": subgroup_name, "task_count": int(task_count)},
             }
         )
 
