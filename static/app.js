@@ -26,8 +26,10 @@
         restartEngineButton: document.getElementById("restart-engine-button"),
         taskResetButton: document.getElementById("task-reset-button"),
         navTasks: document.getElementById("nav-tasks"),
+        navMerchant: document.getElementById("nav-merchant"),
         navSettings: document.getElementById("nav-settings"),
         mobileNavTasks: document.getElementById("mobile-nav-tasks"),
+        mobileNavMerchant: document.getElementById("mobile-nav-merchant"),
         mobileNavSettings: document.getElementById("mobile-nav-settings"),
         viewTitle: document.getElementById("view-title"),
         lastCycle: document.getElementById("last-cycle"),
@@ -37,6 +39,7 @@
         metricSoldout: document.getElementById("metric-soldout"),
         metricUnknown: document.getElementById("metric-unknown"),
         tasksView: document.getElementById("tasks-view"),
+        merchantView: document.getElementById("merchant-view"),
         settingsView: document.getElementById("settings-view"),
         tasksGrid: document.getElementById("tasks-grid"),
         toastStack: document.getElementById("toast-stack"),
@@ -53,6 +56,20 @@
         settingsCatalogPort: document.getElementById("settings-catalog-port"),
         settingsPollInterval: document.getElementById("settings-poll-interval"),
         settingsTimeout: document.getElementById("settings-timeout"),
+        settingsFirecrawlEnabled: document.getElementById("settings-firecrawl-enabled"),
+        settingsFirecrawlApiUrl: document.getElementById("settings-firecrawl-api-url"),
+        settingsFirecrawlApiKey: document.getElementById("settings-firecrawl-api-key"),
+        settingsFirecrawlApiKeyMask: document.getElementById("settings-firecrawl-api-key-mask"),
+        settingsFirecrawlTimeout: document.getElementById("settings-firecrawl-timeout"),
+        settingsFirecrawlMaxAge: document.getElementById("settings-firecrawl-max-age"),
+        settingsFirecrawlStoreInCache: document.getElementById("settings-firecrawl-store-in-cache"),
+        settingsFirecrawlProxyMode: document.getElementById("settings-firecrawl-proxy-mode"),
+        settingsFirecrawlAllowAutoProxy: document.getElementById("settings-firecrawl-allow-auto-proxy"),
+        settingsFirecrawlAllowEnhancedProxy: document.getElementById("settings-firecrawl-allow-enhanced-proxy"),
+        settingsFirecrawlZeroDataRetention: document.getElementById("settings-firecrawl-zero-data-retention"),
+        settingsFirecrawlUseForMonitor: document.getElementById("settings-firecrawl-use-for-monitor"),
+        settingsFirecrawlUseForCatalog: document.getElementById("settings-firecrawl-use-for-catalog"),
+        settingsFirecrawlCatalogLimit: document.getElementById("settings-firecrawl-catalog-limit"),
         merchantForm: document.getElementById("merchant-form"),
         merchantSourceUrl: document.getElementById("merchant-source-url"),
         merchantSourceName: document.getElementById("merchant-source-name"),
@@ -435,12 +452,39 @@
         input.dataset.inputDirty = "0";
     }
 
+    function syncCheckboxValue(input, value) {
+        if (!input) return;
+        wireDirtyTracking(input);
+        const nextValue = value ? "1" : "0";
+        const currentValue = input.checked ? "1" : "0";
+        const syncedValue = input.dataset.syncedChecked;
+        const hasLocalEdit = syncedValue !== undefined && currentValue !== syncedValue;
+        const hasDirtyFlag = input.dataset.inputDirty === "1";
+
+        if (currentValue === nextValue) {
+            input.dataset.syncedChecked = nextValue;
+            input.dataset.inputDirty = "0";
+            return;
+        }
+        if (document.activeElement === input || hasLocalEdit || hasDirtyFlag) {
+            return;
+        }
+        input.checked = value;
+        input.dataset.syncedChecked = nextValue;
+        input.dataset.inputDirty = "0";
+    }
+
     function wireDirtyTracking(input) {
         if (!input || input.dataset.dirtyTracking === "1") {
             return;
         }
         input.dataset.dirtyTracking = "1";
         const markDirty = () => {
+            if (input.type === "checkbox") {
+                const syncedChecked = input.dataset.syncedChecked ?? (input.checked ? "1" : "0");
+                input.dataset.inputDirty = (input.checked ? "1" : "0") === syncedChecked ? "0" : "1";
+                return;
+            }
             const syncedValue = input.dataset.syncedValue ?? "";
             input.dataset.inputDirty = input.value === syncedValue ? "0" : "1";
         };
@@ -655,13 +699,18 @@
     function setNav(view) {
         currentView = view;
         const tasks = view === "tasks";
+        const merchant = view === "merchant";
+        const settings = view === "settings";
         els.tasksView.classList.toggle("hidden", !tasks);
-        els.settingsView.classList.toggle("hidden", tasks);
+        els.merchantView?.classList.toggle("hidden", !merchant);
+        els.settingsView.classList.toggle("hidden", !settings);
         els.navTasks.classList.toggle("nav-item-active", tasks);
-        els.navSettings.classList.toggle("nav-item-active", !tasks);
+        els.navMerchant?.classList.toggle("nav-item-active", merchant);
+        els.navSettings.classList.toggle("nav-item-active", settings);
         els.mobileNavTasks?.classList.toggle("nav-item-active", tasks);
-        els.mobileNavSettings?.classList.toggle("nav-item-active", !tasks);
-        els.viewTitle.textContent = tasks ? "监控任务" : "系统设置";
+        els.mobileNavMerchant?.classList.toggle("nav-item-active", merchant);
+        els.mobileNavSettings?.classList.toggle("nav-item-active", settings);
+        els.viewTitle.textContent = tasks ? "监控任务" : merchant ? "商品入库" : "系统设置";
     }
 
     function openTaskModal(task = null) {
@@ -748,6 +797,23 @@
         syncInputValue(els.settingsCatalogPort, settings.catalog_debug_port || 9445);
         syncInputValue(els.settingsPollInterval, settings.poll_interval_seconds || 45);
         syncInputValue(els.settingsTimeout, settings.request_timeout_seconds || 25);
+        syncCheckboxValue(els.settingsFirecrawlEnabled, Boolean(settings.firecrawl_enabled));
+        syncInputValue(els.settingsFirecrawlApiUrl, settings.firecrawl_api_url || "https://api.firecrawl.dev");
+        if (els.settingsFirecrawlApiKeyMask) {
+            els.settingsFirecrawlApiKeyMask.textContent = settings.firecrawl_api_key_masked
+                ? `当前 Key：${settings.firecrawl_api_key_masked}`
+                : "当前未配置 Firecrawl API Key";
+        }
+        syncInputValue(els.settingsFirecrawlTimeout, settings.firecrawl_timeout_seconds || 60);
+        syncInputValue(els.settingsFirecrawlMaxAge, settings.firecrawl_max_age_ms ?? 0);
+        syncCheckboxValue(els.settingsFirecrawlStoreInCache, Boolean(settings.firecrawl_store_in_cache));
+        syncInputValue(els.settingsFirecrawlProxyMode, settings.firecrawl_proxy_mode || "basic");
+        syncCheckboxValue(els.settingsFirecrawlAllowAutoProxy, Boolean(settings.firecrawl_allow_auto_proxy));
+        syncCheckboxValue(els.settingsFirecrawlAllowEnhancedProxy, Boolean(settings.firecrawl_allow_enhanced_proxy));
+        syncCheckboxValue(els.settingsFirecrawlZeroDataRetention, settings.firecrawl_zero_data_retention !== false);
+        syncCheckboxValue(els.settingsFirecrawlUseForMonitor, Boolean(settings.firecrawl_use_for_monitor));
+        syncCheckboxValue(els.settingsFirecrawlUseForCatalog, settings.firecrawl_use_for_catalog !== false);
+        syncInputValue(els.settingsFirecrawlCatalogLimit, settings.firecrawl_catalog_limit || 50);
     }
 
     function renderSystem(system) {
@@ -1660,8 +1726,10 @@
     els.backupFileInput?.addEventListener("change", updateBackupFileName);
 
     els.navTasks?.addEventListener("click", () => setNav("tasks"));
+    els.navMerchant?.addEventListener("click", () => setNav("merchant"));
     els.navSettings?.addEventListener("click", () => setNav("settings"));
     els.mobileNavTasks?.addEventListener("click", () => setNav("tasks"));
+    els.mobileNavMerchant?.addEventListener("click", () => setNav("merchant"));
     els.mobileNavSettings?.addEventListener("click", () => setNav("settings"));
 
     els.taskResetButton?.addEventListener("click", () => openTaskModal());
@@ -1765,10 +1833,25 @@
             test_debug_port: Number(els.settingsTestPort.value),
             catalog_debug_port: Number(els.settingsCatalogPort.value),
             poll_interval_seconds: Number(els.settingsPollInterval.value),
-            request_timeout_seconds: Number(els.settingsTimeout.value)
+            request_timeout_seconds: Number(els.settingsTimeout.value),
+            firecrawl_enabled: Boolean(els.settingsFirecrawlEnabled?.checked),
+            firecrawl_api_url: els.settingsFirecrawlApiUrl?.value.trim() || "https://api.firecrawl.dev",
+            firecrawl_timeout_seconds: Number(els.settingsFirecrawlTimeout?.value || 60),
+            firecrawl_max_age_ms: Number(els.settingsFirecrawlMaxAge?.value || 0),
+            firecrawl_store_in_cache: Boolean(els.settingsFirecrawlStoreInCache?.checked),
+            firecrawl_proxy_mode: els.settingsFirecrawlProxyMode?.value || "basic",
+            firecrawl_allow_auto_proxy: Boolean(els.settingsFirecrawlAllowAutoProxy?.checked),
+            firecrawl_allow_enhanced_proxy: Boolean(els.settingsFirecrawlAllowEnhancedProxy?.checked),
+            firecrawl_zero_data_retention: Boolean(els.settingsFirecrawlZeroDataRetention?.checked),
+            firecrawl_use_for_monitor: Boolean(els.settingsFirecrawlUseForMonitor?.checked),
+            firecrawl_use_for_catalog: Boolean(els.settingsFirecrawlUseForCatalog?.checked),
+            firecrawl_catalog_limit: Number(els.settingsFirecrawlCatalogLimit?.value || 50)
         };
         if (els.settingsBotToken.value.trim()) {
             payload.telegram_bot_token = els.settingsBotToken.value.trim();
+        }
+        if (els.settingsFirecrawlApiKey?.value.trim()) {
+            payload.firecrawl_api_key = els.settingsFirecrawlApiKey.value.trim();
         }
         try {
             await apiFetch("/api/settings/telegram", {
@@ -1776,6 +1859,9 @@
                 body: JSON.stringify(payload)
             });
             els.settingsBotToken.value = "";
+            if (els.settingsFirecrawlApiKey) {
+                els.settingsFirecrawlApiKey.value = "";
+            }
             showToast("设置已保存。");
             await loadSnapshot(false);
         } catch (error) {
@@ -1859,6 +1945,27 @@
     wireDirtyTracking(els.taskGroupCustom);
     wireDirtyTracking(els.merchantGroup);
     wireDirtyTracking(els.merchantGroupCustom);
+    [
+        els.settingsChatIds,
+        els.settingsMonitorPort,
+        els.settingsTestPort,
+        els.settingsCatalogPort,
+        els.settingsPollInterval,
+        els.settingsTimeout,
+        els.settingsFirecrawlEnabled,
+        els.settingsFirecrawlApiUrl,
+        els.settingsFirecrawlApiKey,
+        els.settingsFirecrawlTimeout,
+        els.settingsFirecrawlMaxAge,
+        els.settingsFirecrawlStoreInCache,
+        els.settingsFirecrawlProxyMode,
+        els.settingsFirecrawlAllowAutoProxy,
+        els.settingsFirecrawlAllowEnhancedProxy,
+        els.settingsFirecrawlZeroDataRetention,
+        els.settingsFirecrawlUseForMonitor,
+        els.settingsFirecrawlUseForCatalog,
+        els.settingsFirecrawlCatalogLimit
+    ].forEach(wireDirtyTracking);
     updateGroupVisibility(els.taskGroup, els.taskGroupCustomWrap, els.taskGroupCustom);
     updateGroupVisibility(els.merchantGroup, els.merchantGroupCustomWrap, els.merchantGroupCustom);
     resetTaskForm();

@@ -736,6 +736,31 @@ class InstallScriptTestCase(unittest.TestCase):
         self.assertIn('id="merchant-group-custom-wrap"', portal_html)
         self.assertIn('id="merchant-group-custom"', portal_html)
 
+    def test_settings_ui_splits_product_intake_and_firecrawl_integration(self) -> None:
+        app_js = (ROOT_DIR / "static" / "app.js").read_text(encoding="utf-8")
+        app_css = (ROOT_DIR / "static" / "app.css").read_text(encoding="utf-8")
+        portal_html = (ROOT_DIR / "templates" / "portal.html").read_text(encoding="utf-8")
+
+        self.assertIn('id="nav-merchant"', portal_html)
+        self.assertIn('id="merchant-view"', portal_html)
+        self.assertIn('id="settings-view"', portal_html)
+        self.assertIn("Firecrawl 集成", portal_html)
+        self.assertIn('id="settings-firecrawl-api-key" type="password"', portal_html)
+        self.assertIn('settingsFirecrawlApiKey: document.getElementById("settings-firecrawl-api-key")', app_js)
+        self.assertIn("firecrawl_api_key", app_js)
+        self.assertIn(".settings-layout", app_css)
+        self.assertIn(".settings-nav-item", app_css)
+
+        settings_block = portal_html.split('id="settings-view"', 1)[1].split('id="task-modal"', 1)[0]
+        self.assertNotIn('id="merchant-form"', settings_block)
+        self.assertNotIn('id="merchant-discovery-strategy"', settings_block)
+        self.assertNotIn('id="merchant-default-extractor"', settings_block)
+        combined_ui = portal_html + app_css
+        self.assertNotIn("column-count", combined_ui)
+        self.assertNotIn("grid-auto-flow: dense", combined_ui)
+        self.assertNotIn("masonry", combined_ui.lower())
+        self.assertNotIn("waterfall", combined_ui.lower())
+
     def test_docker_publish_port_conflict_is_reported_cleanly(self) -> None:
         result = self.run_bash(
             textwrap.dedent(

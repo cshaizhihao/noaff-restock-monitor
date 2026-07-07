@@ -93,6 +93,12 @@
                         </svg>
                         <span>监控任务</span>
                     </button>
+                    <button id="nav-merchant" type="button" class="nav-item w-full">
+                        <svg class="mr-3 h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 7h18M5 7l1 12h12l1-12M8 7V5a2 2 0 012-2h4a2 2 0 012 2v2M9 12h6"/>
+                        </svg>
+                        <span>商品入库</span>
+                    </button>
                     <button id="nav-settings" type="button" class="nav-item w-full">
                         <svg class="mr-3 h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/>
@@ -143,9 +149,12 @@
                     </div>
                     <button id="mobile-logout-button" type="button" class="danger-button !min-h-10 !rounded-lg !px-3 !py-2 text-xs">退出</button>
                 </div>
-                <div class="grid grid-cols-2 gap-2">
+                <div class="grid grid-cols-3 gap-2">
                     <button id="mobile-nav-tasks" type="button" class="nav-item nav-item-active justify-center">
                         <span>监控任务</span>
+                    </button>
+                    <button id="mobile-nav-merchant" type="button" class="nav-item justify-center">
+                        <span>商品入库</span>
                     </button>
                     <button id="mobile-nav-settings" type="button" class="nav-item justify-center">
                         <span>系统设置</span>
@@ -215,53 +224,30 @@
                             <div id="tasks-grid" class="space-y-6"></div>
                         </section>
 
-                        <section id="settings-view" class="hidden grid grid-cols-1 gap-6 xl:grid-cols-[1fr_0.9fr]">
-                            <div class="space-y-6">
-                                <section class="control-panel reveal">
-                                    <h3 class="panel-heading">引擎与推送设置</h3>
-                                    <form id="settings-form" class="mt-5 grid gap-4">
+                        <section id="merchant-view" class="hidden space-y-6">
+                            <section class="control-panel reveal">
+                                <div class="flex flex-col justify-between gap-4 border-b border-slate-800/80 p-5 md:flex-row md:items-start">
+                                    <div>
+                                        <h3 class="panel-heading">商品入库工作台</h3>
+                                        <p class="mt-2 text-sm leading-6 text-slate-500">入口 URL 会先发现候选商品页，再按所选抓取和解析策略生成可监控任务。</p>
+                                    </div>
+                                    <div class="grid grid-cols-3 gap-3 text-right">
                                         <div>
-                                            <label for="settings-bot-token" class="form-label">Telegram Bot Token</label>
-                                            <input id="settings-bot-token" type="text" class="input-dark" placeholder="留空保持现有 Token">
-                                            <p id="settings-bot-token-mask" class="mt-2 text-xs text-slate-500"></p>
+                                            <p class="text-xs font-bold text-slate-500">来源</p>
+                                            <strong id="merchant-metric-sources" class="font-mono text-xl text-white">0</strong>
                                         </div>
                                         <div>
-                                            <label for="settings-chat-ids" class="form-label">Telegram Chat ID 列表</label>
-                                            <textarea id="settings-chat-ids" rows="3" class="input-dark min-h-24 resize-y" placeholder="一行一个 Chat ID"></textarea>
-                                            <div class="mt-2 flex flex-wrap items-center gap-2">
-                                                <p id="settings-chat-ids-hint" class="text-xs text-slate-500">支持多群聊，一行一个 Chat ID。</p>
-                                                <span id="settings-chat-ids-count" class="rounded-full border border-slate-700 bg-slate-950/70 px-2.5 py-1 font-mono text-[11px] text-slate-400">0 群聊</span>
-                                            </div>
+                                            <p class="text-xs font-bold text-slate-500">商品</p>
+                                            <strong id="merchant-metric-items" class="font-mono text-xl text-white">0</strong>
                                         </div>
-                                        <div class="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
-                                            <div>
-                                                <label for="settings-monitor-port" class="form-label">监控浏览器端口</label>
-                                                <input id="settings-monitor-port" type="number" min="1024" max="65535" class="input-dark">
-                                            </div>
-                                            <div>
-                                                <label for="settings-test-port" class="form-label">测试浏览器端口</label>
-                                                <input id="settings-test-port" type="number" min="1024" max="65535" class="input-dark">
-                                            </div>
-                                            <div>
-                                                <label for="settings-catalog-port" class="form-label">商家导入端口</label>
-                                                <input id="settings-catalog-port" type="number" min="1024" max="65535" class="input-dark">
-                                            </div>
-                                            <div>
-                                                <label for="settings-poll-interval" class="form-label">轮询间隔</label>
-                                                <input id="settings-poll-interval" type="number" min="15" max="3600" class="input-dark">
-                                            </div>
-                                            <div>
-                                                <label for="settings-timeout" class="form-label">请求超时</label>
-                                                <input id="settings-timeout" type="number" min="10" max="120" class="input-dark">
-                                            </div>
+                                        <div>
+                                            <p class="text-xs font-bold text-slate-500">任务</p>
+                                            <strong id="merchant-metric-linked" class="font-mono text-xl text-white">0</strong>
                                         </div>
-                                        <button type="submit" class="primary-button">保存设置</button>
-                                    </form>
-                                </section>
-
-                                <section class="control-panel reveal">
-                                    <h3 class="panel-heading">商家页面导入</h3>
-                                    <form id="merchant-form" class="mt-5 grid gap-4">
+                                    </div>
+                                </div>
+                                <form id="merchant-form" class="grid gap-5 p-5">
+                                    <div class="grid gap-4 lg:grid-cols-[minmax(0,1.4fr)_minmax(16rem,0.6fr)]">
                                         <div>
                                             <label for="merchant-source-url" class="form-label">商家页面 URL</label>
                                             <input id="merchant-source-url" type="url" class="input-dark" required placeholder="https://merchant.example.com/products">
@@ -270,8 +256,10 @@
                                             <label for="merchant-source-name" class="form-label">来源名称</label>
                                             <input id="merchant-source-name" type="text" class="input-dark" placeholder="留空自动识别">
                                         </div>
+                                    </div>
+                                    <div class="grid gap-4 lg:grid-cols-3">
                                         <div>
-                                            <label for="merchant-group" class="form-label">导入分组</label>
+                                            <label for="merchant-group" class="form-label">默认分组</label>
                                             <select id="merchant-group" class="input-dark">
                                                 <option value="默认分组">默认分组</option>
                                                 <option value="__custom__">新建分组…</option>
@@ -281,208 +269,364 @@
                                             <label for="merchant-group-custom" class="form-label">新建分组名称</label>
                                             <input id="merchant-group-custom" type="text" class="input-dark" maxlength="48" placeholder="输入新的分组名称">
                                         </div>
-                                        <div class="grid gap-4 lg:grid-cols-2">
-                                            <div>
-                                                <label for="merchant-discovery-strategy" class="form-label">发现方式</label>
-                                                <select id="merchant-discovery-strategy" class="input-dark">
-                                                    <option value="local">本地页面链接</option>
-                                                    <option value="firecrawl_map">Firecrawl Map</option>
-                                                    <option value="hybrid">混合发现</option>
-                                                </select>
-                                            </div>
-                                            <div>
-                                                <label for="merchant-scrape-strategy" class="form-label">抓取方式</label>
-                                                <select id="merchant-scrape-strategy" class="input-dark">
-                                                    <option value="browser">浏览器渲染</option>
-                                                    <option value="static_http">静态 HTTP</option>
-                                                    <option value="firecrawl">Firecrawl Scrape</option>
-                                                    <option value="adaptive">自适应 fallback</option>
-                                                </select>
-                                            </div>
-                                            <div>
-                                                <label for="merchant-default-fetch-strategy" class="form-label">生成任务采集方式</label>
-                                                <select id="merchant-default-fetch-strategy" class="input-dark">
-                                                    <option value="browser">浏览器渲染</option>
-                                                    <option value="static_http">静态 HTTP</option>
-                                                    <option value="generic_pricing_table">通用价格表</option>
-                                                    <option value="whmcs">WHMCS</option>
-                                                    <option value="firecrawl">Firecrawl</option>
-                                                    <option value="adaptive">自适应 fallback</option>
-                                                </select>
-                                            </div>
-                                            <div>
-                                                <label for="merchant-default-extractor" class="form-label">解析器</label>
-                                                <select id="merchant-default-extractor" class="input-dark">
-                                                    <option value="generic_pricing_table">通用价格表</option>
-                                                    <option value="whmcs">WHMCS</option>
-                                                    <option value="firecrawl_product_hint">Firecrawl Product hint</option>
-                                                    <option value="fallback_keyword_parser">关键词 fallback</option>
-                                                </select>
-                                            </div>
-                                            <div>
-                                                <label for="merchant-search-keyword" class="form-label">Map 搜索词</label>
-                                                <input id="merchant-search-keyword" type="text" class="input-dark" placeholder="vps / hk / pricing / store">
-                                            </div>
-                                            <div>
-                                                <label for="merchant-max-import-items" class="form-label">单次入库上限</label>
-                                                <input id="merchant-max-import-items" type="number" min="1" max="250" class="input-dark" value="50">
-                                            </div>
+                                        <div>
+                                            <label for="merchant-search-keyword" class="form-label">Map 搜索词</label>
+                                            <input id="merchant-search-keyword" type="text" class="input-dark" placeholder="vps / hk / pricing / store">
                                         </div>
-                                        <label class="flex items-center gap-3 rounded-lg border border-slate-700/60 bg-slate-950/50 px-4 py-3 text-sm text-slate-300">
-                                            <input id="merchant-include-sold-out" type="checkbox" class="h-4 w-4 rounded border-slate-700 bg-slate-950 text-indigo-500" checked>
-                                            包含售罄商品
-                                        </label>
-                                        <label class="flex items-center gap-3 rounded-lg border border-slate-700/60 bg-slate-950/50 px-4 py-3 text-sm text-slate-300">
-                                            <input id="merchant-auto-promote" type="checkbox" class="h-4 w-4 rounded border-slate-700 bg-slate-950 text-indigo-500" checked>
-                                            导入后自动创建任务
-                                        </label>
+                                    </div>
+                                    <div class="grid gap-4 lg:grid-cols-4">
+                                        <div>
+                                            <label for="merchant-discovery-strategy" class="form-label">发现方式</label>
+                                            <select id="merchant-discovery-strategy" class="input-dark">
+                                                <option value="local">本地页面链接</option>
+                                                <option value="firecrawl_map">Firecrawl Map</option>
+                                                <option value="hybrid">混合发现</option>
+                                            </select>
+                                        </div>
+                                        <div>
+                                            <label for="merchant-scrape-strategy" class="form-label">抓取方式</label>
+                                            <select id="merchant-scrape-strategy" class="input-dark">
+                                                <option value="browser">浏览器渲染</option>
+                                                <option value="static_http">静态 HTTP</option>
+                                                <option value="firecrawl">Firecrawl Scrape</option>
+                                                <option value="adaptive">自适应 fallback</option>
+                                            </select>
+                                        </div>
+                                        <div>
+                                            <label for="merchant-default-fetch-strategy" class="form-label">生成任务采集方式</label>
+                                            <select id="merchant-default-fetch-strategy" class="input-dark">
+                                                <option value="browser">浏览器渲染</option>
+                                                <option value="static_http">静态 HTTP</option>
+                                                <option value="generic_pricing_table">通用价格表</option>
+                                                <option value="whmcs">WHMCS</option>
+                                                <option value="firecrawl">Firecrawl</option>
+                                                <option value="adaptive">自适应 fallback</option>
+                                            </select>
+                                        </div>
+                                        <div>
+                                            <label for="merchant-default-extractor" class="form-label">解析器</label>
+                                            <select id="merchant-default-extractor" class="input-dark">
+                                                <option value="generic_pricing_table">通用价格表</option>
+                                                <option value="whmcs">WHMCS</option>
+                                                <option value="firecrawl_product_hint">Firecrawl Product hint</option>
+                                                <option value="fallback_keyword_parser">关键词 fallback</option>
+                                            </select>
+                                        </div>
+                                    </div>
+                                    <div class="grid gap-4 lg:grid-cols-[14rem_1fr] lg:items-end">
+                                        <div>
+                                            <label for="merchant-max-import-items" class="form-label">单次入库上限</label>
+                                            <input id="merchant-max-import-items" type="number" min="1" max="250" class="input-dark" value="50">
+                                        </div>
+                                        <div class="flex flex-wrap gap-3">
+                                            <label class="settings-check">
+                                                <input id="merchant-include-sold-out" type="checkbox" class="h-4 w-4 rounded border-slate-700 bg-slate-950 text-indigo-500" checked>
+                                                包含售罄商品
+                                            </label>
+                                            <label class="settings-check">
+                                                <input id="merchant-auto-promote" type="checkbox" class="h-4 w-4 rounded border-slate-700 bg-slate-950 text-indigo-500" checked>
+                                                导入后自动创建任务
+                                            </label>
+                                        </div>
+                                    </div>
+                                    <div class="flex justify-end">
                                         <button id="merchant-import-button" type="submit" class="primary-button">
                                             <svg class="mr-2 h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 7h16M4 12h10M4 17h7"/>
                                             </svg>
                                             <span id="merchant-import-button-label">开始导入</span>
                                         </button>
-                                    </form>
-                                    <div class="mt-5 grid gap-4 sm:grid-cols-3">
-                                        <div class="metric-card">
-                                            <p>来源</p>
-                                            <strong id="merchant-metric-sources">0</strong>
-                                        </div>
-                                        <div class="metric-card">
-                                            <p>商品</p>
-                                            <strong id="merchant-metric-items">0</strong>
-                                        </div>
-                                        <div class="metric-card">
-                                            <p>关联任务</p>
-                                            <strong id="merchant-metric-linked">0</strong>
-                                        </div>
                                     </div>
-                                    <div class="mt-5 grid gap-4">
-                                        <div>
-                                            <p class="mb-3 text-xs font-bold uppercase tracking-widest text-slate-500">来源列表</p>
-                                            <div class="terminal-box max-h-60 overflow-y-auto p-4">
-                                                <div id="merchant-source-list" class="space-y-3"></div>
-                                            </div>
-                                        </div>
-                                        <div>
-                                            <div class="mb-3 flex flex-wrap items-center justify-between gap-3">
-                                                <p class="text-xs font-bold uppercase tracking-widest text-slate-500">商品列表</p>
-                                                <div class="flex items-center gap-2">
-                                                    <label for="merchant-item-filter" class="text-[11px] font-bold uppercase tracking-widest text-slate-500">筛选</label>
-                                                    <select id="merchant-item-filter" class="input-dark w-44 !min-h-10 !py-2 text-sm">
-                                                        <option value="all">全部商品</option>
-                                                        <option value="linked">已关联任务</option>
-                                                        <option value="unlinked">未关联任务</option>
-                                                        <option value="new">仅新发现</option>
-                                                        <option value="updated">仅已更新</option>
-                                                        <option value="archived">仅已归档</option>
-                                                    </select>
-                                                </div>
-                                            </div>
-                                            <div class="terminal-box max-h-72 overflow-y-auto p-4">
-                                                <div id="merchant-item-list" class="space-y-3"></div>
-                                            </div>
-                                        </div>
+                                </form>
+                            </section>
+
+                            <section class="grid gap-6 xl:grid-cols-[minmax(0,0.8fr)_minmax(0,1.2fr)]">
+                                <section class="control-panel reveal p-5">
+                                    <h3 class="panel-heading">来源列表</h3>
+                                    <div class="mt-4 terminal-box max-h-[520px] overflow-y-auto p-4">
+                                        <div id="merchant-source-list" class="space-y-3"></div>
                                     </div>
                                 </section>
+                                <section class="control-panel reveal p-5">
+                                    <div class="flex flex-wrap items-center justify-between gap-3">
+                                        <h3 class="panel-heading">商品预览</h3>
+                                        <div class="flex items-center gap-2">
+                                            <label for="merchant-item-filter" class="text-[11px] font-bold text-slate-500">筛选</label>
+                                            <select id="merchant-item-filter" class="input-dark w-44 !min-h-10 !py-2 text-sm">
+                                                <option value="all">全部商品</option>
+                                                <option value="linked">已关联任务</option>
+                                                <option value="unlinked">未关联任务</option>
+                                                <option value="new">仅新发现</option>
+                                                <option value="updated">仅已更新</option>
+                                                <option value="archived">仅已归档</option>
+                                            </select>
+                                        </div>
+                                    </div>
+                                    <div class="mt-4 terminal-box max-h-[520px] overflow-y-auto p-4">
+                                        <div id="merchant-item-list" class="space-y-3"></div>
+                                    </div>
+                                </section>
+                            </section>
+                        </section>
 
-                                <section class="control-panel reveal">
-                                    <h3 class="panel-heading">管理员凭据</h3>
-                                    <form id="profile-form" class="mt-5 grid gap-4">
-                                        <div>
-                                            <label for="profile-username" class="form-label">新用户名</label>
-                                            <input id="profile-username" name="profile_username" type="text" autocomplete="username" class="input-dark">
-                                        </div>
-                                        <div>
-                                            <label for="profile-current-password" class="form-label">当前密码</label>
-                                            <input id="profile-current-password" name="current_password" type="password" autocomplete="current-password" class="input-dark" required>
-                                        </div>
-                                        <div class="grid gap-4 sm:grid-cols-2">
+                        <section id="settings-view" class="hidden">
+                            <div class="settings-layout grid gap-6 lg:grid-cols-[15rem_minmax(0,1fr)]">
+                                <aside class="settings-sidebar control-panel reveal p-3 lg:sticky lg:top-6 lg:self-start">
+                                    <nav class="grid gap-1 text-sm" aria-label="系统设置分组">
+                                        <a href="#settings-runtime" class="settings-nav-item">运行时与推送</a>
+                                        <a href="#settings-browser-runtime" class="settings-nav-item">浏览器运行时</a>
+                                        <a href="#settings-firecrawl" class="settings-nav-item">Firecrawl 集成</a>
+                                        <a href="#settings-account" class="settings-nav-item">账户与安全</a>
+                                        <a href="#settings-upgrade" class="settings-nav-item">升级与维护</a>
+                                        <a href="#settings-backup" class="settings-nav-item">备份与恢复</a>
+                                        <a href="#settings-logs" class="settings-nav-item">运行日志</a>
+                                    </nav>
+                                </aside>
+
+                                <div class="control-panel reveal overflow-hidden">
+                                    <form id="settings-form">
+                                        <section id="settings-runtime" class="settings-section">
+                                            <div class="settings-section-heading">
+                                                <div>
+                                                    <p class="settings-kicker">Runtime</p>
+                                                    <h3 class="panel-heading">运行时与推送</h3>
+                                                </div>
+                                                <button type="submit" class="primary-button">保存运行时</button>
+                                            </div>
+                                            <div class="settings-grid">
+                                                <div class="settings-field settings-field-wide">
+                                                    <label for="settings-bot-token" class="form-label">Telegram Bot Token</label>
+                                                    <input id="settings-bot-token" type="password" autocomplete="off" class="input-dark" placeholder="留空保持现有 Token">
+                                                    <p id="settings-bot-token-mask" class="mt-2 text-xs text-slate-500"></p>
+                                                </div>
+                                                <div class="settings-field settings-field-wide">
+                                                    <label for="settings-chat-ids" class="form-label">Telegram Chat ID 列表</label>
+                                                    <textarea id="settings-chat-ids" rows="3" class="input-dark min-h-24 resize-y" placeholder="一行一个 Chat ID"></textarea>
+                                                    <div class="mt-2 flex flex-wrap items-center gap-2">
+                                                        <p id="settings-chat-ids-hint" class="text-xs text-slate-500">支持多群聊，一行一个 Chat ID。</p>
+                                                        <span id="settings-chat-ids-count" class="rounded-full border border-slate-700 bg-slate-950/70 px-2.5 py-1 font-mono text-[11px] text-slate-400">0 群聊</span>
+                                                    </div>
+                                                </div>
+                                                <div class="settings-field">
+                                                    <label for="settings-poll-interval" class="form-label">轮询间隔</label>
+                                                    <input id="settings-poll-interval" type="number" min="15" max="3600" class="input-dark">
+                                                </div>
+                                                <div class="settings-field">
+                                                    <label for="settings-timeout" class="form-label">请求超时</label>
+                                                    <input id="settings-timeout" type="number" min="10" max="120" class="input-dark">
+                                                </div>
+                                            </div>
+                                        </section>
+
+                                        <section id="settings-browser-runtime" class="settings-section">
+                                            <div class="settings-section-heading">
+                                                <div>
+                                                    <p class="settings-kicker">Browser</p>
+                                                    <h3 class="panel-heading">浏览器运行时</h3>
+                                                </div>
+                                                <button type="submit" class="primary-button">保存浏览器</button>
+                                            </div>
+                                            <div class="settings-grid">
+                                                <div class="settings-field">
+                                                    <label for="settings-monitor-port" class="form-label">监控浏览器端口</label>
+                                                    <input id="settings-monitor-port" type="number" min="1024" max="65535" class="input-dark">
+                                                </div>
+                                                <div class="settings-field">
+                                                    <label for="settings-test-port" class="form-label">测试浏览器端口</label>
+                                                    <input id="settings-test-port" type="number" min="1024" max="65535" class="input-dark">
+                                                </div>
+                                                <div class="settings-field">
+                                                    <label for="settings-catalog-port" class="form-label">商品入库浏览器端口</label>
+                                                    <input id="settings-catalog-port" type="number" min="1024" max="65535" class="input-dark">
+                                                </div>
+                                            </div>
+                                        </section>
+
+                                        <section id="settings-firecrawl" class="settings-section">
+                                            <div class="settings-section-heading">
+                                                <div>
+                                                    <p class="settings-kicker">Integration</p>
+                                                    <h3 class="panel-heading">Firecrawl 集成</h3>
+                                                </div>
+                                                <button type="submit" class="primary-button">保存 Firecrawl</button>
+                                            </div>
+                                            <div class="settings-grid">
+                                                <label class="settings-check settings-field-wide">
+                                                    <input id="settings-firecrawl-enabled" type="checkbox" class="h-4 w-4 rounded border-slate-700 bg-slate-950 text-indigo-500">
+                                                    启用 Firecrawl 外部采集后端
+                                                </label>
+                                                <div class="settings-field">
+                                                    <label for="settings-firecrawl-api-url" class="form-label">API URL</label>
+                                                    <input id="settings-firecrawl-api-url" type="url" class="input-dark" placeholder="https://api.firecrawl.dev">
+                                                </div>
+                                                <div class="settings-field">
+                                                    <label for="settings-firecrawl-api-key" class="form-label">API Key</label>
+                                                    <input id="settings-firecrawl-api-key" type="password" autocomplete="off" class="input-dark" placeholder="留空保持现有 Key">
+                                                    <p id="settings-firecrawl-api-key-mask" class="mt-2 text-xs text-slate-500"></p>
+                                                </div>
+                                                <div class="settings-field">
+                                                    <label for="settings-firecrawl-timeout" class="form-label">超时秒数</label>
+                                                    <input id="settings-firecrawl-timeout" type="number" min="10" max="180" class="input-dark">
+                                                </div>
+                                                <div class="settings-field">
+                                                    <label for="settings-firecrawl-max-age" class="form-label">maxAge ms</label>
+                                                    <input id="settings-firecrawl-max-age" type="number" min="0" class="input-dark">
+                                                </div>
+                                                <div class="settings-field">
+                                                    <label for="settings-firecrawl-proxy-mode" class="form-label">Proxy 模式</label>
+                                                    <select id="settings-firecrawl-proxy-mode" class="input-dark">
+                                                        <option value="basic">basic</option>
+                                                        <option value="enhanced">enhanced</option>
+                                                        <option value="auto">auto</option>
+                                                    </select>
+                                                </div>
+                                                <div class="settings-field">
+                                                    <label for="settings-firecrawl-catalog-limit" class="form-label">Map URL 上限</label>
+                                                    <input id="settings-firecrawl-catalog-limit" type="number" min="1" max="250" class="input-dark">
+                                                </div>
+                                                <div class="settings-field-wide grid gap-3 sm:grid-cols-2">
+                                                    <label class="settings-check">
+                                                        <input id="settings-firecrawl-store-in-cache" type="checkbox" class="h-4 w-4 rounded border-slate-700 bg-slate-950 text-indigo-500">
+                                                        storeInCache
+                                                    </label>
+                                                    <label class="settings-check">
+                                                        <input id="settings-firecrawl-zero-data-retention" type="checkbox" class="h-4 w-4 rounded border-slate-700 bg-slate-950 text-indigo-500">
+                                                        zeroDataRetention
+                                                    </label>
+                                                    <label class="settings-check">
+                                                        <input id="settings-firecrawl-use-for-monitor" type="checkbox" class="h-4 w-4 rounded border-slate-700 bg-slate-950 text-indigo-500">
+                                                        允许用于实时监控
+                                                    </label>
+                                                    <label class="settings-check">
+                                                        <input id="settings-firecrawl-use-for-catalog" type="checkbox" class="h-4 w-4 rounded border-slate-700 bg-slate-950 text-indigo-500">
+                                                        允许用于商品入库
+                                                    </label>
+                                                    <label class="settings-check">
+                                                        <input id="settings-firecrawl-allow-enhanced-proxy" type="checkbox" class="h-4 w-4 rounded border-slate-700 bg-slate-950 text-indigo-500">
+                                                        显式允许 enhanced proxy
+                                                    </label>
+                                                    <label class="settings-check">
+                                                        <input id="settings-firecrawl-allow-auto-proxy" type="checkbox" class="h-4 w-4 rounded border-slate-700 bg-slate-950 text-indigo-500">
+                                                        显式允许 auto proxy
+                                                    </label>
+                                                </div>
+                                                <p class="settings-field-wide text-sm leading-6 text-amber-200/90">enhanced / auto 属于外部 hosted provider 能力，可能产生额外费用；页面内容会发送给 Firecrawl，这不是本项目内置的 Cloudflare 绕过。</p>
+                                            </div>
+                                        </section>
+                                    </form>
+
+                                    <section id="settings-account" class="settings-section">
+                                        <div class="settings-section-heading">
                                             <div>
+                                                <p class="settings-kicker">Security</p>
+                                                <h3 class="panel-heading">账户与安全</h3>
+                                            </div>
+                                        </div>
+                                        <form id="profile-form" class="settings-grid">
+                                            <div class="settings-field">
+                                                <label for="profile-username" class="form-label">新用户名</label>
+                                                <input id="profile-username" name="profile_username" type="text" autocomplete="username" class="input-dark">
+                                            </div>
+                                            <div class="settings-field">
+                                                <label for="profile-current-password" class="form-label">当前密码</label>
+                                                <input id="profile-current-password" name="current_password" type="password" autocomplete="current-password" class="input-dark" required>
+                                            </div>
+                                            <div class="settings-field">
                                                 <label for="profile-new-password" class="form-label">新密码</label>
                                                 <input id="profile-new-password" name="new_password" type="password" autocomplete="new-password" class="input-dark">
                                             </div>
-                                            <div>
+                                            <div class="settings-field">
                                                 <label for="profile-confirm-password" class="form-label">确认新密码</label>
                                                 <input id="profile-confirm-password" name="confirm_password" type="password" autocomplete="new-password" class="input-dark">
                                             </div>
-                                        </div>
-                                        <button type="submit" class="primary-button">更新凭据</button>
-                                    </form>
-                                </section>
+                                            <div class="settings-field-wide flex justify-end">
+                                                <button type="submit" class="primary-button">更新凭据</button>
+                                            </div>
+                                        </form>
+                                    </section>
 
-                                <section class="control-panel reveal">
-                                    <h3 class="panel-heading">系统升级</h3>
-                                    <div class="mt-5 grid gap-4">
-                                        <div class="grid gap-4 border-b border-slate-800/80 pb-4 sm:grid-cols-3">
-                                            <div class="min-w-0">
-                                                <p class="text-xs font-bold uppercase tracking-widest text-slate-500">版本</p>
-                                                <p id="system-version" class="mt-2 truncate font-mono text-lg font-bold text-white">-</p>
-                                            </div>
-                                            <div class="min-w-0">
-                                                <p class="text-xs font-bold uppercase tracking-widest text-slate-500">分支</p>
-                                                <p id="system-branch" class="mt-2 truncate font-mono text-lg font-bold text-white">-</p>
-                                            </div>
-                                            <div class="min-w-0">
-                                                <p class="text-xs font-bold uppercase tracking-widest text-slate-500">服务</p>
-                                                <p id="upgrade-service-state" class="mt-2 truncate font-mono text-lg font-bold text-white">-</p>
+                                    <section id="settings-upgrade" class="settings-section">
+                                        <div class="settings-section-heading">
+                                            <div>
+                                                <p class="settings-kicker">Maintenance</p>
+                                                <h3 class="panel-heading">升级与维护</h3>
                                             </div>
                                         </div>
-                                        <button id="upgrade-button" type="button" class="primary-button">
-                                            <svg class="mr-2 h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 11l5-5m0 0l5 5m-5-5v12"/>
-                                            </svg>
-                                            <span id="upgrade-button-label">执行升级</span>
-                                        </button>
-                                        <p id="upgrade-help" class="text-sm leading-6 text-slate-500"></p>
-                                        <div class="terminal-box max-h-52 overflow-y-auto p-4">
-                                            <pre id="upgrade-log" class="whitespace-pre-wrap font-mono text-xs leading-6 text-slate-400">暂无升级日志。</pre>
-                                        </div>
-                                    </div>
-                                </section>
-
-                                <section class="control-panel reveal">
-                                    <h3 class="panel-heading">数据备份</h3>
-                                    <div class="mt-5 grid gap-4">
-                                        <p class="text-sm leading-6 text-slate-500">
-                                            导出当前数据库为 JSON 备份，适合迁移、交接和故障恢复。恢复会覆盖管理员、设置、任务和商家数据。
-                                        </p>
-                                        <div class="flex flex-wrap items-center gap-3">
-                                            <button id="backup-export-button" type="button" class="ghost-button">
+                                        <div class="grid gap-4">
+                                            <div class="grid gap-4 border-b border-slate-800/80 pb-4 sm:grid-cols-3">
+                                                <div class="min-w-0">
+                                                    <p class="text-xs font-bold text-slate-500">版本</p>
+                                                    <p id="system-version" class="mt-2 truncate font-mono text-lg font-bold text-white">-</p>
+                                                </div>
+                                                <div class="min-w-0">
+                                                    <p class="text-xs font-bold text-slate-500">分支</p>
+                                                    <p id="system-branch" class="mt-2 truncate font-mono text-lg font-bold text-white">-</p>
+                                                </div>
+                                                <div class="min-w-0">
+                                                    <p class="text-xs font-bold text-slate-500">服务</p>
+                                                    <p id="upgrade-service-state" class="mt-2 truncate font-mono text-lg font-bold text-white">-</p>
+                                                </div>
+                                            </div>
+                                            <button id="upgrade-button" type="button" class="primary-button w-fit">
                                                 <svg class="mr-2 h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 3v12m0 0l4-4m-4 4l-4-4M5 17h14"/>
+                                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 11l5-5m0 0l5 5m-5-5v12"/>
                                                 </svg>
-                                                导出备份
+                                                <span id="upgrade-button-label">执行升级</span>
                                             </button>
-                                            <label class="file-drop flex min-w-0 flex-1 cursor-pointer items-center gap-3 rounded-lg border border-slate-800 bg-slate-950/60 px-4 py-3 text-sm text-slate-300 transition hover:border-slate-700 hover:bg-slate-900/80">
-                                                <svg class="h-5 w-5 shrink-0 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1M12 4v12m0 0l4-4m-4 4l-4-4"/>
-                                                </svg>
-                                                <span id="backup-file-name" class="min-w-0 truncate text-slate-500">选择备份文件</span>
-                                                <input id="backup-file-input" type="file" accept=".json,application/json" class="hidden">
-                                            </label>
+                                            <p id="upgrade-help" class="text-sm leading-6 text-slate-500"></p>
+                                            <div class="terminal-box max-h-52 overflow-y-auto p-4">
+                                                <pre id="upgrade-log" class="whitespace-pre-wrap font-mono text-xs leading-6 text-slate-400">暂无升级日志。</pre>
+                                            </div>
                                         </div>
-                                        <div class="flex flex-wrap gap-3">
-                                            <button id="backup-restore-button" type="button" class="primary-button">
+                                    </section>
+
+                                    <section id="settings-backup" class="settings-section">
+                                        <div class="settings-section-heading">
+                                            <div>
+                                                <p class="settings-kicker">Backup</p>
+                                                <h3 class="panel-heading">备份与恢复</h3>
+                                            </div>
+                                        </div>
+                                        <div class="grid gap-4">
+                                            <p class="text-sm leading-6 text-slate-500">导出当前数据库为 JSON 备份，适合迁移、交接和故障恢复。恢复会覆盖管理员、设置、任务和商家数据。</p>
+                                            <div class="flex flex-wrap items-center gap-3">
+                                                <button id="backup-export-button" type="button" class="ghost-button">
+                                                    <svg class="mr-2 h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 3v12m0 0l4-4m-4 4l-4-4M5 17h14"/>
+                                                    </svg>
+                                                    导出备份
+                                                </button>
+                                                <label class="file-drop flex min-w-0 flex-1 cursor-pointer items-center gap-3 rounded-lg border border-slate-800 bg-slate-950/60 px-4 py-3 text-sm text-slate-300 transition hover:border-slate-700 hover:bg-slate-900/80">
+                                                    <svg class="h-5 w-5 shrink-0 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1M12 4v12m0 0l4-4m-4 4l-4-4"/>
+                                                    </svg>
+                                                    <span id="backup-file-name" class="min-w-0 truncate text-slate-500">选择备份文件</span>
+                                                    <input id="backup-file-input" type="file" accept=".json,application/json" class="hidden">
+                                                </label>
+                                            </div>
+                                            <button id="backup-restore-button" type="button" class="primary-button w-fit">
                                                 <svg class="mr-2 h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v6h6M20 20v-6h-6M5 19a9 9 0 0114-10.5M19 5a9 9 0 00-14 10.5"/>
                                                 </svg>
                                                 恢复备份
                                             </button>
                                         </div>
-                                    </div>
-                                </section>
-                            </div>
+                                    </section>
 
-                            <section class="control-panel reveal">
-                                <h3 class="panel-heading">活动日志</h3>
-                                <div class="mt-5 terminal-box max-h-[620px] overflow-y-auto p-4">
-                                    <div id="log-stream" class="space-y-4"></div>
+                                    <section id="settings-logs" class="settings-section">
+                                        <div class="settings-section-heading">
+                                            <div>
+                                                <p class="settings-kicker">Logs</p>
+                                                <h3 class="panel-heading">运行日志</h3>
+                                            </div>
+                                            <p id="admin-identity" class="font-mono text-xs text-slate-500">管理员</p>
+                                        </div>
+                                        <div class="terminal-box max-h-[520px] overflow-y-auto p-4">
+                                            <div id="log-stream" class="space-y-4"></div>
+                                        </div>
+                                    </section>
                                 </div>
-                                <div class="mt-5 space-y-2 font-mono text-xs text-slate-500">
-                                    <p id="admin-identity">管理员</p>
-                                </div>
-                            </section>
+                            </div>
                         </section>
                     </section>
                 </div>
