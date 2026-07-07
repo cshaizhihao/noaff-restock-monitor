@@ -81,6 +81,18 @@ def env_bool(name: str, default: bool) -> bool:
     return value.strip().lower() in {"1", "true", "yes", "on"}
 
 
+def settings_bool_text(value: bool) -> str:
+    return "true" if value else "false"
+
+
+def parse_setting_bool(value: Any, default: bool = False) -> bool:
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    return str(value).strip().lower() in {"1", "true", "yes", "on"}
+
+
 def load_or_create_secret_key() -> str:
     if SECRET_KEY_PATH.exists():
         return SECRET_KEY_PATH.read_text(encoding="utf-8").strip()
@@ -102,6 +114,19 @@ DEFAULT_TIMEOUT_SECONDS = int(os.getenv("REQUEST_TIMEOUT_SECONDS", "25"))
 DEFAULT_HEADLESS = env_bool("CHROMIUM_HEADLESS", True)
 DEFAULT_BROWSER_PATH = os.getenv("CHROMIUM_BINARY", "").strip()
 DEFAULT_BROWSER_USER_AGENT = os.getenv("CHROMIUM_USER_AGENT", "").strip()
+DEFAULT_FIRECRAWL_ENABLED = env_bool("FIRECRAWL_ENABLED", False)
+DEFAULT_FIRECRAWL_API_URL = os.getenv("FIRECRAWL_API_URL", "https://api.firecrawl.dev").strip() or "https://api.firecrawl.dev"
+DEFAULT_FIRECRAWL_API_KEY = os.getenv("FIRECRAWL_API_KEY", "").strip()
+DEFAULT_FIRECRAWL_TIMEOUT_SECONDS = int(os.getenv("FIRECRAWL_TIMEOUT_SECONDS", "60"))
+DEFAULT_FIRECRAWL_MAX_AGE_MS = int(os.getenv("FIRECRAWL_MAX_AGE_MS", "0"))
+DEFAULT_FIRECRAWL_STORE_IN_CACHE = env_bool("FIRECRAWL_STORE_IN_CACHE", False)
+DEFAULT_FIRECRAWL_PROXY_MODE = os.getenv("FIRECRAWL_PROXY_MODE", "basic").strip().lower() or "basic"
+DEFAULT_FIRECRAWL_ALLOW_AUTO_PROXY = env_bool("FIRECRAWL_ALLOW_AUTO_PROXY", False)
+DEFAULT_FIRECRAWL_ALLOW_ENHANCED_PROXY = env_bool("FIRECRAWL_ALLOW_ENHANCED_PROXY", False)
+DEFAULT_FIRECRAWL_ZERO_DATA_RETENTION = env_bool("FIRECRAWL_ZERO_DATA_RETENTION", True)
+DEFAULT_FIRECRAWL_USE_FOR_MONITOR = env_bool("FIRECRAWL_USE_FOR_MONITOR", False)
+DEFAULT_FIRECRAWL_USE_FOR_CATALOG = env_bool("FIRECRAWL_USE_FOR_CATALOG", True)
+DEFAULT_FIRECRAWL_CATALOG_LIMIT = int(os.getenv("FIRECRAWL_CATALOG_LIMIT", "50"))
 ENABLE_PROXY_FIX = env_bool("ENABLE_PROXY_FIX", False)
 PROXY_FIX_X_FOR = int(os.getenv("PROXY_FIX_X_FOR", "1"))
 PROXY_FIX_X_PROTO = int(os.getenv("PROXY_FIX_X_PROTO", "1"))
@@ -208,6 +233,19 @@ SETTINGS_DEFAULTS = {
     "catalog_debug_port": str(DEFAULT_CATALOG_PORT),
     "poll_interval_seconds": str(DEFAULT_POLL_INTERVAL),
     "request_timeout_seconds": str(DEFAULT_TIMEOUT_SECONDS),
+    "firecrawl_enabled": settings_bool_text(DEFAULT_FIRECRAWL_ENABLED),
+    "firecrawl_api_url": DEFAULT_FIRECRAWL_API_URL,
+    "firecrawl_api_key": DEFAULT_FIRECRAWL_API_KEY,
+    "firecrawl_timeout_seconds": str(DEFAULT_FIRECRAWL_TIMEOUT_SECONDS),
+    "firecrawl_max_age_ms": str(DEFAULT_FIRECRAWL_MAX_AGE_MS),
+    "firecrawl_store_in_cache": settings_bool_text(DEFAULT_FIRECRAWL_STORE_IN_CACHE),
+    "firecrawl_proxy_mode": DEFAULT_FIRECRAWL_PROXY_MODE,
+    "firecrawl_allow_auto_proxy": settings_bool_text(DEFAULT_FIRECRAWL_ALLOW_AUTO_PROXY),
+    "firecrawl_allow_enhanced_proxy": settings_bool_text(DEFAULT_FIRECRAWL_ALLOW_ENHANCED_PROXY),
+    "firecrawl_zero_data_retention": settings_bool_text(DEFAULT_FIRECRAWL_ZERO_DATA_RETENTION),
+    "firecrawl_use_for_monitor": settings_bool_text(DEFAULT_FIRECRAWL_USE_FOR_MONITOR),
+    "firecrawl_use_for_catalog": settings_bool_text(DEFAULT_FIRECRAWL_USE_FOR_CATALOG),
+    "firecrawl_catalog_limit": str(DEFAULT_FIRECRAWL_CATALOG_LIMIT),
 }
 
 DEFAULT_RESTOCK_TEMPLATE = "<b>{name}</b>\n库存：{stock}\n链接：{url}\n检测时间：{checked_at}"
@@ -217,6 +255,7 @@ FETCH_STRATEGY_BROWSER = "browser"
 FETCH_STRATEGY_STATIC_HTTP = "static_http"
 FETCH_STRATEGY_GENERIC_PRICING_TABLE = "generic_pricing_table"
 FETCH_STRATEGY_WHMCS = "whmcs"
+FETCH_STRATEGY_FIRECRAWL = "firecrawl"
 FETCH_STRATEGY_MANUAL = "manual"
 FETCH_STRATEGY_WEBHOOK = "webhook"
 SUPPORTED_FETCH_STRATEGIES = {
@@ -224,6 +263,7 @@ SUPPORTED_FETCH_STRATEGIES = {
     FETCH_STRATEGY_STATIC_HTTP,
     FETCH_STRATEGY_GENERIC_PRICING_TABLE,
     FETCH_STRATEGY_WHMCS,
+    FETCH_STRATEGY_FIRECRAWL,
     FETCH_STRATEGY_MANUAL,
     FETCH_STRATEGY_WEBHOOK,
 }
@@ -234,6 +274,8 @@ STATIC_HTTP_FETCH_STRATEGIES = {
 }
 EXTERNAL_INPUT_FETCH_STRATEGIES = {FETCH_STRATEGY_MANUAL, FETCH_STRATEGY_WEBHOOK}
 EXTERNAL_INPUT_PENDING_ERROR_KINDS = {"manual_pending", "webhook_pending"}
+FIRECRAWL_PROXY_MODES = {"basic", "enhanced", "auto"}
+SENSITIVE_SETTINGS_KEYS = {"firecrawl_api_key"}
 STATIC_HTTP_USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
     "Chrome/137.0 Safari/537.36"
@@ -751,6 +793,12 @@ def mask_secret(value: str) -> str:
     return f"{value[:4]}{'*' * (len(value) - 8)}{value[-4:]}"
 
 
+def sanitize_sensitive_settings_value(key: str, value: Any) -> str:
+    if str(key).strip().lower() in SENSITIVE_SETTINGS_KEYS:
+        return ""
+    return str(value if value is not None else "")
+
+
 def webhook_endpoint_for_task(task_id: int) -> str:
     return f"/api/webhooks/restock/{int(task_id)}"
 
@@ -981,7 +1029,7 @@ def table_rows(connection: sqlite3.Connection, table: str) -> list[dict[str, Any
             result.append(
                 {
                     "key": key,
-                    "value": effective_settings.get(key, ""),
+                    "value": sanitize_sensitive_settings_value(key, effective_settings.get(key, "")),
                     "updated_at": stored_row["updated_at"] if stored_row and stored_row["updated_at"] else backup_timestamp,
                 }
             )
@@ -1028,6 +1076,8 @@ def normalize_backup_tables(payload: Any) -> dict[str, list[dict[str, Any]]]:
         for row in rows:
             if not isinstance(row, dict):
                 raise ValueError(f"{table} 备份行必须是对象。")
+            if table == "settings" and str(row.get("key", "")).strip().lower() in SENSITIVE_SETTINGS_KEYS:
+                row = {**row, "value": ""}
             normalized_rows.append(row)
         normalized[table] = normalized_rows
     if not normalized["admins"] or not normalized["settings"]:
@@ -1164,6 +1214,18 @@ def normalize_settings(raw: dict[str, str]) -> dict[str, Any]:
     timeout_seconds = max(10, min(120, int(raw.get("request_timeout_seconds") or DEFAULT_TIMEOUT_SECONDS)))
     chat_ids = normalize_telegram_chat_ids(raw.get("telegram_chat_ids") or raw.get("telegram_chat_id"))
     legacy_chat_id = raw.get("telegram_chat_id", "").strip() or (chat_ids[0] if chat_ids else "")
+    firecrawl_proxy_mode = str(raw.get("firecrawl_proxy_mode") or DEFAULT_FIRECRAWL_PROXY_MODE).strip().lower()
+    if firecrawl_proxy_mode not in FIRECRAWL_PROXY_MODES:
+        firecrawl_proxy_mode = "basic"
+    firecrawl_allow_auto_proxy = parse_setting_bool(raw.get("firecrawl_allow_auto_proxy"), DEFAULT_FIRECRAWL_ALLOW_AUTO_PROXY)
+    firecrawl_allow_enhanced_proxy = parse_setting_bool(
+        raw.get("firecrawl_allow_enhanced_proxy"),
+        DEFAULT_FIRECRAWL_ALLOW_ENHANCED_PROXY,
+    )
+    if firecrawl_proxy_mode == "auto" and not firecrawl_allow_auto_proxy:
+        firecrawl_proxy_mode = "basic"
+    if firecrawl_proxy_mode == "enhanced" and not firecrawl_allow_enhanced_proxy:
+        firecrawl_proxy_mode = "basic"
     return {
         "telegram_bot_token": raw.get("telegram_bot_token", "").strip(),
         "telegram_chat_id": legacy_chat_id,
@@ -1174,6 +1236,34 @@ def normalize_settings(raw: dict[str, str]) -> dict[str, Any]:
         "catalog_debug_port": catalog_port,
         "poll_interval_seconds": poll_interval,
         "request_timeout_seconds": timeout_seconds,
+        "firecrawl_enabled": parse_setting_bool(raw.get("firecrawl_enabled"), DEFAULT_FIRECRAWL_ENABLED),
+        "firecrawl_api_url": (raw.get("firecrawl_api_url") or DEFAULT_FIRECRAWL_API_URL).strip().rstrip("/") or DEFAULT_FIRECRAWL_API_URL,
+        "firecrawl_api_key": raw.get("firecrawl_api_key", "").strip(),
+        "firecrawl_timeout_seconds": max(
+            10,
+            min(180, int(raw.get("firecrawl_timeout_seconds") or DEFAULT_FIRECRAWL_TIMEOUT_SECONDS)),
+        ),
+        "firecrawl_max_age_ms": max(0, int(raw.get("firecrawl_max_age_ms") or DEFAULT_FIRECRAWL_MAX_AGE_MS)),
+        "firecrawl_store_in_cache": parse_setting_bool(
+            raw.get("firecrawl_store_in_cache"),
+            DEFAULT_FIRECRAWL_STORE_IN_CACHE,
+        ),
+        "firecrawl_proxy_mode": firecrawl_proxy_mode,
+        "firecrawl_allow_auto_proxy": firecrawl_allow_auto_proxy,
+        "firecrawl_allow_enhanced_proxy": firecrawl_allow_enhanced_proxy,
+        "firecrawl_zero_data_retention": parse_setting_bool(
+            raw.get("firecrawl_zero_data_retention"),
+            DEFAULT_FIRECRAWL_ZERO_DATA_RETENTION,
+        ),
+        "firecrawl_use_for_monitor": parse_setting_bool(
+            raw.get("firecrawl_use_for_monitor"),
+            DEFAULT_FIRECRAWL_USE_FOR_MONITOR,
+        ),
+        "firecrawl_use_for_catalog": parse_setting_bool(
+            raw.get("firecrawl_use_for_catalog"),
+            DEFAULT_FIRECRAWL_USE_FOR_CATALOG,
+        ),
+        "firecrawl_catalog_limit": max(1, min(250, int(raw.get("firecrawl_catalog_limit") or DEFAULT_FIRECRAWL_CATALOG_LIMIT))),
     }
 
 
@@ -2163,6 +2253,136 @@ class StaticHttpFetcher:
         return FetchResult(html=html_text, final_url=final_url, status_code=status_code, detail="ok")
 
 
+def sanitize_firecrawl_detail(value: str, api_key: str = "") -> str:
+    text = str(value or "")
+    if api_key:
+        text = text.replace(api_key, "<hidden-firecrawl-key>")
+    return text[:500]
+
+
+class FirecrawlClient:
+    def __init__(self, settings_payload: dict[str, Any], session: requests.Session | None = None) -> None:
+        self.settings = settings_payload
+        self.session = session or requests.Session()
+        self.api_url = str(settings_payload.get("firecrawl_api_url") or DEFAULT_FIRECRAWL_API_URL).rstrip("/")
+        self.api_key = str(settings_payload.get("firecrawl_api_key") or "").strip()
+
+    def headers(self) -> dict[str, str]:
+        headers = {
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+        }
+        if self.api_key:
+            headers["Authorization"] = f"Bearer {self.api_key}"
+        return headers
+
+    def scrape_payload(self, url: str) -> dict[str, Any]:
+        return {
+            "url": url,
+            "formats": ["rawHtml", "html", "markdown", "links"],
+            "maxAge": int(self.settings.get("firecrawl_max_age_ms", 0) or 0),
+            "storeInCache": bool(self.settings.get("firecrawl_store_in_cache", False)),
+            "zeroDataRetention": bool(self.settings.get("firecrawl_zero_data_retention", True)),
+            "proxy": str(self.settings.get("firecrawl_proxy_mode") or "basic"),
+        }
+
+    def scrape(self, url: str) -> FetchResult:
+        if not self.settings.get("firecrawl_enabled"):
+            return FetchResult(
+                html="",
+                final_url=url,
+                error_kind="firecrawl_disabled",
+                detail="Firecrawl 未启用。",
+            )
+        if not self.api_key:
+            return FetchResult(
+                html="",
+                final_url=url,
+                error_kind="firecrawl_auth_error",
+                detail="Firecrawl API key 未配置。",
+            )
+
+        timeout_seconds = int(self.settings.get("firecrawl_timeout_seconds") or DEFAULT_FIRECRAWL_TIMEOUT_SECONDS)
+        try:
+            response: Response = self.session.post(
+                f"{self.api_url}/v2/scrape",
+                headers=self.headers(),
+                json=self.scrape_payload(url),
+                timeout=timeout_seconds,
+            )
+        except requests.Timeout:
+            return FetchResult(html="", final_url=url, error_kind="timeout", detail="Firecrawl scrape 请求超时。")
+        except requests.RequestException as exc:
+            return FetchResult(
+                html="",
+                final_url=url,
+                error_kind="firecrawl_request_error",
+                detail=f"Firecrawl scrape 请求失败：{sanitize_firecrawl_detail(str(exc), self.api_key)}",
+            )
+
+        if response.status_code in {401, 403}:
+            return FetchResult(html="", final_url=url, status_code=response.status_code, error_kind="firecrawl_auth_error", detail="Firecrawl 认证失败，请检查 API key。")
+        if response.status_code == 402:
+            return FetchResult(html="", final_url=url, status_code=response.status_code, error_kind="firecrawl_credit_required", detail="Firecrawl 额度不足或需要付费额度。")
+        if response.status_code == 429:
+            return FetchResult(html="", final_url=url, status_code=response.status_code, error_kind="firecrawl_rate_limited", detail="Firecrawl 请求频率受限，请降低并发或稍后重试。")
+        if response.status_code >= 500:
+            return FetchResult(html="", final_url=url, status_code=response.status_code, error_kind="firecrawl_upstream_error", detail=f"Firecrawl 上游服务异常（HTTP {response.status_code}）。")
+
+        try:
+            payload = response.json()
+        except ValueError:
+            return FetchResult(html="", final_url=url, status_code=response.status_code, error_kind="firecrawl_bad_response", detail="Firecrawl 返回了非 JSON 响应。")
+        if not isinstance(payload, dict):
+            return FetchResult(html="", final_url=url, status_code=response.status_code, error_kind="firecrawl_bad_response", detail="Firecrawl 响应结构不正确。")
+
+        data = payload.get("data") if isinstance(payload.get("data"), dict) else payload
+        if not isinstance(data, dict):
+            return FetchResult(html="", final_url=url, status_code=response.status_code, error_kind="firecrawl_bad_response", detail="Firecrawl 响应缺少 data 对象。")
+
+        metadata = data.get("metadata") if isinstance(data.get("metadata"), dict) else {}
+        final_url = str(metadata.get("url") or metadata.get("sourceURL") or data.get("url") or url)
+        status_code = int(metadata.get("statusCode") or response.status_code or 0)
+        html_text = str(data.get("rawHtml") or data.get("html") or data.get("markdown") or "")
+        if looks_like_cloudflare_challenge(html_text, extract_page_title(html_text), final_url):
+            return FetchResult(
+                html="",
+                final_url=final_url,
+                status_code=status_code,
+                error_kind="cloudflare_challenge",
+                detail="Firecrawl 返回的内容仍是 Cloudflare / Turnstile 验证页。",
+            )
+        if not html_text:
+            return FetchResult(
+                html="",
+                final_url=final_url,
+                status_code=status_code,
+                error_kind="firecrawl_bad_response",
+                detail="Firecrawl 响应未包含 rawHtml/html/markdown 内容。",
+            )
+        detail = "ok"
+        if data.get("markdown"):
+            detail = str(data.get("markdown"))[:300]
+        return FetchResult(html=html_text, final_url=final_url, status_code=status_code, detail=detail)
+
+
+class FirecrawlFetcher:
+    def __init__(self, settings_payload: dict[str, Any], client: FirecrawlClient | None = None) -> None:
+        self.client = client or FirecrawlClient(settings_payload)
+
+    def fetch(self, url: str, timeout_seconds: int) -> FetchResult:
+        return self.client.scrape(url)
+
+
+class FirecrawlCatalogProvider:
+    def __init__(self, settings_payload: dict[str, Any], client: FirecrawlClient | None = None) -> None:
+        self.settings = settings_payload
+        self.client = client or FirecrawlClient(settings_payload)
+
+    def scrape(self, url: str) -> FetchResult:
+        return self.client.scrape(url)
+
+
 class ExternalInputFetcher:
     def __init__(self, strategy: str) -> None:
         self.strategy = strategy
@@ -2178,11 +2398,21 @@ class ExternalInputFetcher:
 
 
 class FetcherSelector:
-    def __init__(self, static_http_fetcher: StaticHttpFetcher | None = None) -> None:
+    def __init__(self, static_http_fetcher: StaticHttpFetcher | None = None, firecrawl_fetcher: FirecrawlFetcher | None = None) -> None:
         self.static_http_fetcher = static_http_fetcher or StaticHttpFetcher()
+        self.firecrawl_fetcher = firecrawl_fetcher
 
-    def select(self, task: Any, browser_harness: BrowserHarness) -> BrowserFetcher | StaticHttpFetcher | ExternalInputFetcher:
+    def select(
+        self,
+        task: Any,
+        browser_harness: BrowserHarness,
+        settings_payload: dict[str, Any] | None = None,
+    ) -> BrowserFetcher | StaticHttpFetcher | FirecrawlFetcher | ExternalInputFetcher:
         strategy = task_fetch_strategy(task)
+        if strategy == FETCH_STRATEGY_FIRECRAWL:
+            if self.firecrawl_fetcher is not None:
+                return self.firecrawl_fetcher
+            return FirecrawlFetcher(settings_payload or {})
         if strategy in STATIC_HTTP_FETCH_STRATEGIES:
             return self.static_http_fetcher
         if strategy in EXTERNAL_INPUT_FETCH_STRATEGIES:
@@ -2343,7 +2573,7 @@ class MonitoringEngine:
             )
 
         browser = self.test_browser if use_test_browser else self.monitor_browser
-        fetcher = self.fetcher_selector.select(task, browser)
+        fetcher = self.fetcher_selector.select(task, browser, settings_payload)
         monitor_url = str(mapping_value(task, "monitor_url", "") or "")
         target_keyword = str(mapping_value(task, "target_keyword", "") or "")
         last_error = ""
@@ -4256,6 +4486,19 @@ def make_app() -> Flask:
                     "catalog_debug_port": settings_payload["catalog_debug_port"],
                     "poll_interval_seconds": settings_payload["poll_interval_seconds"],
                     "request_timeout_seconds": settings_payload["request_timeout_seconds"],
+                    "firecrawl_enabled": settings_payload["firecrawl_enabled"],
+                    "firecrawl_api_url": settings_payload["firecrawl_api_url"],
+                    "firecrawl_api_key_masked": mask_secret(settings_payload["firecrawl_api_key"]),
+                    "firecrawl_timeout_seconds": settings_payload["firecrawl_timeout_seconds"],
+                    "firecrawl_max_age_ms": settings_payload["firecrawl_max_age_ms"],
+                    "firecrawl_store_in_cache": settings_payload["firecrawl_store_in_cache"],
+                    "firecrawl_proxy_mode": settings_payload["firecrawl_proxy_mode"],
+                    "firecrawl_allow_auto_proxy": settings_payload["firecrawl_allow_auto_proxy"],
+                    "firecrawl_allow_enhanced_proxy": settings_payload["firecrawl_allow_enhanced_proxy"],
+                    "firecrawl_zero_data_retention": settings_payload["firecrawl_zero_data_retention"],
+                    "firecrawl_use_for_monitor": settings_payload["firecrawl_use_for_monitor"],
+                    "firecrawl_use_for_catalog": settings_payload["firecrawl_use_for_catalog"],
+                    "firecrawl_catalog_limit": settings_payload["firecrawl_catalog_limit"],
                     "telegram_ready": bool(
                         settings_payload["telegram_bot_token"] and settings_payload["telegram_chat_ids"]
                     ),
@@ -4800,6 +5043,9 @@ def make_app() -> Flask:
         for key, minimum, maximum in (
             ("poll_interval_seconds", 15, 3600),
             ("request_timeout_seconds", 10, 120),
+            ("firecrawl_timeout_seconds", 10, 180),
+            ("firecrawl_max_age_ms", 0, 604800000),
+            ("firecrawl_catalog_limit", 1, 250),
         ):
             if key in payload:
                 try:
@@ -4809,6 +5055,45 @@ def make_app() -> Flask:
                 if value < minimum or value > maximum:
                     return jsonify({"ok": False, "message": f"{key} 超出允许范围。"}), 400
                 updates[key] = str(value)
+
+        for key in (
+            "firecrawl_enabled",
+            "firecrawl_store_in_cache",
+            "firecrawl_allow_auto_proxy",
+            "firecrawl_allow_enhanced_proxy",
+            "firecrawl_zero_data_retention",
+            "firecrawl_use_for_monitor",
+            "firecrawl_use_for_catalog",
+        ):
+            if key in payload:
+                updates[key] = settings_bool_text(parse_setting_bool(payload.get(key)))
+
+        if "firecrawl_api_url" in payload:
+            api_url = str(payload.get("firecrawl_api_url", "")).strip().rstrip("/")
+            if not api_url or not validate_http_url(api_url):
+                return jsonify({"ok": False, "message": "Firecrawl API URL 必须是有效的 http(s) 地址。"}), 400
+            updates["firecrawl_api_url"] = api_url
+
+        if "firecrawl_api_key" in payload:
+            updates["firecrawl_api_key"] = str(payload.get("firecrawl_api_key", "")).strip()
+
+        if "firecrawl_proxy_mode" in payload:
+            proxy_mode = str(payload.get("firecrawl_proxy_mode") or "").strip().lower()
+            if proxy_mode not in FIRECRAWL_PROXY_MODES:
+                return jsonify({"ok": False, "message": "Firecrawl proxy 模式必须是 basic / enhanced / auto。"}), 400
+            allow_auto = parse_setting_bool(
+                updates.get("firecrawl_allow_auto_proxy"),
+                bool(current_settings["firecrawl_allow_auto_proxy"]),
+            )
+            allow_enhanced = parse_setting_bool(
+                updates.get("firecrawl_allow_enhanced_proxy"),
+                bool(current_settings["firecrawl_allow_enhanced_proxy"]),
+            )
+            if proxy_mode == "auto" and not allow_auto:
+                return jsonify({"ok": False, "message": "使用 Firecrawl auto proxy 前必须显式开启允许 auto proxy。"}), 400
+            if proxy_mode == "enhanced" and not allow_enhanced:
+                return jsonify({"ok": False, "message": "使用 Firecrawl enhanced proxy 前必须显式开启允许 enhanced proxy。"}), 400
+            updates["firecrawl_proxy_mode"] = proxy_mode
 
         if not updates:
             return jsonify({"ok": False, "message": "没有可更新的设置。"}), 400

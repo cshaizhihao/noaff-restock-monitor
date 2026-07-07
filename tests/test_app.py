@@ -938,6 +938,7 @@ class PortalAppTestCase(unittest.TestCase):
                 {
                     "telegram_chat_id": "backup-chat-id",
                     "poll_interval_seconds": "60",
+                    "firecrawl_api_key": "fc-secret-backup-key",
                 },
             )
             connection.commit()
@@ -957,6 +958,10 @@ class PortalAppTestCase(unittest.TestCase):
         self.assertEqual(backup_payload["tables"]["tasks"][0]["ingest_token_hash"], "hash-from-backup")
         self.assertEqual(backup_payload["tables"]["tasks"][0]["ingest_token_hint"], "hint-1234")
         self.assertIn("admins", backup_payload["tables"])
+        backup_text = json.dumps(backup_payload, ensure_ascii=False)
+        self.assertNotIn("fc-secret-backup-key", backup_text)
+        settings_rows = {row["key"]: row["value"] for row in backup_payload["tables"]["settings"]}
+        self.assertEqual(settings_rows["firecrawl_api_key"], "")
 
         with app_module.open_connection() as connection:
             connection.execute("DELETE FROM tasks")
@@ -987,6 +992,7 @@ class PortalAppTestCase(unittest.TestCase):
         )
         payload = snapshot.get_json()
         self.assertEqual(payload["settings"]["telegram_chat_id"], "backup-chat-id")
+        self.assertNotIn("firecrawl_api_key", payload["settings"])
         self.assertEqual(payload["metrics"]["total"], 1)
         self.assertEqual(payload["tasks"][0]["fetch_strategy"], "static_http")
         self.assertEqual(payload["tasks"][0]["blocked_count"], 2)
@@ -1763,6 +1769,66 @@ class PortalAppTestCase(unittest.TestCase):
         self.assertEqual(catalog_port_update.status_code, 200)
         self.assertTrue(catalog_port_update.get_json()["ok"])
 
+    def test_firecrawl_settings_save_and_snapshot_masks_api_key(self) -> None:
+        _, headers = self.login()
+        secret = "fc-test-secret-1234567890"
+
+        response = self.client.post(
+            f"{app_module.PORTAL_PATH}/api/settings/telegram",
+            headers=headers,
+            base_url=BASE_URL,
+            json={
+                "firecrawl_enabled": True,
+                "firecrawl_api_url": "https://api.firecrawl.dev/",
+                "firecrawl_api_key": secret,
+                "firecrawl_timeout_seconds": 61,
+                "firecrawl_max_age_ms": 0,
+                "firecrawl_store_in_cache": False,
+                "firecrawl_proxy_mode": "basic",
+                "firecrawl_zero_data_retention": True,
+                "firecrawl_use_for_monitor": False,
+                "firecrawl_use_for_catalog": True,
+                "firecrawl_catalog_limit": 51,
+            },
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.get_json()["ok"])
+
+        snapshot = self.client.get(
+            f"{app_module.PORTAL_PATH}/api/snapshot",
+            headers=self.browser_headers(),
+            base_url=BASE_URL,
+        )
+        payload = snapshot.get_json()
+        self.assertTrue(payload["settings"]["firecrawl_enabled"])
+        self.assertEqual(payload["settings"]["firecrawl_api_url"], "https://api.firecrawl.dev")
+        self.assertEqual(payload["settings"]["firecrawl_api_key_masked"], app_module.mask_secret(secret))
+        self.assertNotIn("firecrawl_api_key", payload["settings"])
+        self.assertNotIn(secret, json.dumps(payload, ensure_ascii=False))
+        self.assertEqual(payload["settings"]["firecrawl_timeout_seconds"], 61)
+        self.assertEqual(payload["settings"]["firecrawl_catalog_limit"], 51)
+
+    def test_firecrawl_settings_require_explicit_proxy_feature_flags(self) -> None:
+        _, headers = self.login()
+
+        blocked = self.client.post(
+            f"{app_module.PORTAL_PATH}/api/settings/telegram",
+            headers=headers,
+            base_url=BASE_URL,
+            json={"firecrawl_proxy_mode": "auto"},
+        )
+        self.assertEqual(blocked.status_code, 400)
+        self.assertIn("auto proxy", blocked.get_json()["message"])
+
+        allowed = self.client.post(
+            f"{app_module.PORTAL_PATH}/api/settings/telegram",
+            headers=headers,
+            base_url=BASE_URL,
+            json={"firecrawl_allow_auto_proxy": True, "firecrawl_proxy_mode": "auto"},
+        )
+        self.assertEqual(allowed.status_code, 200)
+        self.assertTrue(allowed.get_json()["ok"])
+
     def test_browser_fetcher_wraps_harness_success(self) -> None:
         class FakeHarness:
             def __init__(self) -> None:
@@ -1851,6 +1917,171 @@ class PortalAppTestCase(unittest.TestCase):
 
         self.assertEqual(result.error_kind, "http_error")
         self.assertIn("HTTP 429", result.detail)
+
+    def firecrawl_settings(self, **overrides) -> dict[str, object]:
+        settings = {
+            "firecrawl_enabled": True,
+            "firecrawl_api_url": "https://api.firecrawl.dev",
+            "firecrawl_api_key": "fc-secret-token",
+            "firecrawl_timeout_seconds": 60,
+            "firecrawl_max_age_ms": 0,
+            "firecrawl_store_in_cache": False,
+            "firecrawl_proxy_mode": "basic",
+            "firecrawl_zero_data_retention": True,
+        }
+        settings.update(overrides)
+        return settings
+
+    def test_firecrawl_fetcher_success_uses_raw_html_and_cache_controls(self) -> None:
+        class FakeResponse:
+            status_code = 200
+
+            def json(self):
+                return {
+                    "data": {
+                        "rawHtml": "<html><title>Raw</title><body>RAW HK stock 9</body></html>",
+                        "html": "<html><title>Html</title><body>HTML fallback</body></html>",
+                        "markdown": "# Markdown fallback",
+                        "metadata": {
+                            "statusCode": 200,
+                            "url": "https://merchant.example.com/final",
+                        },
+                    }
+                }
+
+        class FakeSession:
+            def __init__(self) -> None:
+                self.calls: list[dict[str, object]] = []
+
+            def post(self, url, headers=None, json=None, timeout=None):
+                self.calls.append({"url": url, "headers": headers, "json": json, "timeout": timeout})
+                return FakeResponse()
+
+        session = FakeSession()
+        fetcher = app_module.FirecrawlFetcher(self.firecrawl_settings(), app_module.FirecrawlClient(self.firecrawl_settings(), session))
+        result = fetcher.fetch("https://merchant.example.com/products", 25)
+
+        self.assertIn("RAW HK stock 9", result.html)
+        self.assertNotIn("HTML fallback", result.html)
+        self.assertEqual(result.final_url, "https://merchant.example.com/final")
+        self.assertEqual(result.status_code, 200)
+        self.assertEqual(result.error_kind, "")
+        self.assertEqual(session.calls[0]["url"], "https://api.firecrawl.dev/v2/scrape")
+        self.assertEqual(session.calls[0]["headers"]["Authorization"], "Bearer fc-secret-token")
+        self.assertEqual(session.calls[0]["timeout"], 60)
+        sent_payload = session.calls[0]["json"]
+        self.assertEqual(sent_payload["formats"], ["rawHtml", "html", "markdown", "links"])
+        self.assertEqual(sent_payload["maxAge"], 0)
+        self.assertFalse(sent_payload["storeInCache"])
+        self.assertTrue(sent_payload["zeroDataRetention"])
+        self.assertEqual(sent_payload["proxy"], "basic")
+
+    def test_firecrawl_fetcher_classifies_http_errors(self) -> None:
+        class FakeResponse:
+            def __init__(self, status_code: int) -> None:
+                self.status_code = status_code
+
+            def json(self):
+                return {"success": False}
+
+        class FakeSession:
+            def __init__(self, status_code: int) -> None:
+                self.status_code = status_code
+
+            def post(self, url, headers=None, json=None, timeout=None):
+                return FakeResponse(self.status_code)
+
+        cases = {
+            401: "firecrawl_auth_error",
+            403: "firecrawl_auth_error",
+            402: "firecrawl_credit_required",
+            429: "firecrawl_rate_limited",
+            503: "firecrawl_upstream_error",
+        }
+        for status_code, expected_kind in cases.items():
+            with self.subTest(status_code=status_code):
+                client = app_module.FirecrawlClient(self.firecrawl_settings(), FakeSession(status_code))
+                result = app_module.FirecrawlFetcher(self.firecrawl_settings(), client).fetch("https://example.com", 25)
+                self.assertEqual(result.error_kind, expected_kind)
+                self.assertEqual(result.status_code, status_code)
+
+    def test_firecrawl_fetcher_classifies_timeout_and_cloudflare(self) -> None:
+        class TimeoutSession:
+            def post(self, url, headers=None, json=None, timeout=None):
+                raise app_module.requests.Timeout("slow")
+
+        timeout_result = app_module.FirecrawlClient(self.firecrawl_settings(), TimeoutSession()).scrape("https://example.com")
+        self.assertEqual(timeout_result.error_kind, "timeout")
+
+        class CloudflareResponse:
+            status_code = 200
+
+            def json(self):
+                return {
+                    "data": {
+                        "rawHtml": "<html><title>Just a moment...</title><body><div id=\"cf-turnstile\">Cloudflare</div></body></html>",
+                        "metadata": {"statusCode": 403, "sourceURL": "https://example.com/protected"},
+                    }
+                }
+
+        class CloudflareSession:
+            def post(self, url, headers=None, json=None, timeout=None):
+                return CloudflareResponse()
+
+        challenge_result = app_module.FirecrawlClient(self.firecrawl_settings(), CloudflareSession()).scrape("https://example.com")
+        self.assertEqual(challenge_result.error_kind, "cloudflare_challenge")
+        self.assertEqual(challenge_result.final_url, "https://example.com/protected")
+
+    def test_firecrawl_fetcher_masks_api_key_in_request_errors(self) -> None:
+        class FailingSession:
+            def post(self, url, headers=None, json=None, timeout=None):
+                raise app_module.requests.RequestException("boom fc-secret-token leak")
+
+        result = app_module.FirecrawlClient(self.firecrawl_settings(), FailingSession()).scrape("https://example.com")
+
+        self.assertEqual(result.error_kind, "firecrawl_request_error")
+        self.assertNotIn("fc-secret-token", result.detail)
+        self.assertIn("<hidden-firecrawl-key>", result.detail)
+
+    def test_firecrawl_strategy_parses_stock_without_browser(self) -> None:
+        class FakeFirecrawlFetcher:
+            def fetch(self, url: str, timeout_seconds: int) -> app_module.FetchResult:
+                return app_module.FetchResult(
+                    html="<html><body><section>HK-CMI <a>Order Now</a></section></body></html>",
+                    final_url=url,
+                    status_code=200,
+                    detail="ok",
+                )
+
+        class ExplodingHarness:
+            def fetch_html(self, url, timeout_seconds):
+                raise AssertionError("firecrawl strategy must not use local browser")
+
+        engine = self.app.extensions["monitor_engine"]
+        original_selector = engine.fetcher_selector
+        try:
+            engine.fetcher_selector = app_module.FetcherSelector(
+                firecrawl_fetcher=FakeFirecrawlFetcher(),
+            )
+            result = engine.scrape_task(
+                {
+                    "name": "HK-CMI",
+                    "monitor_url": "https://merchant.example.com/products",
+                    "target_keyword": "HK-CMI",
+                    "fetch_strategy": "firecrawl",
+                    "source_config": "{}",
+                },
+                {
+                    "request_timeout_seconds": 25,
+                    **self.firecrawl_settings(),
+                },
+                use_test_browser=False,
+            )
+        finally:
+            engine.fetcher_selector = original_selector
+
+        self.assertEqual(result.stock, 1)
+        self.assertEqual(result.error_kind, "")
 
     def test_external_input_fetch_strategy_does_not_use_browser(self) -> None:
         class ExplodingHarness:
