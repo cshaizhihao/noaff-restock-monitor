@@ -1015,6 +1015,44 @@ PY
         self.assertIn("password=NewStrongPass123", output)
         self.assertNotIn("panel_path=", output)
 
+    def test_panel_upgrade_policy_is_opt_in(self) -> None:
+        install_script = (ROOT_DIR / "install.sh").read_text(encoding="utf-8")
+        self.assertIn('ENABLE_PANEL_UPGRADE="${ENABLE_PANEL_UPGRADE:-false}"', install_script)
+        self.assertIn("PANEL_UPGRADE_ENABLED=${ENABLE_PANEL_UPGRADE}", install_script)
+        self.assertIn("write_panel_upgrade_policy", install_script)
+        self.assertIn("org.freedesktop.systemd1.manage-units", install_script)
+        self.assertIn('action.lookup("unit") == "${APP_NAME}-upgrade.service"', install_script)
+        self.assertIn('subject.user == "${SERVICE_USER}"', install_script)
+
+    def test_panel_upgrade_policy_writes_and_removes_polkit_rule(self) -> None:
+        output = self.assert_shell_ok(
+            textwrap.dedent(
+                r"""
+                set -Eeuo pipefail
+                temp_dir="$(mktemp -d)"
+                export NOAFF_INSTALL_LIBRARY_MODE=true
+                source ./install.sh
+                restart_polkit_service() {
+                  printf 'restart-polkit\n'
+                }
+                PANEL_UPGRADE_POLKIT_RULE="${temp_dir}/49-noaff-monitor-upgrade.rules"
+                DEPLOY_MODE=native
+                ENABLE_PANEL_UPGRADE=true
+                APP_NAME=noaff-monitor
+                SERVICE_USER=noaffmon
+                write_panel_upgrade_policy
+                grep -F 'noaff-monitor-upgrade.service' "$PANEL_UPGRADE_POLKIT_RULE"
+                grep -F 'subject.user == "noaffmon"' "$PANEL_UPGRADE_POLKIT_RULE"
+                ENABLE_PANEL_UPGRADE=false
+                write_panel_upgrade_policy
+                test ! -e "$PANEL_UPGRADE_POLKIT_RULE"
+                """
+            )
+        )
+        self.assertIn("noaff-monitor-upgrade.service", output)
+        self.assertIn('subject.user == "noaffmon"', output)
+        self.assertIn("restart-polkit", output)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

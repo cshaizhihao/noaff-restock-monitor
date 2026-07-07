@@ -53,6 +53,7 @@ ORIGIN_LOCKDOWN_TO_CLOUDFLARE="${ORIGIN_LOCKDOWN_TO_CLOUDFLARE:-true}"
 CHROMIUM_BINARY="${CHROMIUM_BINARY:-}"
 CHROMIUM_HEADLESS="${CHROMIUM_HEADLESS:-true}"
 APP_STARTUP_TIMEOUT_SECONDS="${APP_STARTUP_TIMEOUT_SECONDS:-90}"
+ENABLE_PANEL_UPGRADE="${ENABLE_PANEL_UPGRADE:-false}"
 
 LIMITER_STORAGE_URI="${LIMITER_STORAGE_URI:-redis://127.0.0.1:6379/0}"
 SESSION_COOKIE_SECURE="${SESSION_COOKIE_SECURE:-true}"
@@ -82,6 +83,7 @@ CERTBOT_RENEW_TIMER="/etc/systemd/system/${APP_NAME}-cert-renew.timer"
 UPGRADE_SCRIPT="/usr/local/bin/${APP_NAME}-upgrade.sh"
 UPGRADE_SERVICE="/etc/systemd/system/${APP_NAME}-upgrade.service"
 UPGRADE_LOG="/var/log/${APP_NAME}-upgrade.log"
+PANEL_UPGRADE_POLKIT_RULE="/etc/polkit-1/rules.d/49-${APP_NAME}-upgrade.rules"
 CLI_SCRIPT="${CLI_SCRIPT:-/usr/local/bin/noaff}"
 ACME_WEBROOT="/var/www/${APP_NAME}-acme"
 INSTALL_LOG="/var/log/${APP_NAME}-install.log"
@@ -428,6 +430,12 @@ load_existing_env_defaults() {
   prefer_existing_value "CF_RECORD_PROXIED" "true"
   prefer_existing_value "CF_SSL_MODE" "strict"
   prefer_existing_value "ORIGIN_LOCKDOWN_TO_CLOUDFLARE" "true"
+  prefer_existing_value "ENABLE_PANEL_UPGRADE" "false"
+  if [[ "$ENABLE_PANEL_UPGRADE" == "false" ]]; then
+    local existing_panel_upgrade
+    existing_panel_upgrade="$(read_env_value "PANEL_UPGRADE_ENABLED")"
+    [[ -z "$existing_panel_upgrade" ]] || ENABLE_PANEL_UPGRADE="$existing_panel_upgrade"
+  fi
 
   [[ -n "$SECRET_KEY" ]] || SECRET_KEY="$(read_env_value "SECRET_KEY")"
   [[ -n "$ADMIN_PASSWORD" ]] || ADMIN_PASSWORD="$(read_env_value "ADMIN_PASSWORD")"
@@ -931,16 +939,21 @@ interactive_wizard() {
   esac
 
   echo
-  if prompt_yes_no "[7/8] 是否现在填写 Telegram Bot Token 和 Chat ID？" "n"; then
+  if prompt_yes_no "[7/9] 是否现在填写 Telegram Bot Token 和 Chat ID？" "n"; then
     TELEGRAM_BOT_TOKEN="$(prompt_secret_optional "请输入 Telegram Bot Token（输入时不显示）：")"
     TELEGRAM_CHAT_ID="$(prompt_default "请输入 Telegram Chat ID" "$TELEGRAM_CHAT_ID")"
+  fi
+  if prompt_yes_no "[8/9] 是否允许后台按钮直接触发一键升级？默认否，仅授权启动升级服务" "n"; then
+    ENABLE_PANEL_UPGRADE="true"
+  else
+    ENABLE_PANEL_UPGRADE="false"
   fi
 
   normalize_access_mode
   validate_required_inputs
   validate_runtime_config
   print_install_summary
-  prompt_yes_no "[8/8] 确认开始安装？" "Y" || die "用户取消安装。"
+  prompt_yes_no "[9/9] 确认开始安装？" "Y" || die "用户取消安装。"
 }
 
 print_install_summary() {
@@ -977,6 +990,13 @@ print_install_summary() {
   echo "小黄云代理：    ${CF_RECORD_PROXIED}"
   echo "源站锁定 CF：   ${ORIGIN_LOCKDOWN_TO_CLOUDFLARE}"
   echo "监控/测试/商家端口： ${MONITOR_DEBUG_PORT}/${TEST_DEBUG_PORT}/${CATALOG_DEBUG_PORT}"
+  if [[ "$DEPLOY_MODE" == "native" ]]; then
+    if bool_is_true "$ENABLE_PANEL_UPGRADE"; then
+      echo "面板一键升级：  已启用（仅授权启动 ${APP_NAME}-upgrade.service）"
+    else
+      echo "面板一键升级：  未启用（后台显示手动升级命令）"
+    fi
+  fi
   echo
 }
 
@@ -2132,7 +2152,7 @@ APP_VERSION=${app_version}
 APP_BRANCH=${app_branch}
 UPGRADE_SERVICE_NAME=${APP_NAME}-upgrade.service
 UPGRADE_LOG_PATH=${UPGRADE_LOG}
-PANEL_UPGRADE_ENABLED=false
+PANEL_UPGRADE_ENABLED=${ENABLE_PANEL_UPGRADE}
 FQDN=${FQDN}
 TLS_DOMAINS=${TLS_DOMAINS}
 CERTBOT_EMAIL=${CERTBOT_EMAIL}
@@ -2229,9 +2249,40 @@ ExecStart=$UPGRADE_SCRIPT
 EOF
 }
 
+restart_polkit_service() {
+  systemctl restart polkit >/dev/null 2>&1 || systemctl restart polkit.service >/dev/null 2>&1 || true
+}
+
+write_panel_upgrade_policy() {
+  if [[ "$DEPLOY_MODE" != "native" ]] || ! bool_is_true "$ENABLE_PANEL_UPGRADE"; then
+    if [[ -f "$PANEL_UPGRADE_POLKIT_RULE" ]]; then
+      rm -f "$PANEL_UPGRADE_POLKIT_RULE" || true
+      restart_polkit_service
+    fi
+    return 0
+  fi
+
+  mkdir -p "$(dirname "$PANEL_UPGRADE_POLKIT_RULE")"
+  cat > "$PANEL_UPGRADE_POLKIT_RULE" <<EOF
+polkit.addRule(function(action, subject) {
+    if (
+        action.id == "org.freedesktop.systemd1.manage-units" &&
+        action.lookup("unit") == "${APP_NAME}-upgrade.service" &&
+        action.lookup("verb") == "start" &&
+        subject.user == "${SERVICE_USER}"
+    ) {
+        return polkit.Result.YES;
+    }
+});
+EOF
+  chmod 644 "$PANEL_UPGRADE_POLKIT_RULE"
+  restart_polkit_service
+}
+
 write_systemd_units() {
   write_app_service
   write_upgrade_service
+  write_panel_upgrade_policy
   if bool_is_true "$ENABLE_TLS"; then
     write_certbot_renewal_units
   fi
@@ -2541,6 +2592,11 @@ final_summary() {
     echo "升级命令:  cd ${APP_DIR} && bash install.sh --docker-upgrade"
   else
     echo "升级命令:  systemctl start ${APP_NAME}-upgrade.service"
+    if bool_is_true "$ENABLE_PANEL_UPGRADE"; then
+      echo "面板升级:  已启用后台一键升级按钮"
+    else
+      echo "面板升级:  手动命令模式（默认）"
+    fi
   fi
   echo "快捷命令:  noaff"
   echo "面板地址:  ${public_url}"

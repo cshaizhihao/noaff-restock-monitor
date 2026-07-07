@@ -285,7 +285,15 @@ systemctl restart noaff-monitor
 sudo systemctl start noaff-monitor-upgrade.service
 ```
 
-后台“升级”按钮默认会先判断当前 Web 进程是否有启动 systemd 服务的权限。没有权限时会显示手动命令，避免出现 `Interactive authentication required` 这类 systemd 认证错误。需要从面板直接触发 systemd 升级时，可在确认授权方案后设置 `PANEL_UPGRADE_ENABLED=true`。
+后台“升级”按钮默认会先判断当前 Web 进程是否有启动 systemd 服务的权限。没有权限时会显示手动命令，避免出现 `Interactive authentication required` 这类 systemd 认证错误。
+
+如果需要在 Web 后台直接触发一键升级，原生安装时可显式开启：
+
+```bash
+ENABLE_PANEL_UPGRADE=true bash install.sh
+```
+
+开启后安装脚本会写入最小 polkit 授权规则：仅允许 NOAFF 服务用户启动 `noaff-monitor-upgrade.service`，不会授予重启其他服务或执行任意 systemd 操作的权限。已有安装也可以重新运行安装脚本并设置 `ENABLE_PANEL_UPGRADE=true` 来补齐授权；仅手工把 `.env` 里的 `PANEL_UPGRADE_ENABLED=true` 改开不会自动创建系统授权规则。
 
 Docker：
 
