@@ -257,6 +257,10 @@ FETCH_STRATEGY_STATIC_HTTP = "static_http"
 FETCH_STRATEGY_GENERIC_PRICING_TABLE = "generic_pricing_table"
 FETCH_STRATEGY_WHMCS = "whmcs"
 FETCH_STRATEGY_FIRECRAWL = "firecrawl"
+FETCH_STRATEGY_FIRECRAWL_THEN_STATIC = "firecrawl_then_static"
+FETCH_STRATEGY_STATIC_THEN_FIRECRAWL = "static_then_firecrawl"
+FETCH_STRATEGY_FIRECRAWL_THEN_BROWSER = "firecrawl_then_browser"
+FETCH_STRATEGY_ADAPTIVE = "adaptive"
 FETCH_STRATEGY_MANUAL = "manual"
 FETCH_STRATEGY_WEBHOOK = "webhook"
 SUPPORTED_FETCH_STRATEGIES = {
@@ -265,6 +269,10 @@ SUPPORTED_FETCH_STRATEGIES = {
     FETCH_STRATEGY_GENERIC_PRICING_TABLE,
     FETCH_STRATEGY_WHMCS,
     FETCH_STRATEGY_FIRECRAWL,
+    FETCH_STRATEGY_FIRECRAWL_THEN_STATIC,
+    FETCH_STRATEGY_STATIC_THEN_FIRECRAWL,
+    FETCH_STRATEGY_FIRECRAWL_THEN_BROWSER,
+    FETCH_STRATEGY_ADAPTIVE,
     FETCH_STRATEGY_MANUAL,
     FETCH_STRATEGY_WEBHOOK,
 }
@@ -1371,6 +1379,9 @@ def initialize_database() -> None:
                 message_id INTEGER,
                 last_checked_at TEXT,
                 last_error TEXT DEFAULT '',
+                last_fetch_backend TEXT DEFAULT '',
+                last_fetch_attempts TEXT DEFAULT '',
+                last_protected_source_backend TEXT DEFAULT '',
                 blocked_count INTEGER NOT NULL DEFAULT 0,
                 last_blocked_at TEXT,
                 cooldown_until TEXT,
@@ -1433,6 +1444,9 @@ def initialize_database() -> None:
         ensure_column(connection, "tasks", "message_ids", "TEXT DEFAULT ''")
         ensure_column(connection, "tasks", "fetch_strategy", "TEXT NOT NULL DEFAULT 'browser'")
         ensure_column(connection, "tasks", "source_config", "TEXT NOT NULL DEFAULT '{}'")
+        ensure_column(connection, "tasks", "last_fetch_backend", "TEXT DEFAULT ''")
+        ensure_column(connection, "tasks", "last_fetch_attempts", "TEXT DEFAULT ''")
+        ensure_column(connection, "tasks", "last_protected_source_backend", "TEXT DEFAULT ''")
         ensure_column(connection, "tasks", "blocked_count", "INTEGER NOT NULL DEFAULT 0")
         ensure_column(connection, "tasks", "last_blocked_at", "TEXT")
         ensure_column(connection, "tasks", "cooldown_until", "TEXT")
@@ -1531,6 +1545,9 @@ def to_task_payload(row: sqlite3.Row) -> dict[str, Any]:
             sanitize_telegram_error(row["last_error"] or ""),
             classify_browser_error(row["last_error"] or ""),
         ),
+        "last_fetch_backend": (row["last_fetch_backend"] or "") if "last_fetch_backend" in keys else "",
+        "last_fetch_attempts": parse_fetch_attempts_text(row["last_fetch_attempts"] if "last_fetch_attempts" in keys else ""),
+        "last_protected_source_backend": (row["last_protected_source_backend"] or "") if "last_protected_source_backend" in keys else "",
         "blocked_count": int(row["blocked_count"] or 0) if "blocked_count" in keys else 0,
         "last_blocked_at": (row["last_blocked_at"] or "") if "last_blocked_at" in keys else "",
         "cooldown_until": (row["cooldown_until"] or "") if "cooldown_until" in keys else "",
@@ -1781,6 +1798,92 @@ class FetchResult:
 
 
 @dataclass
+class FetchAttempt:
+    backend: str
+    started_at: str
+    ended_at: str = ""
+    status: str = "pending"
+    error_kind: str = ""
+    detail: str = ""
+    final_url: str = ""
+
+
+@dataclass
+class FetchPipelineResult:
+    html: str
+    final_url: str
+    status_code: int = 0
+    backend_used: str = ""
+    attempts: list[FetchAttempt] | None = None
+    error_kind: str = ""
+    detail: str = ""
+
+
+def fetch_attempt_to_payload(attempt: FetchAttempt) -> dict[str, str]:
+    return {
+        "backend": attempt.backend,
+        "started_at": attempt.started_at,
+        "ended_at": attempt.ended_at,
+        "status": attempt.status,
+        "error_kind": attempt.error_kind,
+        "detail": attempt.detail,
+        "final_url": attempt.final_url,
+    }
+
+
+def serialize_fetch_attempts(attempts: list[FetchAttempt] | None) -> str:
+    if not attempts:
+        return "[]"
+    return json.dumps([fetch_attempt_to_payload(attempt) for attempt in attempts], ensure_ascii=False)
+
+
+def parse_fetch_attempts_text(value: Any) -> list[dict[str, str]]:
+    try:
+        payload = json.loads(str(value or "[]"))
+    except json.JSONDecodeError:
+        return []
+    if not isinstance(payload, list):
+        return []
+    parsed: list[dict[str, str]] = []
+    for item in payload:
+        if not isinstance(item, dict):
+            continue
+        parsed.append(
+            {
+                "backend": str(item.get("backend") or ""),
+                "started_at": str(item.get("started_at") or ""),
+                "ended_at": str(item.get("ended_at") or ""),
+                "status": str(item.get("status") or ""),
+                "error_kind": str(item.get("error_kind") or ""),
+                "detail": sanitize_firecrawl_detail(str(item.get("detail") or "")),
+                "final_url": str(item.get("final_url") or ""),
+            }
+        )
+    return parsed
+
+
+def fetch_attempts_summary(attempts: list[FetchAttempt] | None) -> str:
+    if not attempts:
+        return ""
+    parts: list[str] = []
+    for attempt in attempts:
+        status = attempt.status or "failed"
+        kind = f"/{attempt.error_kind}" if attempt.error_kind else ""
+        parts.append(f"{attempt.backend}:{status}{kind}")
+    return "；尝试后端：" + " -> ".join(parts)
+
+
+def last_fetch_attempt_backend(attempts: list[FetchAttempt] | None, error_kind: str = "") -> str:
+    if not attempts:
+        return ""
+    if error_kind:
+        for attempt in reversed(attempts):
+            if attempt.error_kind == error_kind:
+                return attempt.backend
+    return attempts[-1].backend
+
+
+@dataclass
 class ExtractorResult:
     stock: int | None
     fragment: str
@@ -1795,6 +1898,8 @@ class ScrapeResult:
     used_test_browser: bool
     error_kind: str = ""
     cooldown_skip: bool = False
+    backend_used: str = ""
+    fetch_attempts: list[FetchAttempt] | None = None
 
 
 class ProtectedSourceError(RuntimeError):
@@ -2454,6 +2559,158 @@ class FetcherSelector:
             return ExternalInputFetcher(strategy)
         return BrowserFetcher(browser_harness)
 
+    def fetcher_for_backend(
+        self,
+        backend: str,
+        browser_harness: BrowserHarness,
+        settings_payload: dict[str, Any] | None = None,
+    ) -> BrowserFetcher | StaticHttpFetcher | FirecrawlFetcher | ExternalInputFetcher:
+        if backend == FETCH_STRATEGY_FIRECRAWL:
+            if self.firecrawl_fetcher is not None:
+                return self.firecrawl_fetcher
+            return FirecrawlFetcher(settings_payload or {})
+        if backend == FETCH_STRATEGY_STATIC_HTTP:
+            return self.static_http_fetcher
+        if backend in EXTERNAL_INPUT_FETCH_STRATEGIES:
+            return ExternalInputFetcher(backend)
+        return BrowserFetcher(browser_harness)
+
+    def backends_for_strategy(
+        self,
+        task: Any,
+        settings_payload: dict[str, Any] | None = None,
+        context: str = "monitor",
+    ) -> list[str]:
+        strategy = task_fetch_strategy(task)
+        settings_payload = settings_payload or {}
+        if strategy in EXTERNAL_INPUT_FETCH_STRATEGIES:
+            return [strategy]
+        if strategy == FETCH_STRATEGY_FIRECRAWL:
+            return [FETCH_STRATEGY_FIRECRAWL]
+        if strategy == FETCH_STRATEGY_FIRECRAWL_THEN_STATIC:
+            return [FETCH_STRATEGY_FIRECRAWL, FETCH_STRATEGY_STATIC_HTTP]
+        if strategy == FETCH_STRATEGY_STATIC_THEN_FIRECRAWL:
+            return [FETCH_STRATEGY_STATIC_HTTP, FETCH_STRATEGY_FIRECRAWL]
+        if strategy == FETCH_STRATEGY_FIRECRAWL_THEN_BROWSER:
+            return [FETCH_STRATEGY_FIRECRAWL, FETCH_STRATEGY_BROWSER]
+        if strategy == FETCH_STRATEGY_ADAPTIVE:
+            backends = [FETCH_STRATEGY_STATIC_HTTP, FETCH_STRATEGY_BROWSER]
+            use_firecrawl = bool(settings_payload.get("firecrawl_use_for_catalog")) if context == "catalog" else bool(settings_payload.get("firecrawl_use_for_monitor"))
+            if use_firecrawl or task_fetch_strategy(task) == FETCH_STRATEGY_FIRECRAWL:
+                backends.append(FETCH_STRATEGY_FIRECRAWL)
+            return backends
+        if strategy in STATIC_HTTP_FETCH_STRATEGIES:
+            return [FETCH_STRATEGY_STATIC_HTTP]
+        return [FETCH_STRATEGY_BROWSER]
+
+    def should_try_next_backend(
+        self,
+        result: FetchResult,
+        next_backend: str,
+        settings_payload: dict[str, Any] | None = None,
+    ) -> bool:
+        settings_payload = settings_payload or {}
+        if not result.error_kind:
+            return False
+        if result.error_kind == "cloudflare_challenge":
+            return next_backend == FETCH_STRATEGY_FIRECRAWL and bool(settings_payload.get("firecrawl_enabled"))
+        if next_backend == FETCH_STRATEGY_FIRECRAWL and not settings_payload.get("firecrawl_enabled"):
+            return False
+        return result.error_kind in {
+            "timeout",
+            "request_error",
+            "empty_response",
+            "http_error",
+            "firecrawl_rate_limited",
+            "firecrawl_upstream_error",
+            "firecrawl_request_error",
+            "firecrawl_bad_response",
+            "firecrawl_disabled",
+        }
+
+    def fetch_pipeline(
+        self,
+        task: Any,
+        browser_harness: BrowserHarness,
+        settings_payload: dict[str, Any],
+        context: str = "monitor",
+    ) -> FetchPipelineResult:
+        url = str(mapping_value(task, "monitor_url", "") or "")
+        timeout_seconds = int(settings_payload.get("request_timeout_seconds") or DEFAULT_TIMEOUT_SECONDS)
+        backends = self.backends_for_strategy(task, settings_payload, context=context)
+        attempts: list[FetchAttempt] = []
+        last_result = FetchResult(html="", final_url=url, error_kind="request_error", detail="未执行抓取。")
+
+        for index, backend in enumerate(backends):
+            fetcher = self.fetcher_for_backend(backend, browser_harness, settings_payload)
+            max_backend_attempts = 3 if backend == FETCH_STRATEGY_BROWSER and hasattr(fetcher, "rebuild") else 1
+            for backend_attempt in range(max_backend_attempts):
+                attempt = FetchAttempt(backend=backend, started_at=now_iso())
+                attempts.append(attempt)
+                try:
+                    result = fetcher.fetch(url, timeout_seconds)
+                except ProtectedSourceError as exc:
+                    result = FetchResult(html="", final_url=url, error_kind=exc.error_kind, detail=str(exc))
+                except Exception as exc:
+                    detail = str(exc)
+                    result = FetchResult(
+                        html="",
+                        final_url=url,
+                        error_kind=classify_browser_error(detail) or "request_error",
+                        detail=detail,
+                    )
+                    if should_auto_heal(exc) and backend_attempt < max_backend_attempts - 1 and hasattr(fetcher, "rebuild"):
+                        attempt.ended_at = now_iso()
+                        attempt.final_url = url
+                        attempt.error_kind = result.error_kind
+                        attempt.detail = detail[:300]
+                        attempt.status = "retrying"
+                        fetcher.rebuild(detail)
+                        time.sleep(0.6)
+                        last_result = result
+                        continue
+
+                attempt.ended_at = now_iso()
+                attempt.final_url = result.final_url or url
+                attempt.error_kind = result.error_kind
+                attempt.detail = result.detail[:300] if result.detail else ""
+                attempt.status = "success" if result.html and not result.error_kind else "failed"
+                last_result = result
+
+                if result.html and not result.error_kind:
+                    return FetchPipelineResult(
+                        html=result.html,
+                        final_url=result.final_url,
+                        status_code=result.status_code,
+                        backend_used=backend,
+                        attempts=attempts,
+                        detail=result.detail,
+                    )
+                break
+
+            remaining_backends = backends[index + 1 :]
+            if (
+                last_result.error_kind == "cloudflare_challenge"
+                and FETCH_STRATEGY_FIRECRAWL in remaining_backends
+                and bool(settings_payload.get("firecrawl_enabled"))
+            ):
+                backends[index + 1 :] = [FETCH_STRATEGY_FIRECRAWL] + [
+                    backend_name for backend_name in remaining_backends if backend_name != FETCH_STRATEGY_FIRECRAWL
+                ]
+            next_backend = backends[index + 1] if index + 1 < len(backends) else ""
+            if not next_backend or not self.should_try_next_backend(last_result, next_backend, settings_payload):
+                break
+
+        return FetchPipelineResult(
+            html="",
+            final_url=last_result.final_url or url,
+            status_code=last_result.status_code,
+            backend_used="",
+            attempts=attempts,
+            error_kind=last_result.error_kind,
+            detail=last_result.detail or "抓取失败",
+        )
+
 
 class MonitoringEngine:
     def __init__(self, app: Flask) -> None:
@@ -2608,61 +2865,54 @@ class MonitoringEngine:
             )
 
         browser = self.test_browser if use_test_browser else self.monitor_browser
-        fetcher = self.fetcher_selector.select(task, browser, settings_payload)
-        monitor_url = str(mapping_value(task, "monitor_url", "") or "")
         target_keyword = str(mapping_value(task, "target_keyword", "") or "")
-        last_error = ""
-        last_error_kind = ""
-        for attempt in range(3):
-            try:
-                fetch_result = fetcher.fetch(monitor_url, settings_payload["request_timeout_seconds"])
-                if fetch_result.error_kind:
-                    return ScrapeResult(
-                        stock=None,
-                        fragment="",
-                        detail=fetch_result.detail or "抓取失败",
-                        used_test_browser=use_test_browser,
-                        error_kind=fetch_result.error_kind,
-                    )
-                if not fetch_result.html:
-                    return ScrapeResult(
-                        stock=None,
-                        fragment="",
-                        detail=fetch_result.detail or "抓取返回了空 HTML",
-                        used_test_browser=use_test_browser,
-                        error_kind="empty_response",
-                    )
-                extracted = extract_stock_for_strategy(
-                    task_fetch_strategy(task),
-                    fetch_result.html,
-                    target_keyword,
-                    task,
-                    fetch_result,
-                )
-                return ScrapeResult(
-                    stock=extracted.stock,
-                    fragment=extracted.fragment,
-                    detail=extracted.detail,
-                    used_test_browser=use_test_browser,
-                )
-            except ProtectedSourceError as exc:
-                last_error = str(exc)
-                last_error_kind = exc.error_kind
-                break
-            except Exception as exc:
-                last_error = str(exc)
-                last_error_kind = classify_browser_error(last_error)
-                if should_auto_heal(exc) and attempt < 2 and hasattr(fetcher, "rebuild"):
-                    fetcher.rebuild(last_error)
-                    time.sleep(0.6)
-                    continue
-                break
+        pipeline_result = self.fetcher_selector.fetch_pipeline(
+            task,
+            browser,
+            settings_payload,
+            context="test" if use_test_browser else "monitor",
+        )
+        attempts_summary = fetch_attempts_summary(pipeline_result.attempts)
+        if pipeline_result.error_kind:
+            return ScrapeResult(
+                stock=None,
+                fragment="",
+                detail=(pipeline_result.detail or "抓取失败") + attempts_summary,
+                used_test_browser=use_test_browser,
+                error_kind=pipeline_result.error_kind,
+                backend_used=pipeline_result.backend_used,
+                fetch_attempts=pipeline_result.attempts,
+            )
+        if not pipeline_result.html:
+            return ScrapeResult(
+                stock=None,
+                fragment="",
+                detail=(pipeline_result.detail or "抓取返回了空 HTML") + attempts_summary,
+                used_test_browser=use_test_browser,
+                error_kind="empty_response",
+                backend_used=pipeline_result.backend_used,
+                fetch_attempts=pipeline_result.attempts,
+            )
+        fetch_result = FetchResult(
+            html=pipeline_result.html,
+            final_url=pipeline_result.final_url,
+            status_code=pipeline_result.status_code,
+            detail=pipeline_result.detail,
+        )
+        extracted = extract_stock_for_strategy(
+            task_fetch_strategy(task),
+            pipeline_result.html,
+            target_keyword,
+            task,
+            fetch_result,
+        )
         return ScrapeResult(
-            stock=None,
-            fragment="",
-            detail=last_error or "抓取失败",
+            stock=extracted.stock,
+            fragment=extracted.fragment,
+            detail=extracted.detail + attempts_summary,
             used_test_browser=use_test_browser,
-            error_kind=last_error_kind,
+            backend_used=pipeline_result.backend_used,
+            fetch_attempts=pipeline_result.attempts,
         )
 
     def import_merchant_source(
@@ -2934,23 +3184,34 @@ class MonitoringEngine:
             checked_at = checked_at or now_utc()
             timestamp = checked_at.isoformat(timespec="seconds")
             if result.stock is None:
+                fetch_backend = result.backend_used or last_fetch_attempt_backend(result.fetch_attempts, result.error_kind)
+                fetch_attempts_text = serialize_fetch_attempts(result.fetch_attempts)
                 if result.error_kind in EXTERNAL_INPUT_PENDING_ERROR_KINDS:
                     connection.execute(
                         """
                         UPDATE tasks
-                        SET last_checked_at = ?, last_error = '', updated_at = ?
+                        SET last_checked_at = ?,
+                            last_error = '',
+                            last_fetch_backend = ?,
+                            last_fetch_attempts = ?,
+                            last_protected_source_backend = '',
+                            updated_at = ?
                         WHERE id = ?
                         """,
-                        (timestamp, timestamp, task["id"]),
+                        (timestamp, fetch_backend, fetch_attempts_text, timestamp, task["id"]),
                     )
                 elif result.error_kind == "cloudflare_challenge" and not result.cooldown_skip:
                     blocked_count = task_blocked_count(task) + 1
                     cooldown_until = protected_source_cooldown_until(blocked_count, checked_at)
+                    protected_backend = result.backend_used or last_fetch_attempt_backend(result.fetch_attempts, "cloudflare_challenge")
                     connection.execute(
                         """
                         UPDATE tasks
                         SET last_checked_at = ?,
                             last_error = ?,
+                            last_fetch_backend = ?,
+                            last_fetch_attempts = ?,
+                            last_protected_source_backend = ?,
                             blocked_count = ?,
                             last_blocked_at = ?,
                             cooldown_until = ?,
@@ -2960,6 +3221,9 @@ class MonitoringEngine:
                         (
                             timestamp,
                             result.detail[:1000],
+                            fetch_backend,
+                            fetch_attempts_text,
+                            protected_backend,
                             blocked_count,
                             timestamp,
                             cooldown_until,
@@ -2971,10 +3235,15 @@ class MonitoringEngine:
                     connection.execute(
                         """
                         UPDATE tasks
-                        SET last_checked_at = ?, last_error = ?, updated_at = ?
+                        SET last_checked_at = ?,
+                            last_error = ?,
+                            last_fetch_backend = ?,
+                            last_fetch_attempts = ?,
+                            last_protected_source_backend = '',
+                            updated_at = ?
                         WHERE id = ?
                         """,
-                        (timestamp, result.detail[:1000], timestamp, task["id"]),
+                        (timestamp, result.detail[:1000], fetch_backend, fetch_attempts_text, timestamp, task["id"]),
                     )
                 connection.commit()
                 return False
@@ -3066,6 +3335,9 @@ class MonitoringEngine:
                     message_ids = ?,
                     last_checked_at = ?,
                     last_error = ?,
+                    last_fetch_backend = ?,
+                    last_fetch_attempts = ?,
+                    last_protected_source_backend = '',
                     blocked_count = 0,
                     last_blocked_at = NULL,
                     cooldown_until = NULL,
@@ -3079,6 +3351,8 @@ class MonitoringEngine:
                     serialize_message_id_map(message_id_map),
                     timestamp,
                     last_error[:1000],
+                    result.backend_used or last_fetch_attempt_backend(result.fetch_attempts),
+                    serialize_fetch_attempts(result.fetch_attempts),
                     timestamp,
                     task["id"],
                 ),

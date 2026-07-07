@@ -2179,6 +2179,246 @@ class PortalAppTestCase(unittest.TestCase):
         self.assertIn("Available", result.fragment)
         self.assertEqual(result.error_kind, "")
 
+    def test_static_then_firecrawl_falls_back_after_static_failure(self) -> None:
+        class FailingStaticFetcher:
+            def __init__(self) -> None:
+                self.calls = 0
+
+            def fetch(self, url: str, timeout_seconds: int) -> app_module.FetchResult:
+                self.calls += 1
+                return app_module.FetchResult(
+                    html="",
+                    final_url=url,
+                    error_kind="empty_response",
+                    detail="static returned no useful content",
+                )
+
+        class SuccessfulFirecrawlFetcher:
+            def __init__(self) -> None:
+                self.calls = 0
+
+            def fetch(self, url: str, timeout_seconds: int) -> app_module.FetchResult:
+                self.calls += 1
+                return app_module.FetchResult(
+                    html="<html><body><section>HK-CMI <a>Order Now</a></section></body></html>",
+                    final_url=url,
+                    status_code=200,
+                    detail="ok",
+                )
+
+        static_fetcher = FailingStaticFetcher()
+        firecrawl_fetcher = SuccessfulFirecrawlFetcher()
+        engine = self.app.extensions["monitor_engine"]
+        original_selector = engine.fetcher_selector
+        try:
+            engine.fetcher_selector = app_module.FetcherSelector(
+                static_http_fetcher=static_fetcher,
+                firecrawl_fetcher=firecrawl_fetcher,
+            )
+            result = engine.scrape_task(
+                {
+                    "name": "HK-CMI",
+                    "monitor_url": "https://merchant.example.com/products",
+                    "target_keyword": "HK-CMI",
+                    "fetch_strategy": "static_then_firecrawl",
+                    "source_config": "{}",
+                },
+                {"request_timeout_seconds": 25, **self.firecrawl_settings()},
+                use_test_browser=False,
+            )
+        finally:
+            engine.fetcher_selector = original_selector
+
+        self.assertEqual(result.stock, 1)
+        self.assertEqual(static_fetcher.calls, 1)
+        self.assertEqual(firecrawl_fetcher.calls, 1)
+        self.assertEqual(result.backend_used, "firecrawl")
+        self.assertEqual([attempt.backend for attempt in result.fetch_attempts or []], ["static_http", "firecrawl"])
+
+    def test_firecrawl_then_browser_falls_back_after_rate_limit(self) -> None:
+        class RateLimitedFirecrawlFetcher:
+            def fetch(self, url: str, timeout_seconds: int) -> app_module.FetchResult:
+                return app_module.FetchResult(
+                    html="",
+                    final_url=url,
+                    status_code=429,
+                    error_kind="firecrawl_rate_limited",
+                    detail="rate limited",
+                )
+
+        class BrowserHarnessStub:
+            def __init__(self) -> None:
+                self.calls = 0
+                self.rebuilds: list[str] = []
+
+            def fetch_html(self, url, timeout_seconds):
+                self.calls += 1
+                return "<html><body><section>Tokyo NVMe <a>Order Now</a></section></body></html>"
+
+            def rebuild(self, reason):
+                self.rebuilds.append(reason)
+
+        engine = self.app.extensions["monitor_engine"]
+        original_selector = engine.fetcher_selector
+        original_browser = engine.monitor_browser
+        browser = BrowserHarnessStub()
+        try:
+            engine.fetcher_selector = app_module.FetcherSelector(
+                firecrawl_fetcher=RateLimitedFirecrawlFetcher(),
+            )
+            engine.monitor_browser = browser
+            result = engine.scrape_task(
+                {
+                    "name": "Tokyo NVMe",
+                    "monitor_url": "https://merchant.example.com/products",
+                    "target_keyword": "Tokyo NVMe",
+                    "fetch_strategy": "firecrawl_then_browser",
+                    "source_config": "{}",
+                },
+                {"request_timeout_seconds": 25, **self.firecrawl_settings()},
+                use_test_browser=False,
+            )
+        finally:
+            engine.fetcher_selector = original_selector
+            engine.monitor_browser = original_browser
+
+        self.assertEqual(result.stock, 1)
+        self.assertEqual(browser.calls, 1)
+        self.assertEqual(browser.rebuilds, [])
+        self.assertEqual(result.backend_used, "browser")
+        self.assertEqual([attempt.backend for attempt in result.fetch_attempts or []], ["firecrawl", "browser"])
+
+    def test_adaptive_cloudflare_uses_firecrawl_once_without_browser_rebuild(self) -> None:
+        class CloudflareStaticFetcher:
+            def fetch(self, url: str, timeout_seconds: int) -> app_module.FetchResult:
+                return app_module.FetchResult(
+                    html="",
+                    final_url=url,
+                    status_code=403,
+                    error_kind="cloudflare_challenge",
+                    detail="static_http 被 Cloudflare 验证页拦截",
+                )
+
+        class SuccessfulFirecrawlFetcher:
+            def __init__(self) -> None:
+                self.calls = 0
+
+            def fetch(self, url: str, timeout_seconds: int) -> app_module.FetchResult:
+                self.calls += 1
+                return app_module.FetchResult(
+                    html="<html><body><section>Premium VPS <a>Order Now</a></section></body></html>",
+                    final_url=url,
+                    status_code=200,
+                    detail="ok",
+                )
+
+        class BrowserHarnessStub:
+            def fetch_html(self, url, timeout_seconds):
+                raise AssertionError("adaptive cloudflare should not try local browser before firecrawl")
+
+            def rebuild(self, reason):
+                raise AssertionError("cloudflare challenge must not rebuild browser")
+
+        firecrawl_fetcher = SuccessfulFirecrawlFetcher()
+        engine = self.app.extensions["monitor_engine"]
+        original_selector = engine.fetcher_selector
+        original_browser = engine.monitor_browser
+        try:
+            engine.fetcher_selector = app_module.FetcherSelector(
+                static_http_fetcher=CloudflareStaticFetcher(),
+                firecrawl_fetcher=firecrawl_fetcher,
+            )
+            engine.monitor_browser = BrowserHarnessStub()
+            result = engine.scrape_task(
+                {
+                    "name": "Premium VPS",
+                    "monitor_url": "https://merchant.example.com/products",
+                    "target_keyword": "Premium VPS",
+                    "fetch_strategy": "adaptive",
+                    "source_config": "{}",
+                },
+                {"request_timeout_seconds": 25, **self.firecrawl_settings(), "firecrawl_use_for_monitor": True},
+                use_test_browser=False,
+            )
+        finally:
+            engine.fetcher_selector = original_selector
+            engine.monitor_browser = original_browser
+
+        self.assertEqual(result.stock, 1)
+        self.assertEqual(firecrawl_fetcher.calls, 1)
+        self.assertEqual([attempt.backend for attempt in result.fetch_attempts or []], ["static_http", "firecrawl"])
+
+    def test_fetch_pipeline_attempts_are_saved_to_task_payload(self) -> None:
+        class FailingStaticFetcher:
+            def fetch(self, url: str, timeout_seconds: int) -> app_module.FetchResult:
+                return app_module.FetchResult(
+                    html="",
+                    final_url=url,
+                    error_kind="empty_response",
+                    detail="empty",
+                )
+
+        class SuccessfulFirecrawlFetcher:
+            def fetch(self, url: str, timeout_seconds: int) -> app_module.FetchResult:
+                return app_module.FetchResult(
+                    html="",
+                    final_url=url,
+                    error_kind="firecrawl_bad_response",
+                    detail="Firecrawl 响应未包含 rawHtml/html/markdown 内容。",
+                )
+
+        timestamp = app_module.now_iso()
+        with app_module.open_connection() as connection:
+            cursor = connection.execute(
+                """
+                INSERT INTO tasks (
+                    name, monitor_url, target_keyword, fetch_strategy, restock_template, soldout_template,
+                    enabled, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    "HK-CMI",
+                    "https://merchant.example.com/products",
+                    "HK-CMI",
+                    "static_then_firecrawl",
+                    "{name} {stock}",
+                    "{name} sold out",
+                    1,
+                    timestamp,
+                    timestamp,
+                ),
+            )
+            connection.commit()
+            task = connection.execute("SELECT * FROM tasks WHERE id = ?", (cursor.lastrowid,)).fetchone()
+
+        engine = self.app.extensions["monitor_engine"]
+        original_selector = engine.fetcher_selector
+        try:
+            engine.fetcher_selector = app_module.FetcherSelector(
+                static_http_fetcher=FailingStaticFetcher(),
+                firecrawl_fetcher=SuccessfulFirecrawlFetcher(),
+            )
+            result = engine.scrape_task(
+                task,
+                {"request_timeout_seconds": 25, **self.firecrawl_settings()},
+                use_test_browser=False,
+            )
+            changed = engine.apply_task_result(
+                task,
+                {"telegram_bot_token": "", "telegram_chat_ids": "", **self.firecrawl_settings()},
+                result,
+            )
+        finally:
+            engine.fetcher_selector = original_selector
+
+        self.assertFalse(changed)
+        with app_module.open_connection() as connection:
+            row = connection.execute("SELECT * FROM tasks WHERE id = ?", (task["id"],)).fetchone()
+        payload = app_module.to_task_payload(row)
+        self.assertEqual(payload["last_fetch_backend"], "firecrawl")
+        self.assertEqual([attempt["backend"] for attempt in payload["last_fetch_attempts"]], ["static_http", "firecrawl"])
+        self.assertNotIn("fc-secret-token", json.dumps(payload, ensure_ascii=False))
+
     def test_generic_pricing_table_extractor_handles_order_and_soldout_buttons(self) -> None:
         fetch_result = app_module.FetchResult(html="", final_url="https://example.com/pricing")
         in_stock_html = """

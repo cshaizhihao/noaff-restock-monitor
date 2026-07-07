@@ -132,6 +132,16 @@
                 return "通用价格页";
             case "whmcs":
                 return "WHMCS";
+            case "firecrawl":
+                return "Firecrawl";
+            case "firecrawl_then_static":
+                return "Firecrawl → 静态";
+            case "static_then_firecrawl":
+                return "静态 → Firecrawl";
+            case "firecrawl_then_browser":
+                return "Firecrawl → 浏览器";
+            case "adaptive":
+                return "自适应";
             case "manual":
                 return "手动录入";
             case "webhook":
@@ -139,6 +149,15 @@
             default:
                 return "浏览器渲染";
         }
+    }
+
+    function fetchAttemptMeta(task) {
+        const backendText = task.last_fetch_backend ? ` · backend: ${fetchStrategyLabel(task.last_fetch_backend)}` : "";
+        const attempts = Array.isArray(task.last_fetch_attempts) ? task.last_fetch_attempts : [];
+        const attemptsText = attempts.length
+            ? ` · attempts: ${attempts.map((attempt) => `${fetchStrategyLabel(attempt.backend)}:${attempt.status || attempt.error_kind || "done"}`).join(" > ")}`
+            : "";
+        return `${backendText}${attemptsText}`;
     }
 
     function errorKindLabel(kind) {
@@ -436,6 +455,7 @@
         const logLine = formatTaskLogLine(task, logHint);
         const protectedNotice = protectedSourceNoticeText(task);
         const webhookMeta = webhookMetaText(task);
+        const attemptMeta = fetchAttemptMeta(task);
 
         const statusBadge = card.querySelector("[data-task-status]");
         if (statusBadge) {
@@ -514,7 +534,7 @@
 
         const meta = card.querySelector("[data-task-meta]");
         if (meta) {
-            meta.textContent = `message_id: ${task.message_id ?? "-"} · checked: ${lastChecked}`;
+            meta.textContent = `message_id: ${task.message_id ?? "-"} · checked: ${lastChecked}${attemptMeta}`;
         }
 
         const toggle = card.querySelector("[data-task-toggle]");
@@ -1023,6 +1043,7 @@
             const protectedNotice = protectedSourceNoticeText(task);
             const webhookMeta = webhookMetaText(task);
             const normalizedStrategy = normalizeFetchStrategy(task.fetch_strategy);
+            const attemptMeta = fetchAttemptMeta(task);
             const cardClass = animateCards ? "task-card reveal" : "task-card";
             return `
                 <article class="${cardClass}" data-task-id="${task.id}">
@@ -1055,7 +1076,7 @@
                         <p class="mt-3 rounded border border-amber-500/20 bg-amber-500/10 px-3 py-2 text-xs leading-5 text-amber-200 ${protectedNotice ? "" : "hidden"}" data-task-protected-notice>${escapeHtml(protectedNotice)}</p>
                         <p class="mt-3 rounded border border-cyan-500/20 bg-cyan-500/10 px-3 py-2 font-mono text-[11px] leading-5 text-cyan-200 ${webhookMeta ? "" : "hidden"}" data-task-webhook-meta>${escapeHtml(webhookMeta)}</p>
                         <div class="mt-3 font-mono text-[11px] text-slate-600" data-task-meta>
-                            message_id: ${task.message_id ?? "-"} · checked: ${lastChecked}
+                            message_id: ${task.message_id ?? "-"} · checked: ${lastChecked}${escapeHtml(attemptMeta)}
                         </div>
                     </div>
 
