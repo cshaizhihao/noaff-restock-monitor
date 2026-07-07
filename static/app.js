@@ -170,7 +170,7 @@
     function errorKindLabel(kind) {
         switch (kind) {
             case "cloudflare_challenge":
-                return "Cloudflare 验证页拦截";
+                return "受保护页面 / Cloudflare 验证";
             case "timeout":
                 return "请求超时";
             case "browser_connection":
@@ -365,7 +365,11 @@
         if (task.last_error_kind !== "cloudflare_challenge" || !task.cooldown_until) {
             return "";
         }
-        return `受保护站点 · 冷却至 ${formatTime(task.cooldown_until)} · 建议改用 Webhook、手动录入或替代公开页面`;
+        const backend = normalizeFetchStrategy(task.last_protected_source_backend || task.last_fetch_backend || "");
+        if (backend === "firecrawl") {
+            return `外部采集服务也返回受保护页面 · 冷却至 ${formatTime(task.cooldown_until)} · 建议改用 Webhook、手动录入或替代公开页面`;
+        }
+        return `本地抓取遇到受保护站点 · 冷却至 ${formatTime(task.cooldown_until)} · 建议改用 Webhook、手动录入或替代公开页面`;
     }
 
     function webhookMetaText(task) {

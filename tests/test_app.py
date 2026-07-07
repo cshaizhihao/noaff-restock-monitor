@@ -1614,6 +1614,72 @@ class PortalAppTestCase(unittest.TestCase):
         self.assertEqual(row["cooldown_until"], cooldown_until)
         self.assertIn("受保护站点冷却中", row["last_error"])
 
+    def test_cooldown_skips_firecrawl_fetcher(self) -> None:
+        timestamp = app_module.now_iso()
+        cooldown_until = (app_module.now_utc() + app_module.timedelta(minutes=3)).isoformat(timespec="seconds")
+        with app_module.open_connection() as connection:
+            cursor = connection.execute(
+                """
+                INSERT INTO tasks (
+                    name, monitor_url, target_keyword, fetch_strategy, restock_template, soldout_template,
+                    enabled, last_stock, last_state, blocked_count, last_blocked_at, cooldown_until,
+                    created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    "Firecrawl Cooling VM",
+                    "https://example.com/products",
+                    "Firecrawl Cooling VM",
+                    "firecrawl",
+                    "{name} {stock}",
+                    "{name} sold out",
+                    1,
+                    2,
+                    "in_stock",
+                    2,
+                    timestamp,
+                    cooldown_until,
+                    timestamp,
+                    timestamp,
+                ),
+            )
+            connection.commit()
+            task_id = cursor.lastrowid
+
+        class ExplodingFirecrawlFetcher:
+            def fetch(self, url: str, timeout_seconds: int) -> app_module.FetchResult:
+                raise AssertionError("cooldown task must not call Firecrawl")
+
+        engine = self.app.extensions["monitor_engine"]
+        original_selector = engine.fetcher_selector
+        try:
+            engine.fetcher_selector = app_module.FetcherSelector(
+                firecrawl_fetcher=ExplodingFirecrawlFetcher(),
+            )
+            with app_module.open_connection() as connection:
+                task = connection.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()
+            processed = engine.process_task(
+                task,
+                {
+                    "telegram_bot_token": "",
+                    "telegram_chat_ids": "",
+                    "request_timeout_seconds": 25,
+                    **self.firecrawl_settings(),
+                },
+                use_test_browser=False,
+            )
+        finally:
+            engine.fetcher_selector = original_selector
+
+        self.assertFalse(processed)
+        with app_module.open_connection() as connection:
+            row = connection.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()
+        self.assertEqual(row["last_stock"], 2)
+        self.assertEqual(row["last_state"], "in_stock")
+        self.assertEqual(row["blocked_count"], 2)
+        self.assertEqual(row["cooldown_until"], cooldown_until)
+        self.assertIn("受保护站点冷却中", row["last_error"])
+
     def test_telegram_error_masks_bot_token_and_explains_bad_request(self) -> None:
         class FakeResponse:
             status_code = 400
@@ -2494,6 +2560,102 @@ class PortalAppTestCase(unittest.TestCase):
         self.assertEqual(firecrawl_fetcher.calls, 1)
         self.assertEqual([attempt.backend for attempt in result.fetch_attempts or []], ["static_http", "firecrawl"])
 
+    def test_firecrawl_challenge_enters_protected_source_cooldown(self) -> None:
+        class CloudflareStaticFetcher:
+            def fetch(self, url: str, timeout_seconds: int) -> app_module.FetchResult:
+                return app_module.FetchResult(
+                    html="",
+                    final_url=url,
+                    status_code=403,
+                    error_kind="cloudflare_challenge",
+                    detail="static_http 被 Cloudflare 验证页拦截",
+                )
+
+        class ChallengeFirecrawlFetcher:
+            def __init__(self) -> None:
+                self.calls = 0
+
+            def fetch(self, url: str, timeout_seconds: int) -> app_module.FetchResult:
+                self.calls += 1
+                return app_module.FetchResult(
+                    html="",
+                    final_url=url,
+                    status_code=403,
+                    error_kind="cloudflare_challenge",
+                    detail="Firecrawl 返回的内容仍是 Cloudflare / Turnstile 验证页。",
+                )
+
+        class BrowserHarnessStub:
+            def fetch_html(self, url, timeout_seconds):
+                raise AssertionError("cloudflare fallback must not return to local browser")
+
+            def rebuild(self, reason):
+                raise AssertionError("cloudflare challenge must not rebuild browser")
+
+        timestamp = app_module.now_iso()
+        with app_module.open_connection() as connection:
+            cursor = connection.execute(
+                """
+                INSERT INTO tasks (
+                    name, monitor_url, target_keyword, fetch_strategy, restock_template, soldout_template,
+                    enabled, last_stock, last_state, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    "Protected Firecrawl VM",
+                    "https://merchant.example.com/products",
+                    "Protected Firecrawl VM",
+                    "adaptive",
+                    "{name} {stock}",
+                    "{name} sold out",
+                    1,
+                    5,
+                    "in_stock",
+                    timestamp,
+                    timestamp,
+                ),
+            )
+            connection.commit()
+            task_id = cursor.lastrowid
+            task = connection.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()
+
+        firecrawl_fetcher = ChallengeFirecrawlFetcher()
+        engine = self.app.extensions["monitor_engine"]
+        original_selector = engine.fetcher_selector
+        original_browser = engine.monitor_browser
+        try:
+            engine.fetcher_selector = app_module.FetcherSelector(
+                static_http_fetcher=CloudflareStaticFetcher(),
+                firecrawl_fetcher=firecrawl_fetcher,
+            )
+            engine.monitor_browser = BrowserHarnessStub()
+            result = engine.scrape_task(
+                task,
+                {"request_timeout_seconds": 25, **self.firecrawl_settings(), "firecrawl_use_for_monitor": True},
+                use_test_browser=False,
+            )
+            processed = engine.apply_task_result(
+                task,
+                {"telegram_bot_token": "", "telegram_chat_ids": "", **self.firecrawl_settings()},
+                result,
+            )
+        finally:
+            engine.fetcher_selector = original_selector
+            engine.monitor_browser = original_browser
+
+        self.assertFalse(processed)
+        self.assertEqual(firecrawl_fetcher.calls, 1)
+        self.assertEqual([attempt.backend for attempt in result.fetch_attempts or []], ["static_http", "firecrawl"])
+        with app_module.open_connection() as connection:
+            row = connection.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()
+        self.assertEqual(row["last_stock"], 5)
+        self.assertEqual(row["last_state"], "in_stock")
+        self.assertEqual(row["last_fetch_backend"], "firecrawl")
+        self.assertEqual(row["last_protected_source_backend"], "firecrawl")
+        self.assertEqual(row["blocked_count"], 1)
+        self.assertTrue(row["cooldown_until"])
+        self.assertIn("Firecrawl 返回的内容仍是 Cloudflare", row["last_error"])
+
     def test_fetch_pipeline_attempts_are_saved_to_task_payload(self) -> None:
         class FailingStaticFetcher:
             def fetch(self, url: str, timeout_seconds: int) -> app_module.FetchResult:
@@ -2712,7 +2874,7 @@ class PortalAppTestCase(unittest.TestCase):
         )
         self.assertFalse(app_module.should_auto_heal(RuntimeError("Cloudflare Turnstile challenge: just a moment")))
 
-    def test_browser_fetch_html_recovers_from_cloudflare_challenge_page(self) -> None:
+    def test_browser_fetch_html_stops_immediately_on_cloudflare_challenge_page(self) -> None:
         harness = app_module.BrowserHarness("catalog", 9444, True, "")
 
         class FakeWait:
@@ -2741,13 +2903,14 @@ class PortalAppTestCase(unittest.TestCase):
         original_ensure_page = harness.ensure_page
         try:
             harness.ensure_page = lambda: page
-            html_text = harness.fetch_html("https://example.com/products", 10)
+            with self.assertRaises(app_module.ProtectedSourceError) as ctx:
+                harness.fetch_html("https://example.com/products", 10)
         finally:
             harness.ensure_page = original_ensure_page
             harness.shutdown()
 
-        self.assertIn("Products", html_text)
-        self.assertEqual(page.refresh_calls, 1)
+        self.assertIn("Cloudflare 验证页", str(ctx.exception))
+        self.assertEqual(page.refresh_calls, 0)
 
     def test_browser_fetch_html_raises_after_persistent_cloudflare_challenge(self) -> None:
         harness = app_module.BrowserHarness("catalog", 9444, True, "")
@@ -2783,7 +2946,7 @@ class PortalAppTestCase(unittest.TestCase):
             harness.shutdown()
 
         self.assertIn("Cloudflare 验证页", str(ctx.exception))
-        self.assertGreaterEqual(page.refresh_calls, 3)
+        self.assertEqual(page.refresh_calls, 0)
 
     def test_browser_profile_lock_cleanup_removes_stale_chrome_locks(self) -> None:
         harness = app_module.BrowserHarness("unit", 9444, True, "")

@@ -2436,30 +2436,11 @@ class BrowserHarness:
             except Exception:
                 pass
             if looks_like_cloudflare_challenge(html_text, page_title, url):
-                for attempt in range(3):
-                    log_activity(
-                        "warning",
-                        f"browser:{self.role}",
-                        f"检测到 Cloudflare/Turnstile 挑战页，准备重试第 {attempt + 1} 次：{url}",
-                    )
-                    time.sleep(1.8 + attempt)
-                    try:
-                        page.refresh(ignore_cache=True)
-                    except Exception:
-                        pass
-                    try:
-                        page.wait.doc_loaded(timeout=max(3, min(timeout_seconds, 10)))
-                    except Exception:
-                        pass
-                    html_text = page.html or ""
-                    if not html_text:
-                        continue
-                    try:
-                        page_title = page.title or ""
-                    except Exception:
-                        page_title = ""
-                    if not looks_like_cloudflare_challenge(html_text, page_title, url):
-                        return html_text
+                log_activity(
+                    "warning",
+                    f"browser:{self.role}",
+                    f"检测到 Cloudflare/Turnstile 受保护页面，停止本地浏览器重试：{url}",
+                )
                 raise ProtectedSourceError(f"{self.role} 浏览器被 Cloudflare 验证页拦截：{url}")
             return html_text
 
