@@ -452,13 +452,6 @@
                                                 <small>管理员凭据</small>
                                             </span>
                                         </button>
-                                        <button type="button" class="settings-nav-item settings-entry settings-entry-bottom" data-settings-target="settings-upgrade">
-                                            <span class="settings-entry-icon">UP</span>
-                                            <span class="settings-entry-copy">
-                                                <strong>升级与维护</strong>
-                                                <small>版本与服务</small>
-                                            </span>
-                                        </button>
                                         <button type="button" class="settings-nav-item settings-entry settings-entry-bottom" data-settings-target="settings-backup">
                                             <span class="settings-entry-icon">BK</span>
                                             <span class="settings-entry-copy">
@@ -525,7 +518,7 @@
                                                     <button type="submit" class="primary-button">保存浏览器</button>
                                                 </div>
                                             </div>
-                                            <div class="settings-grid">
+                                            <div class="settings-grid settings-grid-three">
                                                 <div class="settings-field">
                                                     <label for="settings-monitor-port" class="form-label">监控浏览器端口</label>
                                                     <input id="settings-monitor-port" type="number" min="1024" max="65535" class="input-dark">
@@ -552,7 +545,7 @@
                                                     <button type="submit" class="primary-button">保存 Firecrawl</button>
                                                 </div>
                                             </div>
-                                            <div class="settings-grid">
+                                            <div class="settings-grid settings-firecrawl-grid">
                                                 <label class="settings-check settings-field-wide">
                                                     <input id="settings-firecrawl-enabled" type="checkbox" class="h-4 w-4 rounded border-slate-700 bg-slate-950 text-indigo-500">
                                                     启用 Firecrawl 外部采集后端
@@ -718,7 +711,7 @@
                                         </div>
                                     </section>
 
-                                    <section id="settings-logs" class="settings-section settings-page hidden" data-settings-panel>
+                                    <section id="settings-logs" class="settings-section settings-page settings-page-log hidden" data-settings-panel>
                                         <div class="settings-section-heading">
                                             <div>
                                                 <p class="settings-kicker">Logs</p>
@@ -729,7 +722,7 @@
                                                 <p id="admin-identity" class="font-mono text-xs text-slate-500">管理员</p>
                                             </div>
                                         </div>
-                                        <div class="terminal-box max-h-[520px] overflow-y-auto p-4">
+                                        <div class="terminal-box settings-log-box p-4">
                                             <div id="log-stream" class="space-y-4"></div>
                                         </div>
                                     </section>
@@ -740,6 +733,51 @@
                 </div>
             </main>
         </section>
+
+        <div id="firecrawl-guide-modal" class="modal-shell hidden">
+            <div class="firecrawl-guide-panel">
+                <div class="firecrawl-guide-header">
+                    <div>
+                        <p class="settings-kicker">Firecrawl Guide</p>
+                        <h3 class="panel-heading">Firecrawl 集成使用步骤</h3>
+                    </div>
+                    <button id="firecrawl-guide-close" type="button" class="icon-button" aria-label="关闭 Firecrawl 教程">
+                        <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+                        </svg>
+                    </button>
+                </div>
+                <div class="firecrawl-guide-body">
+                    <div class="firecrawl-guide-steps" aria-label="Firecrawl 步骤">
+                        <span>1. 准备 API Key</span>
+                        <span>2. 保存集成配置</span>
+                        <span>3. 商品入库优先使用</span>
+                        <span>4. 受保护页面处理</span>
+                    </div>
+                    <div class="firecrawl-guide-copy">
+                        <section>
+                            <h4>准备 API Key</h4>
+                            <p>在 Firecrawl 控制台创建 API Key，填入本页 API Key。Key 只保存在后端，前端和快照不会明文返回。</p>
+                        </section>
+                        <section>
+                            <h4>库存监控配置</h4>
+                            <p>实时监控默认不启用 Firecrawl。需要使用时先启用集成，再显式勾选“允许用于实时监控”。库存场景保持 maxAge=0、storeInCache=false。</p>
+                        </section>
+                        <section>
+                            <h4>商品入库配置</h4>
+                            <p>更推荐把 Firecrawl 用在商品入库：开启“允许用于商品入库”后，到商品入库页选择 Firecrawl Map 或 Scrape，先发现商品，再创建任务。</p>
+                        </section>
+                        <section>
+                            <h4>Cloudflare 边界</h4>
+                            <p>本项目不内置验证码绕过。Firecrawl 返回正常内容就解析；如果仍返回 challenge，会进入受保护站点冷却，建议改用 Webhook、手动录入或替代公开页面。</p>
+                        </section>
+                    </div>
+                </div>
+                <div class="firecrawl-guide-footer">
+                    <button id="firecrawl-guide-done" type="button" class="primary-button">看完了，关闭</button>
+                </div>
+            </div>
+        </div>
 
         <div id="task-modal" class="modal-shell hidden">
             <div class="modal-panel">

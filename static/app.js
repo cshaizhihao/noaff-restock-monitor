@@ -44,6 +44,9 @@
         settingsView: document.getElementById("settings-view"),
         settingsHome: document.getElementById("settings-home"),
         settingsPages: document.getElementById("settings-pages"),
+        firecrawlGuideModal: document.getElementById("firecrawl-guide-modal"),
+        firecrawlGuideClose: document.getElementById("firecrawl-guide-close"),
+        firecrawlGuideDone: document.getElementById("firecrawl-guide-done"),
         tasksGrid: document.getElementById("tasks-grid"),
         toastStack: document.getElementById("toast-stack"),
         logStream: document.getElementById("log-stream"),
@@ -836,6 +839,14 @@
             section.classList.toggle("hidden", section !== panel);
         });
         panel.scrollIntoView({ block: "start" });
+    }
+
+    function openFirecrawlGuideModal() {
+        els.firecrawlGuideModal?.classList.remove("hidden");
+    }
+
+    function closeFirecrawlGuideModal() {
+        els.firecrawlGuideModal?.classList.add("hidden");
     }
 
     function setNav(view) {
@@ -2005,6 +2016,9 @@
         const entry = event.target.closest("[data-settings-target]");
         if (entry) {
             openSettingsPage(entry.dataset.settingsTarget);
+            if (entry.dataset.settingsTarget === "settings-firecrawl") {
+                openFirecrawlGuideModal();
+            }
             return;
         }
         const back = event.target.closest("[data-settings-back]");
@@ -2018,6 +2032,13 @@
     els.taskModalClose?.addEventListener("click", closeTaskModal);
     els.taskTemplateHelpButton?.addEventListener("click", openTemplateHelpModal);
     els.templateHelpClose?.addEventListener("click", closeTemplateHelpModal);
+    els.firecrawlGuideClose?.addEventListener("click", closeFirecrawlGuideModal);
+    els.firecrawlGuideDone?.addEventListener("click", closeFirecrawlGuideModal);
+    els.firecrawlGuideModal?.addEventListener("click", (event) => {
+        if (event.target === els.firecrawlGuideModal) {
+            closeFirecrawlGuideModal();
+        }
+    });
     els.taskTemplateTestButton?.addEventListener("click", sendTemplateTestPush);
     els.taskModal?.addEventListener("click", (event) => {
         if (event.target === els.taskModal) {

@@ -789,13 +789,19 @@ class InstallScriptTestCase(unittest.TestCase):
         self.assertIn("data-settings-back", portal_html)
         self.assertIn("function openSettingsHome", app_js)
         self.assertIn("function openSettingsPage", app_js)
+        self.assertIn("function openFirecrawlGuideModal", app_js)
+        self.assertIn('id="firecrawl-guide-modal"', portal_html)
+        self.assertIn("Firecrawl 集成使用步骤", portal_html)
+        self.assertIn("settings-firecrawl", app_js)
+        self.assertIn(".settings-firecrawl-grid", app_css)
+        self.assertIn(".settings-log-box", app_css)
         self.assertIn("settings-entry-top", portal_html)
         self.assertIn("settings-entry-bottom", portal_html)
         self.assertEqual(portal_html.count("settings-entry-top"), 3)
-        self.assertEqual(portal_html.count("settings-entry-bottom"), 4)
-        self.assertIn("grid-template-columns: repeat(12", app_css)
-        self.assertIn("grid-column: span 4", app_css)
-        self.assertIn("grid-column: span 3", app_css)
+        self.assertEqual(portal_html.count("settings-entry-bottom"), 3)
+        self.assertIn("grid-template-columns: repeat(3", app_css)
+        settings_home = portal_html.split('id="settings-home"', 1)[1].split('id="settings-pages"', 1)[0]
+        self.assertNotIn("升级与维护", settings_home)
 
         settings_block = portal_html.split('id="settings-view"', 1)[1].split('id="task-modal"', 1)[0]
         self.assertNotIn('id="merchant-form"', settings_block)
@@ -806,7 +812,6 @@ class InstallScriptTestCase(unittest.TestCase):
         self.assertNotIn("grid-auto-flow: dense", combined_ui)
         self.assertNotIn("masonry", combined_ui.lower())
         self.assertNotIn("waterfall", combined_ui.lower())
-        self.assertNotIn("grid-template-columns: repeat(2", app_css)
 
     def test_dashboard_uses_linear_lists_instead_of_waterfall_cards(self) -> None:
         app_js = (ROOT_DIR / "static" / "app.js").read_text(encoding="utf-8")
