@@ -337,7 +337,7 @@ button:disabled,
 }
 
 .settings-layout {
-    max-width: 58rem;
+    width: 100%;
 }
 
 .settings-home-heading {
@@ -370,21 +370,32 @@ button:disabled,
 }
 
 .settings-entry-list {
-    display: flex;
-    flex-direction: column;
-    gap: 0.7rem;
+    display: grid;
+    grid-template-columns: repeat(12, minmax(0, 1fr));
+    gap: 1rem;
 }
 
 .settings-entry {
-    min-height: 4.25rem;
-    align-items: center;
+    min-height: 8.5rem;
+    align-items: flex-start;
+    flex-direction: column;
+    justify-content: space-between;
     gap: 0.9rem;
     border-color: var(--color-line);
     background: rgba(6, 10, 17, 0.52);
+    padding: 1rem;
+}
+
+.settings-entry-top {
+    grid-column: span 4;
+}
+
+.settings-entry-bottom {
+    grid-column: span 3;
 }
 
 .settings-entry::after {
-    margin-left: auto;
+    margin-left: 0;
     color: var(--color-subtle);
     content: "进入";
     font-size: 0.72rem;
@@ -410,7 +421,7 @@ button:disabled,
 .settings-entry-copy {
     display: grid;
     min-width: 0;
-    gap: 0.2rem;
+    gap: 0.28rem;
 }
 
 .settings-entry-copy strong,
@@ -422,6 +433,7 @@ button:disabled,
 
 .settings-entry-copy strong {
     color: #f8fafc;
+    font-size: 1rem;
 }
 
 .settings-entry-copy small {
@@ -440,6 +452,13 @@ button:disabled,
     align-items: center;
     justify-content: flex-end;
     gap: 0.7rem;
+}
+
+@media (max-width: 1180px) {
+    .settings-entry-top,
+    .settings-entry-bottom {
+        grid-column: span 6;
+    }
 }
 
 .settings-section {
@@ -497,6 +516,15 @@ button:disabled,
 }
 
 @media (max-width: 767px) {
+    .settings-entry-top,
+    .settings-entry-bottom {
+        grid-column: 1 / -1;
+    }
+
+    .settings-entry {
+        min-height: 6.5rem;
+    }
+
     .settings-grid {
         grid-template-columns: 1fr;
     }

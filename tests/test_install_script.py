@@ -789,6 +789,13 @@ class InstallScriptTestCase(unittest.TestCase):
         self.assertIn("data-settings-back", portal_html)
         self.assertIn("function openSettingsHome", app_js)
         self.assertIn("function openSettingsPage", app_js)
+        self.assertIn("settings-entry-top", portal_html)
+        self.assertIn("settings-entry-bottom", portal_html)
+        self.assertEqual(portal_html.count("settings-entry-top"), 3)
+        self.assertEqual(portal_html.count("settings-entry-bottom"), 4)
+        self.assertIn("grid-template-columns: repeat(12", app_css)
+        self.assertIn("grid-column: span 4", app_css)
+        self.assertIn("grid-column: span 3", app_css)
 
         settings_block = portal_html.split('id="settings-view"', 1)[1].split('id="task-modal"', 1)[0]
         self.assertNotIn('id="merchant-form"', settings_block)
