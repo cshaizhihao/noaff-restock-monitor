@@ -151,6 +151,7 @@
         taskEnabled: document.getElementById("task-enabled"),
         taskCancelButton: document.getElementById("task-cancel-button"),
         taskSubmitButton: document.getElementById("task-submit-button"),
+        taskSaveCheckButton: document.getElementById("task-save-check-button"),
         templateHelpModal: document.getElementById("template-help-modal"),
         templateHelpClose: document.getElementById("template-help-close"),
         groupRenameModal: document.getElementById("group-rename-modal"),
@@ -197,6 +198,18 @@
             default:
                 return "浏览器渲染";
         }
+    }
+
+    function preferredTaskFetchStrategy() {
+        return currentSettings.firecrawl_enabled ? "firecrawl" : "browser";
+    }
+
+    function stockResultLabel(stock, state = "") {
+        if (stock === null || stock === undefined || state === "unknown") return "未知";
+        const value = Number(stock);
+        if (Number.isFinite(value) && value > 0) return `有货（库存 ${value}）`;
+        if (Number.isFinite(value) && value <= 0) return "售罄";
+        return "未知";
     }
 
     function extractorLabel(value) {
@@ -305,11 +318,9 @@
     }
 
     function fetchAttemptMeta(task) {
-        const backendText = task.last_fetch_backend ? ` · backend: ${fetchStrategyLabel(task.last_fetch_backend)}` : "";
+        const backendText = task.last_fetch_backend ? ` · 采集: ${fetchStrategyLabel(task.last_fetch_backend)}` : "";
         const attempts = Array.isArray(task.last_fetch_attempts) ? task.last_fetch_attempts : [];
-        const attemptsText = attempts.length
-            ? ` · attempts: ${attempts.map((attempt) => `${fetchStrategyLabel(attempt.backend)}:${attempt.status || attempt.error_kind || "done"}`).join(" > ")}`
-            : "";
+        const attemptsText = attempts.length > 1 ? ` · ${attempts.length} 次尝试` : "";
         return `${backendText}${attemptsText}`;
     }
 
@@ -317,12 +328,16 @@
         switch (kind) {
             case "cloudflare_challenge":
                 return "受保护页面 / Cloudflare 验证";
+            case "telegram_error":
+                return "通知失败，不影响库存识别";
             case "firecrawl_zdr_not_enabled":
                 return "Firecrawl ZDR 未开通";
             case "firecrawl_permission_error":
                 return "Firecrawl 权限不足";
             case "firecrawl_bad_request":
                 return "Firecrawl 参数错误";
+            case "firecrawl_auth_error":
+                return "Firecrawl 认证失败";
             case "timeout":
                 return "请求超时";
             case "browser_connection":
@@ -338,6 +353,8 @@
                 return "text-amber-300";
             case "browser_connection":
                 return "text-orange-300";
+            case "telegram_error":
+                return "text-sky-300";
             case "timeout":
                 return "text-rose-300";
             default:
@@ -714,9 +731,9 @@
         if (webhookAction) {
             webhookAction.classList.toggle("hidden", normalizeFetchStrategy(task.fetch_strategy) !== "webhook");
         }
-        const testAction = card.querySelector("[data-task-test-action]");
-        if (testAction) {
-            testAction.classList.toggle(
+        const checkAction = card.querySelector("[data-task-check-action]");
+        if (checkAction) {
+            checkAction.classList.toggle(
                 "hidden",
                 ["manual", "webhook"].includes(normalizeFetchStrategy(task.fetch_strategy))
             );
@@ -929,10 +946,16 @@
             els.taskButton2Url.value = task.button_2_url || "";
             els.taskEnabled.checked = Boolean(task.enabled);
             els.taskSubmitButton.textContent = "更新节点";
+            if (els.taskSaveCheckButton) {
+                els.taskSaveCheckButton.textContent = "更新并立即检测";
+            }
         } else {
             resetTaskForm();
             els.taskModalTitle.textContent = "新增任务";
             els.taskSubmitButton.textContent = "保存节点";
+            if (els.taskSaveCheckButton) {
+                els.taskSaveCheckButton.textContent = "保存并立即检测";
+            }
         }
         els.taskModal.classList.remove("hidden");
         document.body.style.overflow = "hidden";
@@ -974,7 +997,7 @@
         if (els.taskTemplateTestChatIds) {
             els.taskTemplateTestChatIds.value = "";
         }
-        els.taskFetchStrategy.value = "browser";
+        els.taskFetchStrategy.value = preferredTaskFetchStrategy();
         els.taskEnabled.checked = true;
         updateGroupVisibility(els.taskGroup, els.taskGroupCustomWrap, els.taskGroupCustom);
     }
@@ -1344,10 +1367,10 @@
     }
 
     function statusMeta(task) {
-        if (!task.enabled) return ["status-disabled", "DISABLED", "停用中"];
-        if (task.last_state === "in_stock") return ["status-in-stock", "IN STOCK", "补货监控命中"];
-        if (task.last_state === "sold_out") return ["status-sold-out", "OUT OF STOCK", "持续缺货中"];
-        return ["status-unknown", "UNKNOWN", "等待首次识别"];
+        if (!task.enabled) return ["status-disabled", "已停用", "任务已停用"];
+        if (task.last_state === "in_stock") return ["status-in-stock", "有货", "库存识别：有货"];
+        if (task.last_state === "sold_out") return ["status-sold-out", "售罄", "库存识别：售罄"];
+        return ["status-unknown", "未知", "等待首次检测"];
     }
 
     function groupTasks(tasks) {
@@ -1412,11 +1435,11 @@
 
                     <div class="task-actions flex flex-col gap-2">
                         <div class="flex flex-wrap items-center gap-2">
-                            <button type="button" class="ghost-button !min-h-9 !rounded-lg !px-3 !py-2 text-[12px] font-bold text-indigo-300 ${["manual", "webhook"].includes(normalizedStrategy) ? "hidden" : ""}" data-action="test" data-task-test-action>
+                            <button type="button" class="ghost-button !min-h-9 !rounded-lg !px-3 !py-2 text-[12px] font-bold text-indigo-300 ${["manual", "webhook"].includes(normalizedStrategy) ? "hidden" : ""}" data-action="check" data-task-check-action>
                                 <svg class="mr-1.5 h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8"/>
                                 </svg>
-                                立即测试
+                                立即检测库存
                             </button>
                             <div class="flex gap-1 ${normalizedStrategy === "manual" ? "" : "hidden"}" data-task-manual-actions>
                                 <button type="button" class="ghost-button !min-h-9 !rounded-lg !px-3 !py-2 text-[12px] text-emerald-300" data-action="manual-in-stock">有货</button>
@@ -1838,6 +1861,17 @@
         }
     }
 
+    async function runTaskStockCheck(taskId) {
+        const data = await apiFetch(`/api/tasks/${taskId}/check`, {
+            method: "POST",
+            body: JSON.stringify({})
+        });
+        const result = data.result || {};
+        const backend = result.backend_used ? ` · ${fetchStrategyLabel(result.backend_used)}` : "";
+        showToast(`库存检测完成：${stockResultLabel(result.stock, result.state)}${backend}`);
+        return result;
+    }
+
     async function handleTaskAction(button) {
         const card = button.closest("[data-task-id]");
         const taskId = card?.dataset.taskId;
@@ -1855,12 +1889,8 @@
 
         button.disabled = true;
         try {
-            if (action === "test") {
-                const data = await apiFetch(`/api/test-push/${taskId}`, {
-                    method: "POST",
-                    body: JSON.stringify({})
-                });
-                showToast(`测试消息已发送，库存识别：${data.result?.stock ?? "未知"}`);
+            if (action === "check") {
+                await runTaskStockCheck(taskId);
             } else if (action === "manual-in-stock" || action === "manual-sold-out") {
                 const stock = action === "manual-in-stock" ? 1 : 0;
                 await apiFetch(`/api/tasks/${taskId}/manual-stock`, {
@@ -2175,15 +2205,21 @@
 
     els.taskForm?.addEventListener("submit", async (event) => {
         event.preventDefault();
-        const submit = els.taskSubmitButton;
+        const submit = event.submitter || els.taskSubmitButton;
         const taskId = els.taskId.value;
+        const runCheckAfterSave = submit?.dataset?.afterSave === "check";
         submit.disabled = true;
         try {
-            await apiFetch(taskId ? `/api/tasks/${taskId}` : "/api/tasks", {
+            const data = await apiFetch(taskId ? `/api/tasks/${taskId}` : "/api/tasks", {
                 method: taskId ? "PUT" : "POST",
                 body: JSON.stringify(collectTaskPayload())
             });
-            showToast(taskId ? "任务已更新。" : "任务已创建。");
+            const savedTaskId = data.task_id || taskId;
+            if (runCheckAfterSave && savedTaskId) {
+                await runTaskStockCheck(savedTaskId);
+            } else {
+                showToast(taskId ? "任务已更新。" : "任务已创建。");
+            }
             closeTaskModal();
             resetTaskForm();
             await loadSnapshot(false);

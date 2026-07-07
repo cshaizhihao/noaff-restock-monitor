@@ -846,15 +846,15 @@
                         <div>
                             <label for="task-fetch-strategy" class="form-label">采集方式</label>
                             <select id="task-fetch-strategy" class="input-dark">
-                                <option value="browser">浏览器渲染</option>
-                                <option value="static_http">静态 HTTP</option>
-                                <option value="generic_pricing_table">通用价格页</option>
-                                <option value="whmcs">WHMCS</option>
                                 <option value="firecrawl">Firecrawl</option>
-                                <option value="static_then_firecrawl">静态 HTTP → Firecrawl</option>
                                 <option value="firecrawl_then_static">Firecrawl → 静态 HTTP</option>
                                 <option value="firecrawl_then_browser">Firecrawl → 浏览器</option>
+                                <option value="static_then_firecrawl">静态 HTTP → Firecrawl</option>
                                 <option value="adaptive">自适应</option>
+                                <option value="generic_pricing_table">通用价格页</option>
+                                <option value="whmcs">WHMCS</option>
+                                <option value="browser">浏览器渲染</option>
+                                <option value="static_http">静态 HTTP</option>
                                 <option value="manual">手动录入</option>
                                 <option value="webhook">Webhook</option>
                             </select>
@@ -917,6 +917,7 @@
                     </label>
                     <div class="flex flex-wrap justify-end gap-3 pt-2">
                         <button id="task-cancel-button" type="button" class="ghost-button">取消</button>
+                        <button id="task-save-check-button" type="submit" class="ghost-button" data-after-save="check">保存并立即检测</button>
                         <button id="task-submit-button" type="submit" class="primary-button">保存任务</button>
                     </div>
                 </form>

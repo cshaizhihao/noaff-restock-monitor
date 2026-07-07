@@ -777,8 +777,8 @@ button:disabled,
 .task-table-head,
 .task-row {
     display: grid;
-    grid-template-columns: minmax(13rem, 1.25fr) minmax(11rem, 0.85fr) minmax(16rem, 1.5fr) minmax(9rem, 0.7fr);
-    gap: 0.9rem;
+    grid-template-columns: minmax(17rem, 1.35fr) minmax(12rem, 0.85fr) minmax(18rem, 1.35fr) minmax(10rem, 0.62fr);
+    gap: 1rem;
     align-items: center;
 }
 
@@ -800,7 +800,7 @@ button:disabled,
 .task-row {
     border-bottom: 1px solid var(--color-line);
     background: rgba(13, 19, 29, 0.72);
-    padding: 0.78rem 0.85rem;
+    padding: 0.9rem;
     transition: border-color 160ms ease, background 160ms ease;
 }
 
@@ -864,11 +864,11 @@ button:disabled,
 
 .task-row-log {
     min-width: 0;
-    padding: 0.62rem 0.72rem;
+    padding: 0.7rem 0.78rem;
 }
 
 .task-log-text {
-    font-size: 0.78rem;
+    font-size: 0.8rem;
     line-height: 1.45;
 }
 
@@ -987,11 +987,17 @@ button:disabled,
 }
 
 .task-actions {
+    display: grid;
     align-items: stretch;
+    gap: 0.55rem;
 }
 
 .task-actions > div {
     min-width: 0;
+}
+
+.task-actions .ghost-button {
+    white-space: nowrap;
 }
 
 .merchant-card {

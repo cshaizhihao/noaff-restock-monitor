@@ -1812,6 +1812,11 @@ class PortalAppTestCase(unittest.TestCase):
         self.assertIn("chat not found", message)
         self.assertIn(token, fake_session.url)
 
+        self.assertIn(
+            "机器人不能给另一个机器人发消息",
+            app_module.telegram_error_hint("Forbidden: the bot can't send messages to bots"),
+        )
+
     def test_template_test_push_uses_edited_template_and_target_chat(self) -> None:
         _, headers = self.login()
         with app_module.open_connection() as connection:
@@ -1919,7 +1924,7 @@ class PortalAppTestCase(unittest.TestCase):
         self.assertIn("Telegram sendMessage 失败", payload["last_error"])
         self.assertIn("Chat ID", payload["last_error"])
 
-        self.assertEqual(payload["last_error_kind"], "")
+        self.assertEqual(payload["last_error_kind"], "telegram_error")
 
     def test_task_payload_classifies_cloudflare_errors(self) -> None:
         timestamp = app_module.now_iso()
@@ -2522,6 +2527,68 @@ class PortalAppTestCase(unittest.TestCase):
         self.assertEqual(result.stock, 1)
         self.assertEqual(result.error_kind, "")
 
+    def test_task_stock_check_updates_inventory_without_telegram_push(self) -> None:
+        _, headers = self.login()
+        create_response = self.client.post(
+            f"{app_module.PORTAL_PATH}/api/tasks",
+            headers=headers,
+            base_url=BASE_URL,
+            json={
+                "name": "HKG.AS3.Pro.TINY",
+                "group_name": "DMIT",
+                "monitor_url": "https://merchant.example.com/cart.php?region=hong-kong&generation=as3",
+                "target_keyword": "HKG.AS3.Pro.TINY",
+                "fetch_strategy": "firecrawl",
+                "restock_template": app_module.DEFAULT_RESTOCK_TEMPLATE,
+                "soldout_template": app_module.DEFAULT_SOLDOUT_TEMPLATE,
+                "enabled": True,
+            },
+        )
+        self.assertEqual(create_response.status_code, 200)
+        task_id = create_response.get_json()["task_id"]
+
+        class FakeFirecrawlFetcher:
+            def fetch(self, url: str, timeout_seconds: int) -> app_module.FetchResult:
+                return app_module.FetchResult(
+                    html="<main><plan-card>HKG.AS3.Pro.TINY <a>Add to Cart</a></plan-card></main>",
+                    final_url=url,
+                    status_code=200,
+                    detail="ok",
+                )
+
+        class FailingTelegram:
+            def send_message(self, *args, **kwargs):
+                raise AssertionError("stock check must not send Telegram messages")
+
+            def edit_message(self, *args, **kwargs):
+                raise AssertionError("stock check must not edit Telegram messages")
+
+        engine = self.app.extensions["monitor_engine"]
+        original_selector = engine.fetcher_selector
+        original_telegram = engine.telegram
+        try:
+            engine.fetcher_selector = app_module.FetcherSelector(firecrawl_fetcher=FakeFirecrawlFetcher())
+            engine.telegram = FailingTelegram()
+            response = self.client.post(
+                f"{app_module.PORTAL_PATH}/api/tasks/{task_id}/check",
+                headers=headers,
+                base_url=BASE_URL,
+                json={},
+            )
+        finally:
+            engine.fetcher_selector = original_selector
+            engine.telegram = original_telegram
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.get_json()
+        self.assertTrue(payload["ok"])
+        self.assertEqual(payload["result"]["stock"], 1)
+        with app_module.open_connection() as connection:
+            row = connection.execute("SELECT last_stock, last_state, last_error FROM tasks WHERE id = ?", (task_id,)).fetchone()
+        self.assertEqual(row["last_stock"], 1)
+        self.assertEqual(row["last_state"], "in_stock")
+        self.assertEqual(row["last_error"], "")
+
     def test_external_input_fetch_strategy_does_not_use_browser(self) -> None:
         class ExplodingHarness:
             def fetch_html(self, url, timeout_seconds):
@@ -2943,6 +3010,51 @@ class PortalAppTestCase(unittest.TestCase):
         self.assertIn("generic_pricing_table", in_stock.detail)
         self.assertEqual(sold_out.stock, 0)
         self.assertIn("售罄", sold_out.detail)
+
+    def test_generic_pricing_table_handles_idc_cart_cards_without_vendor_strategy(self) -> None:
+        fetch_result = app_module.FetchResult(html="", final_url="https://example.com/cart.php?region=hong-kong&generation=as3")
+        filler = " feature " * 220
+        html_text = f"""
+        <main class="cart-products">
+          <plan-card>
+            <strong>HKG.AS3.Pro.STARTER</strong>
+            <p>{filler}</p>
+            <a href="/cart.php?a=add&pid=101">Order Now</a>
+          </plan-card>
+          <plan-card>
+            <strong>HKG.AS3.Pro.TINY</strong>
+            <p>{filler}</p>
+            <a href="/cart.php?a=add&pid=102">Add to Cart</a>
+          </plan-card>
+          <plan-card>
+            <strong>LAX.AS3.Pro.TINY</strong>
+            <button disabled>Out of Stock</button>
+          </plan-card>
+        </main>
+        """
+
+        hk_tiny = app_module.extract_stock_for_strategy(
+            "generic_pricing_table",
+            html_text,
+            "HKG.AS3.Pro.TINY",
+            {"fetch_strategy": "generic_pricing_table"},
+            fetch_result,
+        )
+        lax_tiny = app_module.extract_stock_for_strategy(
+            "generic_pricing_table",
+            html_text,
+            "LAX.AS3.Pro.TINY",
+            {"fetch_strategy": "generic_pricing_table"},
+            fetch_result,
+        )
+
+        self.assertEqual(hk_tiny.stock, 1)
+        self.assertIn("HKG.AS3.Pro.TINY", hk_tiny.fragment)
+        self.assertIn("Add to Cart", hk_tiny.fragment)
+        self.assertIn("generic_pricing_table", hk_tiny.detail)
+        self.assertEqual(lax_tiny.stock, 0)
+        self.assertIn("LAX.AS3.Pro.TINY", lax_tiny.fragment)
+        self.assertIn("售罄", lax_tiny.detail)
 
     def test_scrape_task_generic_pricing_table_limits_to_target_product(self) -> None:
         class FakeResponse:

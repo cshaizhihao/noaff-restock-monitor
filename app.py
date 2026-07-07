@@ -572,7 +572,19 @@ WHMCS_ORDERABLE_PATTERNS = [
         re.IGNORECASE,
     ),
 ]
-PRODUCT_CONTAINER_TAGS = ("tr", "article", "section", "li", "form", "div", "table")
+PRODUCT_CONTAINER_TAGS = (
+    "tr",
+    "plan-card",
+    "product-card",
+    "package-card",
+    "pricing-card",
+    "article",
+    "section",
+    "li",
+    "form",
+    "div",
+    "table",
+)
 
 
 class SafeDict(dict):
@@ -2244,6 +2256,8 @@ def summarize_task_error(message: str, kind: str = "") -> str:
 
 def telegram_error_hint(description: str) -> str:
     normalized = description.lower()
+    if "can't send messages to bots" in normalized or "cant send messages to bots" in normalized:
+        return "Chat ID 指向了机器人账号，机器人不能给另一个机器人发消息；请填写用户、群组或频道的 Chat ID。"
     if "chat not found" in normalized:
         return "Chat ID 不正确，或机器人没有加入该会话/群组。"
     if "can't parse entities" in normalized or "can't find end tag" in normalized:
@@ -3654,6 +3668,7 @@ class MonitoringEngine:
         settings_payload: dict[str, Any],
         result: ScrapeResult,
         checked_at: datetime | None = None,
+        send_notifications: bool = True,
     ) -> bool:
         with open_connection() as connection:
             checked_at = checked_at or now_utc()
@@ -3723,84 +3738,95 @@ class MonitoringEngine:
                 connection.commit()
                 return False
 
-            chat_ids = self.resolve_chat_ids(settings_payload)
-            if not settings_payload.get("telegram_bot_token") or not chat_ids:
-                raise RuntimeError("请先配置 Telegram Bot Token 和至少一个 Chat ID。")
-
-            buttons = build_buttons(task)
-            message_values = message_template_values(task, result.stock)
-            message_id_map = parse_message_id_map(
-                task["message_ids"] if "message_ids" in task.keys() else "",
-                chat_ids,
-                task["message_id"] if "message_id" in task.keys() else None,
-            )
-            message_id_map = {chat_id: message_id for chat_id, message_id in message_id_map.items() if chat_id in chat_ids}
             last_stock = task["last_stock"]
             new_state = "in_stock" if result.stock > 0 else "sold_out"
             last_error = ""
-            operation_errors: list[str] = []
-            existing_message_ids = dict(message_id_map)
+            message_id = task["message_id"] if "message_id" in task.keys() else None
+            message_ids_text = task["message_ids"] if "message_ids" in task.keys() else ""
+            message_id_map = parse_message_id_map(
+                message_ids_text,
+                self.resolve_chat_ids(settings_payload),
+                message_id,
+            )
 
-            try:
-                missing_chat_ids = [chat_id for chat_id in chat_ids if chat_id not in message_id_map]
-                if result.stock > 0 and missing_chat_ids:
-                    text = safe_format(task["restock_template"], message_values)
-                    sent_map, send_errors = self.send_messages_to_chats(
-                        settings_payload["telegram_bot_token"],
-                        missing_chat_ids,
-                        text,
-                        buttons,
-                    )
-                    if sent_map:
-                        message_id_map.update(sent_map)
-                        log_activity(
-                            "info",
-                            f"task:{task['id']}",
-                            f"{task['name']} 刚补货，已向 {len(sent_map)} 个群发送新消息。",
-                        )
-                    operation_errors.extend(send_errors)
-                if result.stock > 0 and existing_message_ids and last_stock != result.stock:
-                    text = safe_format(task["restock_template"], message_values)
-                    edited_map, edit_errors = self.edit_messages_to_chats(
-                        settings_payload["telegram_bot_token"],
-                        chat_ids,
-                        existing_message_ids,
-                        text,
-                        buttons,
-                    )
-                    if edited_map:
-                        log_activity(
-                            "info",
-                            f"task:{task['id']}",
-                            f"{task['name']} 库存变化为 {result.stock}，已静默编辑 {len(edited_map)} 条消息。",
-                        )
-                    operation_errors.extend(edit_errors)
-                elif result.stock <= 0 and message_id_map:
-                    text = safe_format(task["soldout_template"], message_values | {"status": telegram_html_value("sold_out")})
-                    edited_map, edit_errors = self.edit_messages_to_chats(
-                        settings_payload["telegram_bot_token"],
-                        chat_ids,
-                        message_id_map,
-                        text,
-                        buttons,
-                    )
-                    if edited_map:
-                        log_activity(
-                            "warning",
-                            f"task:{task['id']}",
-                            f"{task['name']} 已售罄，已覆盖原消息并清空会话记录。",
-                        )
-                    message_id_map = {}
-                    operation_errors.extend(edit_errors)
-            except Exception as exc:
-                last_error = sanitize_telegram_error(str(exc), settings_payload["telegram_bot_token"])
-                log_activity("error", f"task:{task['id']}", f"{task['name']} Telegram 推送失败：{last_error}")
+            if send_notifications:
+                chat_ids = self.resolve_chat_ids(settings_payload)
+                if not settings_payload.get("telegram_bot_token") or not chat_ids:
+                    raise RuntimeError("请先配置 Telegram Bot Token 和至少一个 Chat ID。")
 
-            if operation_errors and not last_error:
-                last_error = "; ".join(operation_errors)[:1000]
+                buttons = build_buttons(task)
+                message_values = message_template_values(task, result.stock)
+                message_id_map = parse_message_id_map(
+                    task["message_ids"] if "message_ids" in task.keys() else "",
+                    chat_ids,
+                    task["message_id"] if "message_id" in task.keys() else None,
+                )
+                message_id_map = {chat_id: message_id for chat_id, message_id in message_id_map.items() if chat_id in chat_ids}
+                operation_errors: list[str] = []
+                existing_message_ids = dict(message_id_map)
 
-            first_chat_id = chat_ids[0] if chat_ids else ""
-            message_id = message_id_map.get(first_chat_id) if first_chat_id else None
+                try:
+                    missing_chat_ids = [chat_id for chat_id in chat_ids if chat_id not in message_id_map]
+                    if result.stock > 0 and missing_chat_ids:
+                        text = safe_format(task["restock_template"], message_values)
+                        sent_map, send_errors = self.send_messages_to_chats(
+                            settings_payload["telegram_bot_token"],
+                            missing_chat_ids,
+                            text,
+                            buttons,
+                        )
+                        if sent_map:
+                            message_id_map.update(sent_map)
+                            log_activity(
+                                "info",
+                                f"task:{task['id']}",
+                                f"{task['name']} 刚补货，已向 {len(sent_map)} 个群发送新消息。",
+                            )
+                        operation_errors.extend(send_errors)
+                    if result.stock > 0 and existing_message_ids and last_stock != result.stock:
+                        text = safe_format(task["restock_template"], message_values)
+                        edited_map, edit_errors = self.edit_messages_to_chats(
+                            settings_payload["telegram_bot_token"],
+                            chat_ids,
+                            existing_message_ids,
+                            text,
+                            buttons,
+                        )
+                        if edited_map:
+                            log_activity(
+                                "info",
+                                f"task:{task['id']}",
+                                f"{task['name']} 库存变化为 {result.stock}，已静默编辑 {len(edited_map)} 条消息。",
+                            )
+                        operation_errors.extend(edit_errors)
+                    elif result.stock <= 0 and message_id_map:
+                        text = safe_format(task["soldout_template"], message_values | {"status": telegram_html_value("sold_out")})
+                        edited_map, edit_errors = self.edit_messages_to_chats(
+                            settings_payload["telegram_bot_token"],
+                            chat_ids,
+                            message_id_map,
+                            text,
+                            buttons,
+                        )
+                        if edited_map:
+                            log_activity(
+                                "warning",
+                                f"task:{task['id']}",
+                                f"{task['name']} 已售罄，已覆盖原消息并清空会话记录。",
+                            )
+                        message_id_map = {}
+                        operation_errors.extend(edit_errors)
+                except Exception as exc:
+                    last_error = sanitize_telegram_error(str(exc), settings_payload["telegram_bot_token"])
+                    log_activity("error", f"task:{task['id']}", f"{task['name']} Telegram 推送失败：{last_error}")
+
+                if operation_errors and not last_error:
+                    last_error = "; ".join(operation_errors)[:1000]
+
+                first_chat_id = chat_ids[0] if chat_ids else ""
+                message_id = message_id_map.get(first_chat_id) if first_chat_id else None
+                message_ids_text = serialize_message_id_map(message_id_map)
+
             connection.execute(
                 """
                 UPDATE tasks
@@ -3823,7 +3849,7 @@ class MonitoringEngine:
                     result.stock,
                     new_state,
                     message_id,
-                    serialize_message_id_map(message_id_map),
+                    message_ids_text,
                     timestamp,
                     last_error[:1000],
                     result.backend_used or last_fetch_attempt_backend(result.fetch_attempts),
@@ -3840,6 +3866,27 @@ class MonitoringEngine:
         if use_test_browser:
             raise RuntimeError("测试推送应走 run_test_push 流程，不进入常规状态机。")
         return self.apply_task_result(task, settings_payload, result)
+
+    def run_stock_check(self, task_id: int) -> dict[str, Any]:
+        settings_payload = self.get_runtime_settings()
+        self.configure_browsers(settings_payload)
+        with open_connection() as connection:
+            task = connection.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()
+            if not task:
+                raise RuntimeError("任务不存在。")
+
+        result = self.scrape_task(task, settings_payload, use_test_browser=True)
+        self.apply_task_result(task, settings_payload, result, send_notifications=False)
+        log_activity("info", f"task:{task_id}", f"{task['name']} 已完成一次库存检测，结果：{result.stock if result.stock is not None else '未知'}。")
+        return {
+            "stock": result.stock,
+            "state": "unknown" if result.stock is None else ("in_stock" if result.stock > 0 else "sold_out"),
+            "detail": result.detail,
+            "error_kind": result.error_kind,
+            "backend_used": result.backend_used or last_fetch_attempt_backend(result.fetch_attempts, result.error_kind),
+            "attempts": [fetch_attempt_to_payload(attempt) for attempt in result.fetch_attempts],
+            "checked_at": now_iso(),
+        }
 
     def run_test_push(self, task_id: int) -> dict[str, Any]:
         settings_payload = self.get_runtime_settings()
@@ -4073,9 +4120,19 @@ def classify_browser_error(message: str) -> str:
     lowered = normalize_signal_text(message)
     if not lowered:
         return ""
+    if any(token in lowered for token in ("telegram", "sendmessage", "editmessage", "botcantsendmessagestobot")):
+        return "telegram_error"
     for kind, markers in BROWSER_ERROR_KINDS.items():
         if any(marker in lowered for marker in markers):
             return kind
+    if any(token in lowered for token in ("firecrawlzdrnotenabled", "zerodataretention", "zdrisnotenabled")):
+        return "firecrawl_zdr_not_enabled"
+    if "firecrawlpermissionerror" in lowered:
+        return "firecrawl_permission_error"
+    if "firecrawlbadrequest" in lowered:
+        return "firecrawl_bad_request"
+    if "firecrawlautherror" in lowered or "firecrawl认证失败" in lowered:
+        return "firecrawl_auth_error"
     return ""
 
 
@@ -4380,6 +4437,32 @@ def iter_enclosing_html_blocks(html_text: str, position: int) -> list[tuple[str,
     return blocks
 
 
+def score_product_fragment_candidate(fragment: str, keyword_position: int, start: int, end: int) -> int:
+    cleaned = clean_fragment_text(fragment)
+    stock, _ = parse_stock(fragment)
+    sold_out = has_sold_out_marker(cleaned)
+    orderable = has_orderable_marker(fragment, cleaned)
+    score = 0
+    if stock is not None:
+        score += 100
+    if sold_out:
+        score += 40
+    if orderable:
+        score += 40
+    if sold_out and orderable:
+        score -= 70
+    if start <= keyword_position < end:
+        score += 30
+        distance_to_keyword = keyword_position - start
+        score += max(0, 18 - min(distance_to_keyword, 1800) // 100)
+    fragment_length = end - start
+    if fragment_length <= 5000:
+        score += max(0, 18 - fragment_length // 500)
+    else:
+        score -= min(30, fragment_length // 2000)
+    return score
+
+
 def has_pattern_signal(fragment: str, cleaned_text: str, patterns: list[re.Pattern[str]]) -> bool:
     haystack = f"{fragment}\n{cleaned_text}"
     return any(pattern.search(haystack) for pattern in patterns)
@@ -4427,15 +4510,29 @@ def locate_html_fragment_around_position(
     position: int,
     signal_checker: Callable[[str], bool],
 ) -> str:
-    candidates: list[tuple[int, int, int, str]] = []
+    candidates: list[tuple[int, int, int, int, str]] = []
+
+    def add_candidate(fragment: str, start: int, end: int, priority: int) -> None:
+        if not fragment or not signal_checker(fragment):
+            return
+        score = score_product_fragment_candidate(fragment, position, start, end)
+        if priority < 10:
+            score += 80
+        candidates.append((-score, priority, end - start, start, fragment))
+
     for tag_name, start, end in iter_enclosing_html_blocks(html_text, position):
         fragment = html_text[start:end]
-        if signal_checker(fragment):
-            tag_priority = PRODUCT_CONTAINER_TAGS.index(tag_name)
-            candidates.append((end - start, tag_priority, start, fragment))
+        tag_priority = PRODUCT_CONTAINER_TAGS.index(tag_name)
+        add_candidate(fragment, start, end, tag_priority)
+
+    for priority, (before, after) in enumerate(((80, 1400), (180, 2400), (320, 4200)), start=10):
+        start = max(0, position - before)
+        end = min(len(html_text), position + after)
+        add_candidate(html_text[start:end], start, end, priority)
+
     if candidates:
-        candidates.sort(key=lambda item: (item[0], item[1], item[2]))
-        return candidates[0][3]
+        candidates.sort()
+        return candidates[0][4]
     return bounded_html_slice(html_text, position)
 
 
@@ -5559,7 +5656,7 @@ def make_app() -> Flask:
             )
             connection.commit()
         log_activity("info", "tasks", f"已更新任务 #{task_id}。")
-        return jsonify({"ok": True, "message": "任务已更新。"})
+        return jsonify({"ok": True, "message": "任务已更新。", "task_id": task_id})
 
     @app.route("/api/tasks/<int:task_id>", methods=["DELETE"])
     @login_required
@@ -5645,6 +5742,16 @@ def make_app() -> Flask:
         except Exception as exc:
             return jsonify({"ok": False, "message": str(exc)}), 400
         return jsonify({"ok": True, "message": "测试消息已发送。", "result": result})
+
+    @app.route("/api/tasks/<int:task_id>/check", methods=["POST"])
+    @login_required
+    @limiter.limit("12 per minute")
+    def check_task_stock(task_id: int):
+        try:
+            result = app.extensions["monitor_engine"].run_stock_check(task_id)
+        except Exception as exc:
+            return jsonify({"ok": False, "message": str(exc)}), 400
+        return jsonify({"ok": True, "message": "库存检测已完成。", "result": result})
 
     @app.route("/api/template-test-push", methods=["POST"])
     @login_required
