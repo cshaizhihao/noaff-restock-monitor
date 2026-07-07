@@ -563,6 +563,31 @@ class InstallScriptTestCase(unittest.TestCase):
         self.assertIn("data-task-group-section", app_js)
         self.assertIn("data-task-group-error", app_js)
 
+    def test_dashboard_manual_and_webhook_controls_are_wired(self) -> None:
+        app_js = (ROOT_DIR / "static" / "app.js").read_text(encoding="utf-8")
+        portal_html = (ROOT_DIR / "templates" / "portal.html").read_text(encoding="utf-8")
+        self.assertIn('id="task-fetch-strategy"', portal_html)
+        self.assertIn('value="generic_pricing_table"', portal_html)
+        self.assertIn('value="whmcs"', portal_html)
+        self.assertIn('value="manual"', portal_html)
+        self.assertIn('value="webhook"', portal_html)
+        self.assertIn("data-task-manual-actions", app_js)
+        self.assertIn('data-action="manual-in-stock"', app_js)
+        self.assertIn('data-action="manual-sold-out"', app_js)
+        self.assertIn("data-task-webhook-meta", app_js)
+        self.assertIn('data-action="webhook-token"', app_js)
+        self.assertIn("data-task-test-action", app_js)
+        self.assertIn("/manual-stock", app_js)
+        self.assertIn("/webhook-token", app_js)
+        self.assertIn("copyText(token)", app_js)
+
+    def test_release_notes_capture_protected_source_boundary(self) -> None:
+        release_notes = (ROOT_DIR / "docs" / "RELEASE_NOTES.md").read_text(encoding="utf-8")
+        self.assertIn("does not bypass Cloudflare / Turnstile / CAPTCHA", release_notes)
+        self.assertIn("Cloudflare / Turnstile / CAPTCHA challenge pages are treated as protected sources", release_notes)
+        self.assertIn("Webhook tokens are stored as HMAC hashes", release_notes)
+        self.assertIn("101 tests passing", release_notes)
+
     def test_dashboard_polling_does_not_replay_task_reveal_animation(self) -> None:
         app_js = (ROOT_DIR / "static" / "app.js").read_text(encoding="utf-8")
         self.assertIn("let tasksRendered = false", app_js)
@@ -610,6 +635,19 @@ class InstallScriptTestCase(unittest.TestCase):
         self.assertGreaterEqual(portal_html.count('autocomplete="username"'), 2)
         self.assertIn('autocomplete="current-password"', portal_html)
         self.assertEqual(portal_html.count('autocomplete="new-password"'), 2)
+
+    def test_dashboard_uses_accessible_ops_visual_system(self) -> None:
+        app_js = (ROOT_DIR / "static" / "app.js").read_text(encoding="utf-8")
+        app_css = (ROOT_DIR / "static" / "app.css").read_text(encoding="utf-8")
+        portal_html = (ROOT_DIR / "templates" / "portal.html").read_text(encoding="utf-8")
+        self.assertNotIn("ambient-blob", portal_html)
+        self.assertIn("--color-accent: #22c55e", app_css)
+        self.assertIn("focus-visible", app_css)
+        self.assertIn("prefers-reduced-motion", app_css)
+        self.assertIn(".task-actions", app_css)
+        self.assertIn('class="task-actions', app_js)
+        self.assertNotIn("精准狙击关键词", portal_html)
+        self.assertNotIn("库存嗅探", app_js)
 
     def test_dashboard_supports_collapsible_task_groups(self) -> None:
         app_js = (ROOT_DIR / "static" / "app.js").read_text(encoding="utf-8")

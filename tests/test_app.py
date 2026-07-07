@@ -81,6 +81,81 @@ class PortalAppTestCase(unittest.TestCase):
         self.assertIn("password=", text)
         self.assertNotIn("panel_path=", text)
 
+    def test_initialize_database_migrates_task_fetch_strategy_columns(self) -> None:
+        original_db_path = app_module.DB_PATH
+        legacy_db_path = self.data_dir / "legacy-monitor.db"
+        try:
+            app_module.DB_PATH = legacy_db_path
+            connection = sqlite3.connect(legacy_db_path)
+            try:
+                connection.execute(
+                    """
+                    CREATE TABLE tasks (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        name TEXT NOT NULL,
+                        group_name TEXT NOT NULL DEFAULT '默认分组',
+                        monitor_url TEXT NOT NULL,
+                        target_keyword TEXT NOT NULL,
+                        restock_template TEXT NOT NULL,
+                        soldout_template TEXT NOT NULL,
+                        button_1_text TEXT DEFAULT '',
+                        button_1_url TEXT DEFAULT '',
+                        button_2_text TEXT DEFAULT '',
+                        button_2_url TEXT DEFAULT '',
+                        message_ids TEXT DEFAULT '',
+                        enabled INTEGER NOT NULL DEFAULT 1,
+                        last_stock INTEGER,
+                        last_state TEXT NOT NULL DEFAULT 'unknown',
+                        message_id INTEGER,
+                        last_checked_at TEXT,
+                        last_error TEXT DEFAULT '',
+                        created_at TEXT NOT NULL,
+                        updated_at TEXT NOT NULL
+                    )
+                    """
+                )
+                connection.commit()
+            finally:
+                connection.close()
+
+            app_module.initialize_database()
+            connection = sqlite3.connect(legacy_db_path)
+            try:
+                columns = {row[1] for row in connection.execute("PRAGMA table_info(tasks)").fetchall()}
+                row = connection.execute(
+                    """
+                    SELECT dflt_value
+                    FROM pragma_table_info('tasks')
+                    WHERE name = 'fetch_strategy'
+                    """
+                ).fetchone()
+            finally:
+                connection.close()
+
+            self.assertIn("fetch_strategy", columns)
+            self.assertIn("source_config", columns)
+            self.assertIn("blocked_count", columns)
+            self.assertIn("last_blocked_at", columns)
+            self.assertIn("cooldown_until", columns)
+            self.assertIn("ingest_token_hash", columns)
+            self.assertIn("ingest_token_hint", columns)
+            self.assertEqual(row[0], "'browser'")
+        finally:
+            app_module.DB_PATH = original_db_path
+
+    def test_protected_source_cooldown_schedule_is_short_and_progressive(self) -> None:
+        base = app_module.datetime(2026, 7, 7, 0, 0, tzinfo=app_module.UTC)
+
+        first = app_module.parse_iso_datetime(app_module.protected_source_cooldown_until(1, base))
+        second = app_module.parse_iso_datetime(app_module.protected_source_cooldown_until(2, base))
+        third = app_module.parse_iso_datetime(app_module.protected_source_cooldown_until(3, base))
+        later = app_module.parse_iso_datetime(app_module.protected_source_cooldown_until(8, base))
+
+        self.assertEqual((first - base).total_seconds(), 60)
+        self.assertEqual((second - base).total_seconds(), 180)
+        self.assertEqual((third - base).total_seconds(), 600)
+        self.assertEqual((later - base).total_seconds(), 600)
+
     def test_asset_route_serves_logo_for_browser_requests(self) -> None:
         response = self.client.get("/assets/noaff-logo.svg", headers={"User-Agent": BROWSER_UA}, base_url=BASE_URL)
         try:
@@ -333,6 +408,8 @@ class PortalAppTestCase(unittest.TestCase):
                 "group_name": "Geelinx JP",
                 "monitor_url": "https://example.com/cart.php?gid=1",
                 "target_keyword": "HK-CMI",
+                "fetch_strategy": "static_http",
+                "source_config": {"mode": "public"},
                 "restock_template": "<b>{name}</b> {stock}",
                 "soldout_template": "<b>{name}</b> sold out",
                 "button_1_text": "Open",
@@ -354,8 +431,60 @@ class PortalAppTestCase(unittest.TestCase):
         self.assertEqual(payload["metrics"]["total"], 1)
         self.assertEqual(len(payload["tasks"]), 1)
         self.assertEqual(payload["tasks"][0]["group_name"], "Geelinx JP")
+        self.assertEqual(payload["tasks"][0]["fetch_strategy"], "static_http")
+        self.assertEqual(json.loads(payload["tasks"][0]["source_config"]), {"mode": "public"})
+        self.assertEqual(payload["tasks"][0]["blocked_count"], 0)
+        self.assertEqual(payload["tasks"][0]["last_blocked_at"], "")
+        self.assertEqual(payload["tasks"][0]["cooldown_until"], "")
         self.assertIn("system", payload)
         self.assertIn("version", payload["system"])
+
+        update = self.client.put(
+            f"{app_module.PORTAL_PATH}/api/tasks/{create.get_json()['task_id']}",
+            headers=headers,
+            base_url=BASE_URL,
+            json={
+                "name": "HK VM",
+                "group_name": "Geelinx JP",
+                "monitor_url": "https://example.com/cart.php?gid=1",
+                "target_keyword": "HK-CMI",
+                "fetch_strategy": "whmcs",
+                "source_config": {},
+                "restock_template": "<b>{name}</b> {stock}",
+                "soldout_template": "<b>{name}</b> sold out",
+                "button_1_text": "Open",
+                "button_1_url": "https://example.com/order",
+                "button_2_text": "",
+                "button_2_url": "",
+                "enabled": True,
+            },
+        )
+        self.assertEqual(update.status_code, 200)
+
+        updated = self.client.get(
+            f"{app_module.PORTAL_PATH}/api/snapshot",
+            headers=self.browser_headers(),
+            base_url=BASE_URL,
+        )
+        self.assertEqual(updated.get_json()["tasks"][0]["fetch_strategy"], "whmcs")
+
+        invalid_strategy = self.client.post(
+            f"{app_module.PORTAL_PATH}/api/tasks",
+            headers=headers,
+            base_url=BASE_URL,
+            json={
+                "name": "Invalid",
+                "group_name": "Default",
+                "monitor_url": "https://example.com/cart.php?gid=1",
+                "target_keyword": "Invalid",
+                "fetch_strategy": "unknown",
+                "restock_template": "{name}",
+                "soldout_template": "{name}",
+                "enabled": True,
+            },
+        )
+        self.assertEqual(invalid_strategy.status_code, 400)
+        self.assertIn("采集方式", invalid_strategy.get_json()["message"])
 
     def test_merchant_import_discovers_products_and_promotes_tasks(self) -> None:
         _, headers = self.login()
@@ -666,8 +795,9 @@ class PortalAppTestCase(unittest.TestCase):
                 """
                 INSERT INTO tasks (
                     name, group_name, monitor_url, target_keyword, restock_template, soldout_template,
-                    enabled, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?)
+                    fetch_strategy, source_config, blocked_count, last_blocked_at, cooldown_until,
+                    ingest_token_hash, ingest_token_hint, enabled, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
                 """,
                 (
                     "Backup SKU",
@@ -676,6 +806,13 @@ class PortalAppTestCase(unittest.TestCase):
                     "Backup SKU",
                     "<b>{name}</b> {stock}",
                     "<b>{name}</b> sold out",
+                    "static_http",
+                    "{\"mode\":\"backup\"}",
+                    2,
+                    "2026-07-07T00:00:00+00:00",
+                    "2026-07-07T00:10:00+00:00",
+                    "hash-from-backup",
+                    "hint-1234",
                     timestamp,
                     timestamp,
                 ),
@@ -699,6 +836,10 @@ class PortalAppTestCase(unittest.TestCase):
         backup_payload = json.loads(export_response.get_data(as_text=True))
         self.assertEqual(backup_payload["schema_version"], 1)
         self.assertGreaterEqual(len(backup_payload["tables"]["tasks"]), 1)
+        self.assertEqual(backup_payload["tables"]["tasks"][0]["fetch_strategy"], "static_http")
+        self.assertEqual(backup_payload["tables"]["tasks"][0]["blocked_count"], 2)
+        self.assertEqual(backup_payload["tables"]["tasks"][0]["ingest_token_hash"], "hash-from-backup")
+        self.assertEqual(backup_payload["tables"]["tasks"][0]["ingest_token_hint"], "hint-1234")
         self.assertIn("admins", backup_payload["tables"])
 
         with app_module.open_connection() as connection:
@@ -731,6 +872,10 @@ class PortalAppTestCase(unittest.TestCase):
         payload = snapshot.get_json()
         self.assertEqual(payload["settings"]["telegram_chat_id"], "backup-chat-id")
         self.assertEqual(payload["metrics"]["total"], 1)
+        self.assertEqual(payload["tasks"][0]["fetch_strategy"], "static_http")
+        self.assertEqual(payload["tasks"][0]["blocked_count"], 2)
+        self.assertEqual(payload["tasks"][0]["cooldown_until"], "2026-07-07T00:10:00+00:00")
+        self.assertEqual(payload["tasks"][0]["ingest_token_hint"], "hint-1234")
 
     def test_system_backup_restore_rejects_invalid_payload(self) -> None:
         _, headers = self.login()
@@ -859,6 +1004,443 @@ class PortalAppTestCase(unittest.TestCase):
             engine.telegram = original_telegram
             engine.scrape_task = original_scrape_task
 
+    def test_manual_stock_update_reuses_telegram_state_machine(self) -> None:
+        _, headers = self.login()
+        create = self.client.post(
+            f"{app_module.PORTAL_PATH}/api/tasks",
+            headers=headers,
+            base_url=BASE_URL,
+            json={
+                "name": "Manual VM",
+                "monitor_url": "https://example.com/manual",
+                "target_keyword": "Manual VM",
+                "fetch_strategy": "manual",
+                "source_config": {},
+                "restock_template": "<b>{name}</b> stock={stock}",
+                "soldout_template": "<b>{name}</b> sold out",
+                "button_1_text": "",
+                "button_1_url": "",
+                "button_2_text": "",
+                "button_2_url": "",
+                "enabled": True,
+            },
+        )
+        self.assertEqual(create.status_code, 200)
+        task_id = create.get_json()["task_id"]
+        with app_module.open_connection() as connection:
+            app_module.save_settings(
+                connection,
+                {
+                    "telegram_bot_token": "bot-token",
+                    "telegram_chat_ids": "manual-chat",
+                },
+            )
+
+        class FakeTelegram:
+            def __init__(self) -> None:
+                self.sent: list[dict[str, object]] = []
+                self.edited: list[dict[str, object]] = []
+
+            def send_message(self, token, chat_id, text, buttons=None) -> int:
+                message_id = 1000 + len(self.sent)
+                self.sent.append({"token": token, "chat_id": chat_id, "text": text, "buttons": buttons})
+                return message_id
+
+            def edit_message(self, token, chat_id, message_id, text, buttons=None) -> None:
+                self.edited.append(
+                    {"token": token, "chat_id": chat_id, "message_id": message_id, "text": text, "buttons": buttons}
+                )
+
+        engine = self.app.extensions["monitor_engine"]
+        original_telegram = engine.telegram
+        fake_telegram = FakeTelegram()
+        try:
+            engine.telegram = fake_telegram
+            response = self.client.post(
+                f"{app_module.PORTAL_PATH}/api/tasks/{task_id}/manual-stock",
+                headers=headers,
+                base_url=BASE_URL,
+                json={
+                    "stock": 3,
+                    "detail": "operator confirmed",
+                    "checked_at": "2026-07-07T01:02:03+00:00",
+                },
+            )
+        finally:
+            engine.telegram = original_telegram
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.get_json()["ok"])
+        self.assertEqual(len(fake_telegram.sent), 1)
+        self.assertEqual(fake_telegram.sent[0]["chat_id"], "manual-chat")
+        self.assertIn("stock=3", fake_telegram.sent[0]["text"])
+        self.assertEqual(fake_telegram.edited, [])
+        with app_module.open_connection() as connection:
+            row = connection.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()
+        self.assertEqual(row["last_stock"], 3)
+        self.assertEqual(row["last_state"], "in_stock")
+        self.assertEqual(row["last_checked_at"], "2026-07-07T01:02:03+00:00")
+
+    def test_webhook_ingest_token_and_telegram_state_machine(self) -> None:
+        _, headers = self.login()
+        create = self.client.post(
+            f"{app_module.PORTAL_PATH}/api/tasks",
+            headers=headers,
+            base_url=BASE_URL,
+            json={
+                "name": "Webhook VM",
+                "monitor_url": "https://example.com/webhook",
+                "target_keyword": "Webhook VM",
+                "fetch_strategy": "webhook",
+                "source_config": {"token": "must-not-persist", "mode": "push"},
+                "restock_template": "<b>{name}</b> stock={stock}",
+                "soldout_template": "<b>{name}</b> sold out",
+                "button_1_text": "",
+                "button_1_url": "",
+                "button_2_text": "",
+                "button_2_url": "",
+                "enabled": True,
+            },
+        )
+        self.assertEqual(create.status_code, 200)
+        task_id = create.get_json()["task_id"]
+        with app_module.open_connection() as connection:
+            app_module.save_settings(
+                connection,
+                {
+                    "telegram_bot_token": "bot-token",
+                    "telegram_chat_ids": "chat-a\nchat-b",
+                },
+            )
+
+        reset = self.client.post(
+            f"{app_module.PORTAL_PATH}/api/tasks/{task_id}/webhook-token",
+            headers=headers,
+            base_url=BASE_URL,
+            json={},
+        )
+        self.assertEqual(reset.status_code, 200)
+        reset_payload = reset.get_json()["result"]
+        ingest_token = reset_payload["ingest_token"]
+        self.assertTrue(ingest_token)
+        self.assertEqual(reset_payload["webhook_endpoint"], f"/api/webhooks/restock/{task_id}")
+
+        class FakeTelegram:
+            def __init__(self) -> None:
+                self.sent: list[dict[str, object]] = []
+                self.edited: list[dict[str, object]] = []
+
+            def send_message(self, token, chat_id, text, buttons=None) -> int:
+                message_id = 2000 + len(self.sent) + 1
+                self.sent.append({"token": token, "chat_id": chat_id, "text": text, "buttons": buttons, "message_id": message_id})
+                return message_id
+
+            def edit_message(self, token, chat_id, message_id, text, buttons=None) -> None:
+                self.edited.append(
+                    {"token": token, "chat_id": chat_id, "message_id": message_id, "text": text, "buttons": buttons}
+                )
+
+        engine = self.app.extensions["monitor_engine"]
+        original_telegram = engine.telegram
+        fake_telegram = FakeTelegram()
+        try:
+            engine.telegram = fake_telegram
+            invalid = self.client.post(
+                f"{app_module.PORTAL_PATH}/api/webhooks/restock/{task_id}",
+                headers={"X-NOAFF-Token": "invalid-webhook-token"},
+                base_url=BASE_URL,
+                json={"stock": 9},
+            )
+            self.assertEqual(invalid.status_code, 401)
+            self.assertEqual(fake_telegram.sent, [])
+
+            first = self.client.post(
+                f"{app_module.PORTAL_PATH}/api/webhooks/restock/{task_id}",
+                headers={"X-NOAFF-Token": ingest_token},
+                base_url=BASE_URL,
+                json={"stock": 5, "detail": "provider push", "checked_at": "2026-07-07T02:00:00+00:00"},
+            )
+            self.assertEqual(first.status_code, 200)
+            self.assertEqual(len(fake_telegram.sent), 2)
+            self.assertEqual({entry["chat_id"] for entry in fake_telegram.sent}, {"chat-a", "chat-b"})
+
+            changed = self.client.post(
+                f"{app_module.PORTAL_PATH}/api/webhooks/restock/{task_id}",
+                headers={"Authorization": f"Bearer {ingest_token}"},
+                base_url=BASE_URL,
+                json={"stock": 7, "detail": "provider count changed"},
+            )
+            self.assertEqual(changed.status_code, 200)
+            self.assertEqual(len(fake_telegram.edited), 2)
+            self.assertIn("stock=7", fake_telegram.edited[-1]["text"])
+
+            sold_out = self.client.post(
+                f"{app_module.PORTAL_PATH}/api/webhooks/restock/{task_id}",
+                headers={"X-NOAFF-Token": ingest_token},
+                base_url=BASE_URL,
+                json={"status": "sold_out"},
+            )
+            self.assertEqual(sold_out.status_code, 200)
+            self.assertEqual(len(fake_telegram.edited), 4)
+            self.assertIn("sold out", fake_telegram.edited[-1]["text"])
+        finally:
+            engine.telegram = original_telegram
+
+        with app_module.open_connection() as connection:
+            row = connection.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()
+        self.assertEqual(row["last_stock"], 0)
+        self.assertEqual(row["last_state"], "sold_out")
+        self.assertEqual(row["message_ids"], "")
+        self.assertNotEqual(row["ingest_token_hash"], ingest_token)
+        self.assertEqual(row["ingest_token_hint"], reset_payload["ingest_token_hint"])
+
+        snapshot = self.client.get(
+            f"{app_module.PORTAL_PATH}/api/snapshot",
+            headers=self.browser_headers(),
+            base_url=BASE_URL,
+        )
+        snapshot_text = json.dumps(snapshot.get_json(), ensure_ascii=False)
+        self.assertNotIn(ingest_token, snapshot_text)
+        self.assertNotIn("must-not-persist", snapshot_text)
+        self.assertNotIn("invalid-webhook-token", snapshot_text)
+        self.assertIn(reset_payload["ingest_token_hint"], snapshot_text)
+        self.assertIn(f"/api/webhooks/restock/{task_id}", snapshot_text)
+
+    def test_external_input_polling_waits_without_recording_error(self) -> None:
+        timestamp = app_module.now_iso()
+        with app_module.open_connection() as connection:
+            cursor = connection.execute(
+                """
+                INSERT INTO tasks (
+                    name, monitor_url, target_keyword, fetch_strategy, restock_template, soldout_template,
+                    enabled, last_stock, last_state, last_error, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?)
+                """,
+                (
+                    "Manual Pending VM",
+                    "https://example.com/manual",
+                    "Manual Pending VM",
+                    "manual",
+                    "{name} {stock}",
+                    "{name} sold out",
+                    2,
+                    "in_stock",
+                    "old transient error",
+                    timestamp,
+                    timestamp,
+                ),
+            )
+            connection.commit()
+            task = connection.execute("SELECT * FROM tasks WHERE id = ?", (cursor.lastrowid,)).fetchone()
+
+        class FakeTelegram:
+            def send_message(self, token, chat_id, text, buttons=None) -> int:
+                raise AssertionError("pending manual task must not send Telegram")
+
+            def edit_message(self, token, chat_id, message_id, text, buttons=None) -> None:
+                raise AssertionError("pending manual task must not edit Telegram")
+
+        engine = self.app.extensions["monitor_engine"]
+        original_telegram = engine.telegram
+        try:
+            engine.telegram = FakeTelegram()
+            processed = engine.process_task(
+                task,
+                {
+                    "telegram_bot_token": "",
+                    "telegram_chat_id": "",
+                    "telegram_chat_ids": "",
+                    "monitor_debug_port": 9223,
+                    "test_debug_port": 9334,
+                    "poll_interval_seconds": 45,
+                    "request_timeout_seconds": 25,
+                },
+                use_test_browser=False,
+            )
+        finally:
+            engine.telegram = original_telegram
+
+        self.assertFalse(processed)
+        with app_module.open_connection() as connection:
+            row = connection.execute("SELECT * FROM tasks WHERE id = ?", (task["id"],)).fetchone()
+        self.assertEqual(row["last_stock"], 2)
+        self.assertEqual(row["last_state"], "in_stock")
+        self.assertEqual(row["last_error"], "")
+        self.assertTrue(row["last_checked_at"])
+
+    def test_process_task_records_scrape_error_without_telegram_or_state_change(self) -> None:
+        timestamp = app_module.now_iso()
+        with app_module.open_connection() as connection:
+            cursor = connection.execute(
+                """
+                INSERT INTO tasks (
+                    name, monitor_url, target_keyword, restock_template, soldout_template,
+                    enabled, last_stock, last_state, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    "Protected VM",
+                    "https://example.com/products",
+                    "Protected VM",
+                    "{name} {stock}",
+                    "{name} sold out",
+                    1,
+                    3,
+                    "in_stock",
+                    timestamp,
+                    timestamp,
+                ),
+            )
+            connection.commit()
+            task_id = cursor.lastrowid
+
+        class FakeTelegram:
+            def __init__(self) -> None:
+                self.sent: list[dict[str, object]] = []
+                self.edited: list[dict[str, object]] = []
+
+            def send_message(self, token, chat_id, text, buttons=None) -> int:
+                self.sent.append({"token": token, "chat_id": chat_id, "text": text, "buttons": buttons})
+                return 1
+
+            def edit_message(self, token, chat_id, message_id, text, buttons=None) -> None:
+                self.edited.append(
+                    {"token": token, "chat_id": chat_id, "message_id": message_id, "text": text, "buttons": buttons}
+                )
+
+        engine = self.app.extensions["monitor_engine"]
+        original_telegram = engine.telegram
+        original_scrape_task = engine.scrape_task
+        fake_telegram = FakeTelegram()
+
+        def fetch_task() -> sqlite3.Row:
+            with app_module.open_connection() as connection:
+                return connection.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()
+
+        def fake_scrape_task(task, settings, use_test_browser):
+            return app_module.ScrapeResult(
+                stock=None,
+                fragment="",
+                detail="monitor 浏览器被 Cloudflare 验证页拦截：https://example.com/products",
+                used_test_browser=use_test_browser,
+                error_kind="cloudflare_challenge",
+            )
+
+        try:
+            engine.telegram = fake_telegram
+            engine.scrape_task = fake_scrape_task
+            processed = engine.process_task(
+                fetch_task(),
+                {
+                    "telegram_bot_token": "",
+                    "telegram_chat_id": "",
+                    "telegram_chat_ids": "",
+                    "monitor_debug_port": 9223,
+                    "test_debug_port": 9334,
+                    "poll_interval_seconds": 45,
+                    "request_timeout_seconds": 25,
+                },
+                use_test_browser=False,
+            )
+        finally:
+            engine.telegram = original_telegram
+            engine.scrape_task = original_scrape_task
+
+        self.assertFalse(processed)
+        self.assertEqual(fake_telegram.sent, [])
+        self.assertEqual(fake_telegram.edited, [])
+        with app_module.open_connection() as connection:
+            row = connection.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()
+        self.assertEqual(row["last_stock"], 3)
+        self.assertEqual(row["last_state"], "in_stock")
+        self.assertIn("Cloudflare 验证页拦截", row["last_error"])
+        self.assertEqual(row["blocked_count"], 1)
+        self.assertTrue(row["last_blocked_at"])
+        self.assertTrue(row["cooldown_until"])
+        blocked_at = app_module.parse_iso_datetime(row["last_blocked_at"])
+        cooldown_until = app_module.parse_iso_datetime(row["cooldown_until"])
+        self.assertIsNotNone(blocked_at)
+        self.assertIsNotNone(cooldown_until)
+        self.assertAlmostEqual((cooldown_until - blocked_at).total_seconds(), 60, delta=2)
+
+    def test_process_task_skips_protected_source_during_cooldown(self) -> None:
+        timestamp = app_module.now_iso()
+        cooldown_until = (app_module.now_utc() + app_module.timedelta(minutes=3)).isoformat(timespec="seconds")
+        with app_module.open_connection() as connection:
+            cursor = connection.execute(
+                """
+                INSERT INTO tasks (
+                    name, monitor_url, target_keyword, restock_template, soldout_template,
+                    enabled, last_stock, last_state, blocked_count, last_blocked_at, cooldown_until,
+                    created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    "Cooling VM",
+                    "https://example.com/products",
+                    "Cooling VM",
+                    "{name} {stock}",
+                    "{name} sold out",
+                    1,
+                    4,
+                    "in_stock",
+                    1,
+                    timestamp,
+                    cooldown_until,
+                    timestamp,
+                    timestamp,
+                ),
+            )
+            connection.commit()
+            task_id = cursor.lastrowid
+
+        class ExplodingBrowser:
+            def __init__(self) -> None:
+                self.calls = 0
+                self.rebuilds = 0
+
+            def fetch_html(self, url, timeout_seconds):
+                self.calls += 1
+                raise AssertionError("cooldown task must not fetch target pages")
+
+            def rebuild(self, reason):
+                self.rebuilds += 1
+                raise AssertionError("cooldown task must not rebuild browsers")
+
+        engine = self.app.extensions["monitor_engine"]
+        original_browser = engine.monitor_browser
+        exploding_browser = ExplodingBrowser()
+        try:
+            engine.monitor_browser = exploding_browser
+            with app_module.open_connection() as connection:
+                task = connection.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()
+            processed = engine.process_task(
+                task,
+                {
+                    "telegram_bot_token": "",
+                    "telegram_chat_id": "",
+                    "telegram_chat_ids": "",
+                    "monitor_debug_port": 9223,
+                    "test_debug_port": 9334,
+                    "poll_interval_seconds": 45,
+                    "request_timeout_seconds": 25,
+                },
+                use_test_browser=False,
+            )
+        finally:
+            engine.monitor_browser = original_browser
+
+        self.assertFalse(processed)
+        self.assertEqual(exploding_browser.calls, 0)
+        self.assertEqual(exploding_browser.rebuilds, 0)
+        with app_module.open_connection() as connection:
+            row = connection.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()
+        self.assertEqual(row["last_stock"], 4)
+        self.assertEqual(row["last_state"], "in_stock")
+        self.assertEqual(row["blocked_count"], 1)
+        self.assertEqual(row["cooldown_until"], cooldown_until)
+        self.assertIn("受保护站点冷却中", row["last_error"])
+
     def test_telegram_error_masks_bot_token_and_explains_bad_request(self) -> None:
         class FakeResponse:
             status_code = 400
@@ -968,6 +1550,43 @@ class PortalAppTestCase(unittest.TestCase):
         self.assertIn("Cloudflare 验证页拦截", payload["last_error"])
         self.assertEqual(payload["last_error_detail"], "https://example.com/products")
 
+    def test_task_payload_preserves_cloudflare_cooldown_details(self) -> None:
+        timestamp = app_module.now_iso()
+        cooldown_until = "2026-07-07T00:10:00+00:00"
+        with app_module.open_connection() as connection:
+            cursor = connection.execute(
+                """
+                INSERT INTO tasks (
+                    name, monitor_url, target_keyword, restock_template, soldout_template,
+                    enabled, last_error, blocked_count, last_blocked_at, cooldown_until, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    "Cooling",
+                    "https://example.com/products",
+                    "Cooling",
+                    "{name}",
+                    "{name} sold out",
+                    1,
+                    app_module.protected_source_cooldown_message(cooldown_until),
+                    2,
+                    timestamp,
+                    cooldown_until,
+                    timestamp,
+                    timestamp,
+                ),
+            )
+            connection.commit()
+            row = connection.execute("SELECT * FROM tasks WHERE id = ?", (cursor.lastrowid,)).fetchone()
+
+        payload = app_module.to_task_payload(row)
+
+        self.assertEqual(payload["last_error_kind"], "cloudflare_challenge")
+        self.assertIn(cooldown_until, payload["last_error_detail"])
+        self.assertIn("Webhook", payload["last_error_detail"])
+        self.assertEqual(payload["blocked_count"], 2)
+        self.assertEqual(payload["cooldown_until"], cooldown_until)
+
     def test_task_payload_classifies_browser_disconnect_errors(self) -> None:
         timestamp = app_module.now_iso()
         with app_module.open_connection() as connection:
@@ -1028,12 +1647,286 @@ class PortalAppTestCase(unittest.TestCase):
         self.assertEqual(catalog_port_update.status_code, 200)
         self.assertTrue(catalog_port_update.get_json()["ok"])
 
+    def test_browser_fetcher_wraps_harness_success(self) -> None:
+        class FakeHarness:
+            def __init__(self) -> None:
+                self.calls: list[tuple[str, int]] = []
+
+            def fetch_html(self, url, timeout_seconds):
+                self.calls.append((url, timeout_seconds))
+                return "<html>HK-CMI <strong>9</strong></html>"
+
+            def rebuild(self, reason):
+                raise AssertionError("rebuild should not be called")
+
+        harness = FakeHarness()
+        fetcher = app_module.BrowserFetcher(harness)
+        result = fetcher.fetch("https://example.com/products", 25)
+
+        self.assertEqual(result.html, "<html>HK-CMI <strong>9</strong></html>")
+        self.assertEqual(result.final_url, "https://example.com/products")
+        self.assertEqual(result.error_kind, "")
+        self.assertEqual(harness.calls, [("https://example.com/products", 25)])
+
+    def test_static_http_fetcher_returns_html_with_browser_headers(self) -> None:
+        class FakeResponse:
+            status_code = 200
+            url = "https://example.com/products"
+            text = "<html><title>Products</title><body>HK-CMI <strong>11</strong></body></html>"
+
+        class FakeSession:
+            def __init__(self) -> None:
+                self.headers: dict[str, str] = {}
+                self.timeout = None
+
+            def get(self, url, headers=None, timeout=None, allow_redirects=None):
+                self.headers = headers or {}
+                self.timeout = timeout
+                self.allow_redirects = allow_redirects
+                return FakeResponse()
+
+        session = FakeSession()
+        fetcher = app_module.StaticHttpFetcher(session)
+        result = fetcher.fetch("https://example.com/products", 25)
+
+        self.assertIn("HK-CMI", result.html)
+        self.assertEqual(result.status_code, 200)
+        self.assertEqual(result.error_kind, "")
+        self.assertIn("Mozilla/5.0", session.headers["User-Agent"])
+        self.assertEqual(session.timeout, 25)
+        self.assertTrue(session.allow_redirects)
+
+    def test_static_http_fetcher_classifies_timeout(self) -> None:
+        class TimeoutSession:
+            def get(self, url, headers=None, timeout=None, allow_redirects=None):
+                raise app_module.requests.Timeout("slow")
+
+        result = app_module.StaticHttpFetcher(TimeoutSession()).fetch("https://example.com/products", 10)
+
+        self.assertEqual(result.error_kind, "timeout")
+        self.assertIn("请求超时", result.detail)
+
+    def test_static_http_fetcher_classifies_cloudflare_challenge(self) -> None:
+        class FakeResponse:
+            status_code = 403
+            url = "https://example.com/products"
+            text = "<html><title>Just a moment...</title><body><div id=\"cf-turnstile\">Cloudflare</div></body></html>"
+
+        class FakeSession:
+            def get(self, url, headers=None, timeout=None, allow_redirects=None):
+                return FakeResponse()
+
+        result = app_module.StaticHttpFetcher(FakeSession()).fetch("https://example.com/products", 10)
+
+        self.assertEqual(result.error_kind, "cloudflare_challenge")
+        self.assertIn("Cloudflare 验证页拦截", result.detail)
+
+    def test_static_http_fetcher_classifies_http_errors(self) -> None:
+        class FakeResponse:
+            status_code = 429
+            url = "https://example.com/products"
+            text = "<html><title>Too Many Requests</title><body>rate limited</body></html>"
+
+        class FakeSession:
+            def get(self, url, headers=None, timeout=None, allow_redirects=None):
+                return FakeResponse()
+
+        result = app_module.StaticHttpFetcher(FakeSession()).fetch("https://example.com/products", 10)
+
+        self.assertEqual(result.error_kind, "http_error")
+        self.assertIn("HTTP 429", result.detail)
+
+    def test_external_input_fetch_strategy_does_not_use_browser(self) -> None:
+        class ExplodingHarness:
+            def fetch_html(self, url, timeout_seconds):
+                raise AssertionError("manual/webhook strategy must not fetch target pages")
+
+            def rebuild(self, reason):
+                raise AssertionError("manual/webhook strategy must not rebuild browsers")
+
+        fetcher = app_module.FetcherSelector().select({"fetch_strategy": "manual"}, ExplodingHarness())
+        result = fetcher.fetch("https://example.com/products", 25)
+
+        self.assertEqual(result.error_kind, "manual_pending")
+        self.assertIn("不会请求目标页面", result.detail)
+
+    def test_scrape_task_static_http_strategy_parses_stock(self) -> None:
+        class FakeResponse:
+            status_code = 200
+            url = "https://example.com/cart.php?gid=12"
+            text = "Kawasaki <section>Available</section><span hidden>x</span><strong>17</strong>"
+
+        class FakeSession:
+            def get(self, url, headers=None, timeout=None, allow_redirects=None):
+                return FakeResponse()
+
+        engine = self.app.extensions["monitor_engine"]
+        original_selector = engine.fetcher_selector
+        try:
+            engine.fetcher_selector = app_module.FetcherSelector(app_module.StaticHttpFetcher(FakeSession()))
+            result = engine.scrape_task(
+                {
+                    "name": "Kawasaki",
+                    "monitor_url": "https://example.com/cart.php?gid=12",
+                    "target_keyword": "Kawasaki",
+                    "fetch_strategy": "static_http",
+                },
+                {"request_timeout_seconds": 25},
+                use_test_browser=False,
+            )
+        finally:
+            engine.fetcher_selector = original_selector
+
+        self.assertEqual(result.stock, 17)
+        self.assertIn("Available", result.fragment)
+        self.assertEqual(result.error_kind, "")
+
+    def test_generic_pricing_table_extractor_handles_order_and_soldout_buttons(self) -> None:
+        fetch_result = app_module.FetchResult(html="", final_url="https://example.com/pricing")
+        in_stock_html = """
+        <main>
+          <section class="plan-card">
+            <h2>HK Tier 1</h2>
+            <p>International optimization network</p>
+            <a href="/cart">Order Now</a>
+          </section>
+        </main>
+        """
+        sold_out_html = """
+        <main>
+          <section class="plan-card">
+            <h2>HK Tier 2</h2>
+            <button disabled>Out of Stock</button>
+          </section>
+        </main>
+        """
+
+        in_stock = app_module.extract_stock_for_strategy(
+            "generic_pricing_table",
+            in_stock_html,
+            "HK Tier 1",
+            {"fetch_strategy": "generic_pricing_table"},
+            fetch_result,
+        )
+        sold_out = app_module.extract_stock_for_strategy(
+            "generic_pricing_table",
+            sold_out_html,
+            "HK Tier 2",
+            {"fetch_strategy": "generic_pricing_table"},
+            fetch_result,
+        )
+
+        self.assertEqual(in_stock.stock, 1)
+        self.assertIn("Order Now", in_stock.fragment)
+        self.assertIn("generic_pricing_table", in_stock.detail)
+        self.assertEqual(sold_out.stock, 0)
+        self.assertIn("售罄", sold_out.detail)
+
+    def test_scrape_task_generic_pricing_table_limits_to_target_product(self) -> None:
+        class FakeResponse:
+            status_code = 200
+            url = "https://example.com/pricing"
+            text = """
+            <section class="plans">
+              <div class="plan">
+                <h3>Basic VPS</h3>
+                <a href="/cart/basic">Order Now</a>
+              </div>
+              <div class="plan">
+                <h3>Premium VPS</h3>
+                <button disabled>Out of Stock</button>
+              </div>
+            </section>
+            """
+
+        class FakeSession:
+            def get(self, url, headers=None, timeout=None, allow_redirects=None):
+                return FakeResponse()
+
+        engine = self.app.extensions["monitor_engine"]
+        original_selector = engine.fetcher_selector
+        try:
+            engine.fetcher_selector = app_module.FetcherSelector(app_module.StaticHttpFetcher(FakeSession()))
+            result = engine.scrape_task(
+                {
+                    "name": "Basic VPS",
+                    "monitor_url": "https://example.com/pricing",
+                    "target_keyword": "Basic VPS",
+                    "fetch_strategy": "generic_pricing_table",
+                    "source_config": "{}",
+                },
+                {"request_timeout_seconds": 25},
+                use_test_browser=False,
+            )
+        finally:
+            engine.fetcher_selector = original_selector
+
+        self.assertEqual(result.stock, 1)
+        self.assertIn("Basic VPS", result.fragment)
+        self.assertNotIn("Premium VPS", result.fragment)
+        self.assertIn("generic_pricing_table", result.detail)
+
+    def test_whmcs_extractor_handles_target_keyword_and_pid_links(self) -> None:
+        html_text = """
+        <div class="products">
+          <div class="package">
+            <h3>Tokyo NVMe</h3>
+            <a class="btn btn-success" href="cart.php?a=confproduct&pid=21">Configure</a>
+          </div>
+          <div class="package">
+            <h3>Osaka NVMe</h3>
+            <button disabled>Out of Stock</button>
+          </div>
+        </div>
+        """
+        fetch_result = app_module.FetchResult(html=html_text, final_url="https://example.com/cart.php?gid=12")
+
+        pid_result = app_module.extract_stock_for_strategy(
+            "whmcs",
+            html_text,
+            "",
+            {
+                "fetch_strategy": "whmcs",
+                "monitor_url": "https://example.com/cart.php?a=add&pid=21",
+                "source_config": "{}",
+            },
+            fetch_result,
+        )
+        sold_out_result = app_module.extract_stock_for_strategy(
+            "whmcs",
+            html_text,
+            "Osaka NVMe",
+            {
+                "fetch_strategy": "whmcs",
+                "monitor_url": "https://example.com/cart.php?gid=12",
+                "source_config": "{}",
+            },
+            fetch_result,
+        )
+
+        self.assertEqual(pid_result.stock, 1)
+        self.assertIn("Tokyo NVMe", pid_result.fragment)
+        self.assertNotIn("Osaka NVMe", pid_result.fragment)
+        self.assertIn("WHMCS", pid_result.detail)
+        self.assertEqual(sold_out_result.stock, 0)
+        self.assertIn("售罄", sold_out_result.detail)
+
     def test_browser_auto_heal_recognizes_chinese_connection_failure(self) -> None:
         self.assertTrue(
             app_module.should_auto_heal(
                 RuntimeError("浏览器连接失败。地址：127.0.0.1:9223 提示：用户文件夹和已打开的浏览器冲突")
             )
         )
+
+    def test_browser_auto_heal_rejects_cloudflare_challenge(self) -> None:
+        self.assertFalse(
+            app_module.should_auto_heal(
+                app_module.ProtectedSourceError(
+                    "monitor 浏览器被 Cloudflare 验证页拦截：https://example.com/products"
+                )
+            )
+        )
+        self.assertFalse(app_module.should_auto_heal(RuntimeError("Cloudflare Turnstile challenge: just a moment")))
 
     def test_browser_fetch_html_recovers_from_cloudflare_challenge_page(self) -> None:
         harness = app_module.BrowserHarness("catalog", 9444, True, "")
@@ -1099,7 +1992,7 @@ class PortalAppTestCase(unittest.TestCase):
         original_ensure_page = harness.ensure_page
         try:
             harness.ensure_page = lambda: page
-            with self.assertRaises(RuntimeError) as ctx:
+            with self.assertRaises(app_module.ProtectedSourceError) as ctx:
                 harness.fetch_html("https://example.com/products", 10)
         finally:
             harness.ensure_page = original_ensure_page
@@ -1184,6 +2077,66 @@ class PortalAppTestCase(unittest.TestCase):
         self.assertEqual(len(flaky_browser.rebuilds), 1)
         self.assertEqual(result.stock, 17)
         self.assertIn("Available", result.fragment)
+
+    def test_scrape_task_protected_source_does_not_rebuild_browser(self) -> None:
+        timestamp = app_module.now_iso()
+        with app_module.open_connection() as connection:
+            cursor = connection.execute(
+                """
+                INSERT INTO tasks (
+                    name, monitor_url, target_keyword, restock_template, soldout_template,
+                    enabled, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    "Protected",
+                    "https://example.com/products",
+                    "Protected",
+                    "{name} {stock}",
+                    "{name} sold out",
+                    1,
+                    timestamp,
+                    timestamp,
+                ),
+            )
+            connection.commit()
+            task = connection.execute("SELECT * FROM tasks WHERE id = ?", (cursor.lastrowid,)).fetchone()
+
+        class ProtectedBrowser:
+            def __init__(self) -> None:
+                self.calls = 0
+                self.rebuilds: list[str] = []
+
+            def fetch_html(self, url, timeout_seconds):
+                self.calls += 1
+                raise app_module.ProtectedSourceError(f"monitor 浏览器被 Cloudflare 验证页拦截：{url}")
+
+            def rebuild(self, reason):
+                self.rebuilds.append(reason)
+
+        engine = self.app.extensions["monitor_engine"]
+        original_browser = engine.monitor_browser
+        protected_browser = ProtectedBrowser()
+        try:
+            engine.monitor_browser = protected_browser
+            result = engine.scrape_task(
+                task,
+                {
+                    "monitor_debug_port": 9223,
+                    "test_debug_port": 9334,
+                    "poll_interval_seconds": 45,
+                    "request_timeout_seconds": 25,
+                },
+                use_test_browser=False,
+            )
+        finally:
+            engine.monitor_browser = original_browser
+
+        self.assertEqual(protected_browser.calls, 1)
+        self.assertEqual(protected_browser.rebuilds, [])
+        self.assertIsNone(result.stock)
+        self.assertEqual(result.error_kind, "cloudflare_challenge")
+        self.assertIn("Cloudflare 验证页拦截", result.detail)
 
     def test_update_profile_duplicate_username_returns_400(self) -> None:
         bootstrap, headers = self.login()

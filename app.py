@@ -1,4 +1,5 @@
 import hashlib
+import hmac
 import html as html_module
 import ipaddress
 import json
@@ -18,8 +19,8 @@ from datetime import datetime, timedelta, timezone
 from functools import wraps
 from pathlib import Path
 from string import Formatter
-from typing import Any
-from urllib.parse import urljoin, urlparse, urldefrag
+from typing import Any, Callable
+from urllib.parse import parse_qs, urljoin, urlparse, urldefrag
 
 import psutil
 import requests
@@ -151,12 +152,6 @@ BROWSER_RECOVERY_MARKERS = (
     "connection refused",
     "devtoolsactiveport",
     "disconnected",
-    "just a moment",
-    "cloudflare",
-    "turnstile",
-    "cf-turnstile",
-    "checking your browser",
-    "attention required",
     "remote debugging",
     "timeout",
     "timed out",
@@ -217,6 +212,44 @@ SETTINGS_DEFAULTS = {
 
 DEFAULT_RESTOCK_TEMPLATE = "<b>{name}</b>\n库存：{stock}\n链接：{url}\n检测时间：{checked_at}"
 DEFAULT_SOLDOUT_TEMPLATE = "<b>{name}</b>\n已售罄\n最后库存：{stock}\n检测时间：{checked_at}"
+
+FETCH_STRATEGY_BROWSER = "browser"
+FETCH_STRATEGY_STATIC_HTTP = "static_http"
+FETCH_STRATEGY_GENERIC_PRICING_TABLE = "generic_pricing_table"
+FETCH_STRATEGY_WHMCS = "whmcs"
+FETCH_STRATEGY_MANUAL = "manual"
+FETCH_STRATEGY_WEBHOOK = "webhook"
+SUPPORTED_FETCH_STRATEGIES = {
+    FETCH_STRATEGY_BROWSER,
+    FETCH_STRATEGY_STATIC_HTTP,
+    FETCH_STRATEGY_GENERIC_PRICING_TABLE,
+    FETCH_STRATEGY_WHMCS,
+    FETCH_STRATEGY_MANUAL,
+    FETCH_STRATEGY_WEBHOOK,
+}
+STATIC_HTTP_FETCH_STRATEGIES = {
+    FETCH_STRATEGY_STATIC_HTTP,
+    FETCH_STRATEGY_GENERIC_PRICING_TABLE,
+    FETCH_STRATEGY_WHMCS,
+}
+EXTERNAL_INPUT_FETCH_STRATEGIES = {FETCH_STRATEGY_MANUAL, FETCH_STRATEGY_WEBHOOK}
+EXTERNAL_INPUT_PENDING_ERROR_KINDS = {"manual_pending", "webhook_pending"}
+STATIC_HTTP_USER_AGENT = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+    "Chrome/137.0 Safari/537.36"
+)
+PROTECTED_SOURCE_COOLDOWN_MINUTES = (1, 3, 10)
+WEBHOOK_TOKEN_BYTES = 32
+WEBHOOK_TOKEN_HINT_PREFIX = 6
+WEBHOOK_TOKEN_HINT_SUFFIX = 4
+SENSITIVE_SOURCE_CONFIG_KEYS = {
+    "ingest_token",
+    "webhook_token",
+    "webhook_secret",
+    "token",
+    "secret",
+    "hmac_secret",
+}
 
 STOCK_LABEL = (
     r"(?:库存|庫存|可用|可售|有货|有貨|现货|現貨|剩余|剩餘|余量|餘量|还剩|還剩|数量|數量|"
@@ -399,6 +432,22 @@ ORDERABLE_PATTERNS = [
     ),
     re.compile(r"(?:cart\.php\?a=add|/cart/add|/checkout|/order)", re.IGNORECASE),
 ]
+GENERIC_ORDERABLE_PATTERNS = [
+    re.compile(r"\b(?:order\s*now|buy\s*now|configure|available|add\s*to\s*cart)\b", re.IGNORECASE),
+    re.compile(r"(?:下单|下單|购买|購買)", re.IGNORECASE),
+]
+GENERIC_SOLD_OUT_PATTERNS = [
+    re.compile(r"\b(?:out\s*of\s*stock|sold\s*out|unavailable)\b", re.IGNORECASE),
+    re.compile(r"(?:缺货|缺貨|售罄|无货|無貨)", re.IGNORECASE),
+]
+WHMCS_ORDERABLE_PATTERNS = [
+    re.compile(
+        r"(?:cart\.php\?[^'\"<>]*(?:a=(?:add|confproduct)|pid=\d+)|configureproduct|"
+        r"\b(?:order\s*now|configure|continue|add\s*to\s*cart|checkout)\b)",
+        re.IGNORECASE,
+    ),
+]
+PRODUCT_CONTAINER_TAGS = ("tr", "article", "section", "li", "form", "div", "table")
 
 
 class SafeDict(dict):
@@ -422,6 +471,98 @@ def safe_format(template: str, values: dict[str, Any]) -> str:
 def normalize_task_group(value: Any) -> str:
     group_name = re.sub(r"\s+", " ", str(value or "").strip())
     return (group_name or DEFAULT_TASK_GROUP)[:48]
+
+
+def mapping_value(source: Any, key: str, default: Any = None) -> Any:
+    if isinstance(source, sqlite3.Row):
+        return source[key] if key in source.keys() else default
+    if isinstance(source, dict):
+        return source.get(key, default)
+    try:
+        return source[key]
+    except Exception:
+        return default
+
+
+def normalize_fetch_strategy(value: Any) -> str:
+    strategy = str(value or "").strip().lower().replace("-", "_")
+    if strategy in SUPPORTED_FETCH_STRATEGIES:
+        return strategy
+    return FETCH_STRATEGY_BROWSER
+
+
+def is_supported_fetch_strategy(value: Any) -> bool:
+    strategy = str(value or "").strip().lower().replace("-", "_")
+    return not strategy or strategy in SUPPORTED_FETCH_STRATEGIES
+
+
+def task_fetch_strategy(task: Any) -> str:
+    return normalize_fetch_strategy(mapping_value(task, "fetch_strategy", FETCH_STRATEGY_BROWSER))
+
+
+def scrub_source_config(value: dict[str, Any]) -> dict[str, Any]:
+    cleaned: dict[str, Any] = {}
+    for key, item in value.items():
+        key_text = str(key)
+        if key_text.strip().lower() in SENSITIVE_SOURCE_CONFIG_KEYS:
+            continue
+        cleaned[key_text] = item
+    return cleaned
+
+
+def normalize_source_config_text(value: Any) -> str:
+    if isinstance(value, dict):
+        return json.dumps(scrub_source_config(value), ensure_ascii=False, sort_keys=True)
+    text = str(value or "").strip()
+    if not text:
+        return "{}"
+    try:
+        parsed = json.loads(text)
+    except json.JSONDecodeError:
+        return "{}"
+    if not isinstance(parsed, dict):
+        return "{}"
+    return json.dumps(scrub_source_config(parsed), ensure_ascii=False, sort_keys=True)
+
+
+def task_blocked_count(task: Any) -> int:
+    try:
+        return max(0, int(mapping_value(task, "blocked_count", 0) or 0))
+    except (TypeError, ValueError):
+        return 0
+
+
+def protected_source_cooldown_minutes(blocked_count: int) -> int:
+    if blocked_count <= 1:
+        return PROTECTED_SOURCE_COOLDOWN_MINUTES[0]
+    if blocked_count == 2:
+        return PROTECTED_SOURCE_COOLDOWN_MINUTES[1]
+    return PROTECTED_SOURCE_COOLDOWN_MINUTES[2]
+
+
+def protected_source_cooldown_until(blocked_count: int, now: datetime | None = None) -> str:
+    now = now or now_utc()
+    cooldown_at = now + timedelta(minutes=protected_source_cooldown_minutes(blocked_count))
+    return cooldown_at.isoformat(timespec="seconds")
+
+
+def task_cooldown_until(task: Any) -> datetime | None:
+    return parse_iso_datetime(str(mapping_value(task, "cooldown_until", "") or ""))
+
+
+def is_task_in_protected_cooldown(task: Any, now: datetime | None = None) -> bool:
+    cooldown_at = task_cooldown_until(task)
+    if cooldown_at is None:
+        return False
+    now = now or now_utc()
+    return cooldown_at > now
+
+
+def protected_source_cooldown_message(cooldown_until: str) -> str:
+    return (
+        f"Cloudflare 受保护站点冷却中，冷却至 {cooldown_until}。"
+        "建议改用 Webhook、手动录入或替代公开页面。"
+    )
 
 
 def normalize_telegram_chat_ids(value: Any) -> list[str]:
@@ -598,12 +739,120 @@ def require_ajax_header(req) -> bool:
     return req.headers.get("X-Requested-With") == "XMLHttpRequest"
 
 
+def is_public_webhook_request() -> bool:
+    return request.endpoint == "webhook_ingest"
+
+
 def mask_secret(value: str) -> str:
     if not value:
         return ""
     if len(value) <= 8:
         return "*" * len(value)
     return f"{value[:4]}{'*' * (len(value) - 8)}{value[-4:]}"
+
+
+def webhook_endpoint_for_task(task_id: int) -> str:
+    return f"/api/webhooks/restock/{int(task_id)}"
+
+
+def generate_ingest_token() -> str:
+    return secrets.token_urlsafe(WEBHOOK_TOKEN_BYTES)
+
+
+def ingest_token_hint(token: str) -> str:
+    text = str(token or "")
+    if not text:
+        return ""
+    if len(text) <= WEBHOOK_TOKEN_HINT_PREFIX + WEBHOOK_TOKEN_HINT_SUFFIX:
+        return "*" * len(text)
+    return f"{text[:WEBHOOK_TOKEN_HINT_PREFIX]}...{text[-WEBHOOK_TOKEN_HINT_SUFFIX:]}"
+
+
+def hash_ingest_token(token: str) -> str:
+    token_text = str(token or "").strip()
+    if not token_text:
+        return ""
+    secret = str(SECRET_KEY or "").encode("utf-8")
+    return hmac.new(secret, token_text.encode("utf-8"), hashlib.sha256).hexdigest()
+
+
+def verify_ingest_token(task: Any, supplied_token: str) -> bool:
+    expected_hash = str(mapping_value(task, "ingest_token_hash", "") or "")
+    if not expected_hash:
+        return False
+    supplied_hash = hash_ingest_token(supplied_token)
+    return bool(supplied_hash) and secrets.compare_digest(expected_hash, supplied_hash)
+
+
+def extract_ingest_token_from_request(payload: dict[str, Any]) -> str:
+    auth_header = request.headers.get("Authorization", "").strip()
+    if auth_header.lower().startswith("bearer "):
+        return auth_header.split(None, 1)[1].strip()
+    for header_name in ("X-NOAFF-Token", "X-Webhook-Token", "X-Ingest-Token"):
+        token = request.headers.get(header_name, "").strip()
+        if token:
+            return token
+    for key in ("ingest_token", "webhook_token", "token"):
+        token = str(payload.get(key, "") or "").strip()
+        if token:
+            return token
+    return ""
+
+
+def parse_external_checked_at(value: Any) -> datetime:
+    if value in ("", None):
+        return now_utc()
+    if isinstance(value, (int, float)):
+        try:
+            return datetime.fromtimestamp(float(value), tz=timezone.utc)
+        except (OverflowError, OSError, ValueError):
+            return now_utc()
+    parsed = parse_iso_datetime(str(value))
+    return parsed or now_utc()
+
+
+def parse_external_stock_payload(payload: dict[str, Any]) -> tuple[int, str, datetime]:
+    raw_stock = payload.get("stock")
+    status = normalize_signal_text(payload.get("status", ""))
+    if raw_stock not in ("", None):
+        stock = parse_int_value(raw_stock)
+        if stock is None:
+            raise ValueError("stock 必须是非负整数。")
+    elif status in {
+        "instock",
+        "available",
+        "restocked",
+        "ok",
+        "true",
+        "yes",
+        "on",
+        "有货",
+        "有貨",
+        "可购买",
+        "可購買",
+        "可下单",
+        "可下單",
+    }:
+        stock = 1
+    elif status in {
+        "soldout",
+        "outofstock",
+        "unavailable",
+        "false",
+        "no",
+        "off",
+        "缺货",
+        "缺貨",
+        "售罄",
+        "无货",
+        "無貨",
+    }:
+        stock = 0
+    else:
+        raise ValueError("请提供 stock，或提供可识别的 status。")
+    detail = re.sub(r"\s+", " ", str(payload.get("detail", "") or "")).strip()
+    checked_at = parse_external_checked_at(payload.get("checked_at"))
+    return stock, detail[:1000], checked_at
 
 
 def run_short_command(args: list[str], timeout: int = 4) -> str:
@@ -975,6 +1224,8 @@ def initialize_database() -> None:
                 group_name TEXT NOT NULL DEFAULT '默认分组',
                 monitor_url TEXT NOT NULL,
                 target_keyword TEXT NOT NULL,
+                fetch_strategy TEXT NOT NULL DEFAULT 'browser',
+                source_config TEXT NOT NULL DEFAULT '{}',
                 restock_template TEXT NOT NULL,
                 soldout_template TEXT NOT NULL,
                 button_1_text TEXT DEFAULT '',
@@ -995,6 +1246,11 @@ def initialize_database() -> None:
                 message_id INTEGER,
                 last_checked_at TEXT,
                 last_error TEXT DEFAULT '',
+                blocked_count INTEGER NOT NULL DEFAULT 0,
+                last_blocked_at TEXT,
+                cooldown_until TEXT,
+                ingest_token_hash TEXT DEFAULT '',
+                ingest_token_hint TEXT DEFAULT '',
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
             );
@@ -1050,6 +1306,13 @@ def initialize_database() -> None:
         ensure_column(connection, "tasks", "source_snapshot", "TEXT DEFAULT ''")
         ensure_column(connection, "tasks", "source_last_sync_at", "TEXT")
         ensure_column(connection, "tasks", "message_ids", "TEXT DEFAULT ''")
+        ensure_column(connection, "tasks", "fetch_strategy", "TEXT NOT NULL DEFAULT 'browser'")
+        ensure_column(connection, "tasks", "source_config", "TEXT NOT NULL DEFAULT '{}'")
+        ensure_column(connection, "tasks", "blocked_count", "INTEGER NOT NULL DEFAULT 0")
+        ensure_column(connection, "tasks", "last_blocked_at", "TEXT")
+        ensure_column(connection, "tasks", "cooldown_until", "TEXT")
+        ensure_column(connection, "tasks", "ingest_token_hash", "TEXT DEFAULT ''")
+        ensure_column(connection, "tasks", "ingest_token_hint", "TEXT DEFAULT ''")
         ensure_column(connection, "merchant_sources", "group_name", "TEXT NOT NULL DEFAULT '默认分组'")
 
         existing_admin = connection.execute("SELECT id FROM admins LIMIT 1").fetchone()
@@ -1116,6 +1379,8 @@ def to_task_payload(row: sqlite3.Row) -> dict[str, Any]:
         "group_name": normalize_task_group(row["group_name"] if "group_name" in keys else ""),
         "monitor_url": row["monitor_url"],
         "target_keyword": row["target_keyword"],
+        "fetch_strategy": normalize_fetch_strategy(row["fetch_strategy"] if "fetch_strategy" in keys else ""),
+        "source_config": normalize_source_config_text(row["source_config"] if "source_config" in keys else "{}"),
         "restock_template": row["restock_template"],
         "soldout_template": row["soldout_template"],
         "button_1_text": row["button_1_text"] or "",
@@ -1141,6 +1406,11 @@ def to_task_payload(row: sqlite3.Row) -> dict[str, Any]:
             sanitize_telegram_error(row["last_error"] or ""),
             classify_browser_error(row["last_error"] or ""),
         ),
+        "blocked_count": int(row["blocked_count"] or 0) if "blocked_count" in keys else 0,
+        "last_blocked_at": (row["last_blocked_at"] or "") if "last_blocked_at" in keys else "",
+        "cooldown_until": (row["cooldown_until"] or "") if "cooldown_until" in keys else "",
+        "ingest_token_hint": (row["ingest_token_hint"] or "") if "ingest_token_hint" in keys else "",
+        "webhook_endpoint": webhook_endpoint_for_task(row["id"]) if normalize_fetch_strategy(row["fetch_strategy"] if "fetch_strategy" in keys else "") == FETCH_STRATEGY_WEBHOOK else "",
         "created_at": row["created_at"],
         "updated_at": row["updated_at"],
     }
@@ -1211,6 +1481,18 @@ def validate_task_payload(payload: dict[str, Any]) -> tuple[bool, str]:
             return False, f"{label}不能为空。"
     if not validate_http_url(str(payload["monitor_url"]).strip()):
         return False, "监控链接必须是有效的 http(s) 地址。"
+    if not is_supported_fetch_strategy(payload.get("fetch_strategy")):
+        return False, "采集方式不受支持。"
+    source_config = payload.get("source_config", {})
+    if isinstance(source_config, str) and source_config.strip():
+        try:
+            parsed_config = json.loads(source_config)
+        except json.JSONDecodeError:
+            return False, "采集配置必须是 JSON 对象。"
+        if not isinstance(parsed_config, dict):
+            return False, "采集配置必须是 JSON 对象。"
+    elif source_config not in ({}, "", None) and not isinstance(source_config, dict):
+        return False, "采集配置必须是 JSON 对象。"
     for pair in (("button_1_text", "button_1_url"), ("button_2_text", "button_2_url")):
         text = str(payload.get(pair[0], "")).strip()
         url = str(payload.get(pair[1], "")).strip()
@@ -1251,6 +1533,8 @@ def build_task_insert_values(payload: dict[str, Any], source_fields: dict[str, A
         normalize_task_group(payload.get("group_name")),
         str(payload["monitor_url"]).strip(),
         str(payload["target_keyword"]).strip(),
+        normalize_fetch_strategy(payload.get("fetch_strategy")),
+        normalize_source_config_text(payload.get("source_config", {})),
         str(payload["restock_template"]).strip() or DEFAULT_RESTOCK_TEMPLATE,
         str(payload["soldout_template"]).strip() or DEFAULT_SOLDOUT_TEMPLATE,
         str(payload.get("button_1_text", "")).strip(),
@@ -1275,16 +1559,30 @@ def insert_task_record(connection: sqlite3.Connection, payload: dict[str, Any], 
     cursor = connection.execute(
         """
         INSERT INTO tasks (
-            name, group_name, monitor_url, target_keyword, restock_template, soldout_template,
+            name, group_name, monitor_url, target_keyword, fetch_strategy, source_config, restock_template, soldout_template,
             button_1_text, button_1_url, button_2_text, button_2_url,
             source_item_id, source_item_key, source_source_url, source_source_name, source_item_url,
             source_snapshot, source_last_sync_at, enabled, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         build_task_insert_values(payload, source_fields, timestamp),
     )
     connection.commit()
     return int(cursor.lastrowid)
+
+
+def reset_task_ingest_token(connection: sqlite3.Connection, task_id: int, timestamp: str | None = None) -> tuple[str, str]:
+    token = generate_ingest_token()
+    hint = ingest_token_hint(token)
+    connection.execute(
+        """
+        UPDATE tasks
+        SET ingest_token_hash = ?, ingest_token_hint = ?, updated_at = ?
+        WHERE id = ?
+        """,
+        (hash_ingest_token(token), hint, timestamp or now_iso(), task_id),
+    )
+    return token, hint
 
 
 def create_task_from_catalog_item(
@@ -1349,11 +1647,33 @@ def sync_task_source_fields(
 
 
 @dataclass
+class FetchResult:
+    html: str
+    final_url: str
+    status_code: int = 0
+    error_kind: str = ""
+    detail: str = ""
+
+
+@dataclass
+class ExtractorResult:
+    stock: int | None
+    fragment: str
+    detail: str
+
+
+@dataclass
 class ScrapeResult:
     stock: int | None
     fragment: str
     detail: str
     used_test_browser: bool
+    error_kind: str = ""
+    cooldown_skip: bool = False
+
+
+class ProtectedSourceError(RuntimeError):
+    error_kind = "cloudflare_challenge"
 
 
 @dataclass
@@ -1406,6 +1726,8 @@ def summarize_task_error(message: str, kind: str = "") -> str:
     if not text:
         return ""
     if kind == "cloudflare_challenge":
+        if "冷却中" in text:
+            return text
         stripped = re.sub(r"^.*?[:：]\s*", "", text).strip()
         if stripped:
             return stripped
@@ -1609,7 +1931,7 @@ class BrowserHarness:
                         page_title = ""
                     if not looks_like_cloudflare_challenge(html_text, page_title, url):
                         return html_text
-                raise RuntimeError(f"{self.role} 浏览器被 Cloudflare 验证页拦截：{url}")
+                raise ProtectedSourceError(f"{self.role} 浏览器被 Cloudflare 验证页拦截：{url}")
             return html_text
 
     def rebuild(self, reason: str) -> None:
@@ -1679,6 +2001,111 @@ class BrowserHarness:
                 continue
 
 
+class BrowserFetcher:
+    def __init__(self, harness: BrowserHarness) -> None:
+        self.harness = harness
+
+    def fetch(self, url: str, timeout_seconds: int) -> FetchResult:
+        html_text = self.harness.fetch_html(url, timeout_seconds)
+        return FetchResult(html=html_text, final_url=url, detail="ok")
+
+    def rebuild(self, reason: str) -> None:
+        self.harness.rebuild(reason)
+
+
+class StaticHttpFetcher:
+    def __init__(self, session: requests.Session | None = None) -> None:
+        self.session = session or requests.Session()
+
+    def request_headers(self) -> dict[str, str]:
+        return {
+            "User-Agent": DEFAULT_BROWSER_USER_AGENT or STATIC_HTTP_USER_AGENT,
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+            "Cache-Control": "no-cache",
+        }
+
+    def fetch(self, url: str, timeout_seconds: int) -> FetchResult:
+        try:
+            response: Response = self.session.get(
+                url,
+                headers=self.request_headers(),
+                timeout=timeout_seconds,
+                allow_redirects=True,
+            )
+        except requests.Timeout:
+            return FetchResult(
+                html="",
+                final_url=url,
+                error_kind="timeout",
+                detail=f"static_http 请求超时：{url}",
+            )
+        except requests.RequestException as exc:
+            message = str(exc)
+            return FetchResult(
+                html="",
+                final_url=url,
+                error_kind=classify_browser_error(message) or "request_error",
+                detail=f"static_http 请求失败：{message}",
+            )
+
+        final_url = str(getattr(response, "url", "") or url)
+        status_code = int(getattr(response, "status_code", 0) or 0)
+        html_text = getattr(response, "text", "") or ""
+        if looks_like_cloudflare_challenge(html_text, extract_page_title(html_text), final_url):
+            return FetchResult(
+                html="",
+                final_url=final_url,
+                status_code=status_code,
+                error_kind="cloudflare_challenge",
+                detail=f"static_http 被 Cloudflare 验证页拦截：{final_url}",
+            )
+        if status_code in {403, 429} or status_code >= 500:
+            return FetchResult(
+                html="",
+                final_url=final_url,
+                status_code=status_code,
+                error_kind="http_error",
+                detail=f"static_http HTTP {status_code}：{final_url}",
+            )
+        if not html_text:
+            return FetchResult(
+                html="",
+                final_url=final_url,
+                status_code=status_code,
+                error_kind="empty_response",
+                detail=f"static_http 返回了空 HTML：{final_url}",
+            )
+        return FetchResult(html=html_text, final_url=final_url, status_code=status_code, detail="ok")
+
+
+class ExternalInputFetcher:
+    def __init__(self, strategy: str) -> None:
+        self.strategy = strategy
+
+    def fetch(self, url: str, timeout_seconds: int) -> FetchResult:
+        label = "手动录入" if self.strategy == FETCH_STRATEGY_MANUAL else "Webhook"
+        return FetchResult(
+            html="",
+            final_url=url,
+            error_kind=f"{self.strategy}_pending",
+            detail=f"{label}采集方式等待外部库存写入，当前轮询不会请求目标页面。",
+        )
+
+
+class FetcherSelector:
+    def __init__(self, static_http_fetcher: StaticHttpFetcher | None = None) -> None:
+        self.static_http_fetcher = static_http_fetcher or StaticHttpFetcher()
+
+    def select(self, task: Any, browser_harness: BrowserHarness) -> BrowserFetcher | StaticHttpFetcher | ExternalInputFetcher:
+        strategy = task_fetch_strategy(task)
+        if strategy in STATIC_HTTP_FETCH_STRATEGIES:
+            return self.static_http_fetcher
+        if strategy in EXTERNAL_INPUT_FETCH_STRATEGIES:
+            return ExternalInputFetcher(strategy)
+        return BrowserFetcher(browser_harness)
+
+
 class MonitoringEngine:
     def __init__(self, app: Flask) -> None:
         self.app = app
@@ -1690,6 +2117,7 @@ class MonitoringEngine:
         self.monitor_browser = BrowserHarness("monitor", DEFAULT_MONITOR_PORT, DEFAULT_HEADLESS, browser_binary)
         self.test_browser = BrowserHarness("test", DEFAULT_TEST_PORT, DEFAULT_HEADLESS, browser_binary)
         self.catalog_browser = BrowserHarness("catalog", DEFAULT_CATALOG_PORT, DEFAULT_HEADLESS, browser_binary)
+        self.fetcher_selector = FetcherSelector()
         self.last_cycle_started = ""
         self.last_cycle_finished = ""
         self.last_exception = ""
@@ -1818,22 +2246,74 @@ class MonitoringEngine:
             self.last_exception = error_message
 
     def scrape_task(self, task: sqlite3.Row, settings_payload: dict[str, Any], use_test_browser: bool) -> ScrapeResult:
+        if is_task_in_protected_cooldown(task):
+            cooldown_until = str(mapping_value(task, "cooldown_until", "") or "")
+            return ScrapeResult(
+                stock=None,
+                fragment="",
+                detail=protected_source_cooldown_message(cooldown_until),
+                used_test_browser=use_test_browser,
+                error_kind="cloudflare_challenge",
+                cooldown_skip=True,
+            )
+
         browser = self.test_browser if use_test_browser else self.monitor_browser
+        fetcher = self.fetcher_selector.select(task, browser)
+        monitor_url = str(mapping_value(task, "monitor_url", "") or "")
+        target_keyword = str(mapping_value(task, "target_keyword", "") or "")
         last_error = ""
+        last_error_kind = ""
         for attempt in range(3):
             try:
-                html_text = browser.fetch_html(task["monitor_url"], settings_payload["request_timeout_seconds"])
-                fragment = slice_fragment(html_text, task["target_keyword"])
-                stock, detail = parse_stock(fragment)
-                return ScrapeResult(stock=stock, fragment=fragment, detail=detail, used_test_browser=use_test_browser)
+                fetch_result = fetcher.fetch(monitor_url, settings_payload["request_timeout_seconds"])
+                if fetch_result.error_kind:
+                    return ScrapeResult(
+                        stock=None,
+                        fragment="",
+                        detail=fetch_result.detail or "抓取失败",
+                        used_test_browser=use_test_browser,
+                        error_kind=fetch_result.error_kind,
+                    )
+                if not fetch_result.html:
+                    return ScrapeResult(
+                        stock=None,
+                        fragment="",
+                        detail=fetch_result.detail or "抓取返回了空 HTML",
+                        used_test_browser=use_test_browser,
+                        error_kind="empty_response",
+                    )
+                extracted = extract_stock_for_strategy(
+                    task_fetch_strategy(task),
+                    fetch_result.html,
+                    target_keyword,
+                    task,
+                    fetch_result,
+                )
+                return ScrapeResult(
+                    stock=extracted.stock,
+                    fragment=extracted.fragment,
+                    detail=extracted.detail,
+                    used_test_browser=use_test_browser,
+                )
+            except ProtectedSourceError as exc:
+                last_error = str(exc)
+                last_error_kind = exc.error_kind
+                break
             except Exception as exc:
                 last_error = str(exc)
-                if should_auto_heal(exc) and attempt < 2:
-                    browser.rebuild(last_error)
+                last_error_kind = classify_browser_error(last_error)
+                if should_auto_heal(exc) and attempt < 2 and hasattr(fetcher, "rebuild"):
+                    fetcher.rebuild(last_error)
                     time.sleep(0.6)
                     continue
                 break
-        return ScrapeResult(stock=None, fragment="", detail=last_error or "抓取失败", used_test_browser=use_test_browser)
+        return ScrapeResult(
+            stock=None,
+            fragment="",
+            detail=last_error or "抓取失败",
+            used_test_browser=use_test_browser,
+            error_kind=last_error_kind,
+        )
 
     def import_merchant_source(
         self,
@@ -2085,28 +2565,65 @@ class MonitoringEngine:
                 errors.append(f"{chat_id}: {sanitize_telegram_error(str(exc), token)}")
         return edited, errors
 
-    def process_task(self, task: sqlite3.Row, settings_payload: dict[str, Any], use_test_browser: bool) -> bool:
-        result = self.scrape_task(task, settings_payload, use_test_browser)
-        if use_test_browser:
-            raise RuntimeError("测试推送应走 run_test_push 流程，不进入常规状态机。")
-
-        chat_ids = self.resolve_chat_ids(settings_payload)
-        if not chat_ids:
-            raise RuntimeError("请先配置 Telegram Bot Token 和至少一个 Chat ID。")
-
+    def apply_task_result(
+        self,
+        task: sqlite3.Row,
+        settings_payload: dict[str, Any],
+        result: ScrapeResult,
+        checked_at: datetime | None = None,
+    ) -> bool:
         with open_connection() as connection:
-            timestamp = now_iso()
+            checked_at = checked_at or now_utc()
+            timestamp = checked_at.isoformat(timespec="seconds")
             if result.stock is None:
-                connection.execute(
-                    """
-                    UPDATE tasks
-                    SET last_checked_at = ?, last_error = ?, updated_at = ?
-                    WHERE id = ?
-                    """,
-                    (timestamp, result.detail[:1000], timestamp, task["id"]),
-                )
+                if result.error_kind in EXTERNAL_INPUT_PENDING_ERROR_KINDS:
+                    connection.execute(
+                        """
+                        UPDATE tasks
+                        SET last_checked_at = ?, last_error = '', updated_at = ?
+                        WHERE id = ?
+                        """,
+                        (timestamp, timestamp, task["id"]),
+                    )
+                elif result.error_kind == "cloudflare_challenge" and not result.cooldown_skip:
+                    blocked_count = task_blocked_count(task) + 1
+                    cooldown_until = protected_source_cooldown_until(blocked_count, checked_at)
+                    connection.execute(
+                        """
+                        UPDATE tasks
+                        SET last_checked_at = ?,
+                            last_error = ?,
+                            blocked_count = ?,
+                            last_blocked_at = ?,
+                            cooldown_until = ?,
+                            updated_at = ?
+                        WHERE id = ?
+                        """,
+                        (
+                            timestamp,
+                            result.detail[:1000],
+                            blocked_count,
+                            timestamp,
+                            cooldown_until,
+                            timestamp,
+                            task["id"],
+                        ),
+                    )
+                else:
+                    connection.execute(
+                        """
+                        UPDATE tasks
+                        SET last_checked_at = ?, last_error = ?, updated_at = ?
+                        WHERE id = ?
+                        """,
+                        (timestamp, result.detail[:1000], timestamp, task["id"]),
+                    )
                 connection.commit()
                 return False
+
+            chat_ids = self.resolve_chat_ids(settings_payload)
+            if not settings_payload.get("telegram_bot_token") or not chat_ids:
+                raise RuntimeError("请先配置 Telegram Bot Token 和至少一个 Chat ID。")
 
             buttons = build_buttons(task)
             message_values = message_template_values(task, result.stock)
@@ -2191,6 +2708,9 @@ class MonitoringEngine:
                     message_ids = ?,
                     last_checked_at = ?,
                     last_error = ?,
+                    blocked_count = 0,
+                    last_blocked_at = NULL,
+                    cooldown_until = NULL,
                     updated_at = ?
                 WHERE id = ?
                 """,
@@ -2207,6 +2727,12 @@ class MonitoringEngine:
             )
             connection.commit()
         return True
+
+    def process_task(self, task: sqlite3.Row, settings_payload: dict[str, Any], use_test_browser: bool) -> bool:
+        result = self.scrape_task(task, settings_payload, use_test_browser)
+        if use_test_browser:
+            raise RuntimeError("测试推送应走 run_test_push 流程，不进入常规状态机。")
+        return self.apply_task_result(task, settings_payload, result)
 
     def run_test_push(self, task_id: int) -> dict[str, Any]:
         settings_payload = self.get_runtime_settings()
@@ -2288,7 +2814,11 @@ def message_template_values(task: sqlite3.Row, stock: int | None) -> dict[str, s
 
 
 def should_auto_heal(exc: Exception) -> bool:
+    if isinstance(exc, ProtectedSourceError):
+        return False
     message = str(exc).lower()
+    if classify_browser_error(message) == "cloudflare_challenge":
+        return False
     return any(token.lower() in message for token in BROWSER_RECOVERY_MARKERS)
 
 
@@ -2561,7 +3091,7 @@ def parse_stock(fragment: str) -> tuple[int | None, str]:
     )
     if text_match:
         snippet = cleaned[max(0, text_match.start() - 40) : min(len(cleaned), text_match.end() + 40)]
-        if not is_date_like_context(snippet):
+        if not is_date_like_context(snippet) and not has_sold_out_marker(snippet):
             return int(text_match.group(1)), append_restock_hint("通过文本降噪提取到库存数字。", restock_hint)
 
     reverse_text_match = re.search(
@@ -2571,7 +3101,7 @@ def parse_stock(fragment: str) -> tuple[int | None, str]:
     )
     if reverse_text_match:
         snippet = cleaned[max(0, reverse_text_match.start() - 40) : min(len(cleaned), reverse_text_match.end() + 40)]
-        if not is_date_like_context(snippet):
+        if not is_date_like_context(snippet) and not has_sold_out_marker(snippet):
             return int(reverse_text_match.group(1)), append_restock_hint("通过文本倒序提取到库存数字。", restock_hint)
 
     if has_sold_out_marker(cleaned):
@@ -2584,6 +3114,285 @@ def parse_stock(fragment: str) -> tuple[int | None, str]:
         return 0, f"检测到补货信息：{restock_hint}，但未发现明确库存数字。"
 
     return None, "未找到库存数字或售罄标记。"
+
+
+StockExtractor = Callable[[str, str, Any, FetchResult], ExtractorResult]
+
+
+def task_source_config(task: Any) -> dict[str, Any]:
+    value = mapping_value(task, "source_config", {})
+    if isinstance(value, dict):
+        return value
+    text = str(value or "").strip()
+    if not text:
+        return {}
+    try:
+        parsed = json.loads(text)
+    except json.JSONDecodeError:
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def find_html_text_position(html_text: str, keyword: str) -> int:
+    if not html_text or not keyword:
+        return -1
+    keyword_candidates = [
+        keyword,
+        html_module.escape(keyword, quote=False),
+        html_module.escape(keyword, quote=True),
+    ]
+    for candidate in dict.fromkeys(candidate for candidate in keyword_candidates if candidate):
+        match = re.search(re.escape(candidate), html_text, re.IGNORECASE)
+        if match:
+            return match.start()
+    return -1
+
+
+def bounded_html_slice(html_text: str, position: int, before: int = 80, after: int = 1400) -> str:
+    if not html_text:
+        return ""
+    if position < 0:
+        return html_text[: after + before]
+    start = max(0, position - before)
+    end = min(len(html_text), position + after)
+    return html_text[start:end]
+
+
+def iter_enclosing_html_blocks(html_text: str, position: int) -> list[tuple[str, int, int]]:
+    if position < 0:
+        return []
+    blocks: list[tuple[str, int, int]] = []
+    for tag_name in PRODUCT_CONTAINER_TAGS:
+        token_pattern = re.compile(rf"(?is)<\s*(/?)\s*{tag_name}\b[^>]*>")
+        stack: list[int] = []
+        for match in token_pattern.finditer(html_text):
+            closing = bool(match.group(1))
+            token = match.group(0)
+            if closing:
+                if not stack:
+                    continue
+                start = stack.pop()
+                end = match.end()
+                if start <= position < end:
+                    blocks.append((tag_name, start, end))
+                continue
+            if token.rstrip().endswith("/>"):
+                continue
+            stack.append(match.start())
+    return blocks
+
+
+def has_pattern_signal(fragment: str, cleaned_text: str, patterns: list[re.Pattern[str]]) -> bool:
+    haystack = f"{fragment}\n{cleaned_text}"
+    return any(pattern.search(haystack) for pattern in patterns)
+
+
+def has_generic_orderable_marker(fragment: str, cleaned_text: str) -> bool:
+    return has_orderable_marker(fragment, cleaned_text) or has_pattern_signal(
+        fragment,
+        cleaned_text,
+        GENERIC_ORDERABLE_PATTERNS,
+    )
+
+
+def has_generic_sold_out_marker(fragment: str, cleaned_text: str) -> bool:
+    lowered = cleaned_text.lower()
+    return has_sold_out_marker(cleaned_text) or any(pattern.search(lowered) for pattern in GENERIC_SOLD_OUT_PATTERNS)
+
+
+def has_generic_pricing_signal(fragment: str) -> bool:
+    stock, _ = parse_stock(fragment)
+    if stock is not None:
+        return True
+    cleaned = clean_fragment_text(fragment)
+    return has_generic_sold_out_marker(fragment, cleaned) or has_generic_orderable_marker(fragment, cleaned)
+
+
+def has_whmcs_orderable_marker(fragment: str, cleaned_text: str) -> bool:
+    return has_generic_orderable_marker(fragment, cleaned_text) or has_pattern_signal(
+        fragment,
+        cleaned_text,
+        WHMCS_ORDERABLE_PATTERNS,
+    )
+
+
+def has_whmcs_signal(fragment: str) -> bool:
+    stock, _ = parse_stock(fragment)
+    if stock is not None:
+        return True
+    cleaned = clean_fragment_text(fragment)
+    return has_generic_sold_out_marker(fragment, cleaned) or has_whmcs_orderable_marker(fragment, cleaned)
+
+
+def locate_html_fragment_around_position(
+    html_text: str,
+    position: int,
+    signal_checker: Callable[[str], bool],
+) -> str:
+    candidates: list[tuple[int, int, int, str]] = []
+    for tag_name, start, end in iter_enclosing_html_blocks(html_text, position):
+        fragment = html_text[start:end]
+        if signal_checker(fragment):
+            tag_priority = PRODUCT_CONTAINER_TAGS.index(tag_name)
+            candidates.append((end - start, tag_priority, start, fragment))
+    if candidates:
+        candidates.sort(key=lambda item: (item[0], item[1], item[2]))
+        return candidates[0][3]
+    return bounded_html_slice(html_text, position)
+
+
+def locate_product_fragment(
+    html_text: str,
+    target_keyword: str,
+    signal_checker: Callable[[str], bool],
+) -> str:
+    position = find_html_text_position(html_text, target_keyword)
+    if position >= 0:
+        return locate_html_fragment_around_position(html_text, position, signal_checker)
+    if target_keyword:
+        return slice_fragment(html_text, target_keyword)
+    return html_text
+
+
+def extractor_detail(prefix: str, detail: str) -> str:
+    detail = str(detail or "").strip()
+    if not detail:
+        return prefix
+    return f"{prefix}：{detail}"
+
+
+def default_stock_extractor(
+    html_text: str,
+    target_keyword: str,
+    task: Any,
+    fetch_result: FetchResult,
+) -> ExtractorResult:
+    fragment = slice_fragment(html_text, target_keyword)
+    stock, detail = parse_stock(fragment)
+    return ExtractorResult(stock=stock, fragment=fragment, detail=detail)
+
+
+def generic_pricing_table_extractor(
+    html_text: str,
+    target_keyword: str,
+    task: Any,
+    fetch_result: FetchResult,
+) -> ExtractorResult:
+    fragment = locate_product_fragment(html_text, target_keyword, has_generic_pricing_signal)
+    stock, detail = parse_stock(fragment)
+    if stock is not None:
+        return ExtractorResult(stock=stock, fragment=fragment, detail=extractor_detail("generic_pricing_table", detail))
+    cleaned = clean_fragment_text(fragment)
+    if has_generic_sold_out_marker(fragment, cleaned):
+        return ExtractorResult(stock=0, fragment=fragment, detail="generic_pricing_table：命中售罄标记。")
+    if has_generic_orderable_marker(fragment, cleaned):
+        return ExtractorResult(
+            stock=1,
+            fragment=fragment,
+            detail="generic_pricing_table：未显示库存数字，但命中可下单/购买入口，按有货处理。",
+        )
+    return ExtractorResult(stock=None, fragment=fragment, detail="generic_pricing_table：未找到库存数字或售罄标记。")
+
+
+def extract_query_int(url: str, key: str) -> int | None:
+    parsed = urlparse(html_module.unescape(str(url or "")))
+    values = parse_qs(parsed.query).get(key, [])
+    for value in values:
+        parsed_value = parse_int_value(value)
+        if parsed_value is not None:
+            return parsed_value
+    return None
+
+
+def whmcs_task_pid(task: Any, fetch_result: FetchResult) -> int | None:
+    source_config = task_source_config(task)
+    for key in ("pid", "product_id", "productId"):
+        parsed_value = parse_int_value(source_config.get(key))
+        if parsed_value is not None:
+            return parsed_value
+    urls = [
+        mapping_value(task, "monitor_url", ""),
+        getattr(fetch_result, "final_url", ""),
+    ]
+    for url in urls:
+        parsed_value = extract_query_int(str(url or ""), "pid")
+        if parsed_value is not None:
+            return parsed_value
+    return None
+
+
+def find_whmcs_pid_position(html_text: str, pid: int) -> int:
+    pid_text = re.escape(str(pid))
+    patterns = [
+        re.compile(rf"(?:\?|&amp;|&)pid={pid_text}\b", re.IGNORECASE),
+        re.compile(
+            rf"name\s*=\s*['\"]pid['\"][^>]*value\s*=\s*['\"]{pid_text}['\"]",
+            re.IGNORECASE | re.DOTALL,
+        ),
+        re.compile(
+            rf"value\s*=\s*['\"]{pid_text}['\"][^>]*name\s*=\s*['\"]pid['\"]",
+            re.IGNORECASE | re.DOTALL,
+        ),
+        re.compile(rf"\bpid\s*[:=]\s*['\"]?{pid_text}\b", re.IGNORECASE),
+    ]
+    for pattern in patterns:
+        match = pattern.search(html_text)
+        if match:
+            return match.start()
+    return -1
+
+
+def whmcs_product_fragment(
+    html_text: str,
+    target_keyword: str,
+    task: Any,
+    fetch_result: FetchResult,
+) -> str:
+    pid = whmcs_task_pid(task, fetch_result)
+    if pid is not None:
+        position = find_whmcs_pid_position(html_text, pid)
+        if position >= 0:
+            return locate_html_fragment_around_position(html_text, position, has_whmcs_signal)
+    return locate_product_fragment(html_text, target_keyword, has_whmcs_signal)
+
+
+def whmcs_extractor(
+    html_text: str,
+    target_keyword: str,
+    task: Any,
+    fetch_result: FetchResult,
+) -> ExtractorResult:
+    fragment = whmcs_product_fragment(html_text, target_keyword, task, fetch_result)
+    stock, detail = parse_stock(fragment)
+    if stock is not None:
+        return ExtractorResult(stock=stock, fragment=fragment, detail=extractor_detail("WHMCS", detail))
+    cleaned = clean_fragment_text(fragment)
+    if has_generic_sold_out_marker(fragment, cleaned):
+        return ExtractorResult(stock=0, fragment=fragment, detail="WHMCS：命中售罄标记。")
+    if has_whmcs_orderable_marker(fragment, cleaned):
+        return ExtractorResult(
+            stock=1,
+            fragment=fragment,
+            detail="WHMCS：未显示库存数字，但命中 WHMCS 下单入口，按有货处理。",
+        )
+    return ExtractorResult(stock=None, fragment=fragment, detail="WHMCS：未找到库存数字或售罄标记。")
+
+
+EXTRACTOR_REGISTRY: dict[str, StockExtractor] = {
+    FETCH_STRATEGY_GENERIC_PRICING_TABLE: generic_pricing_table_extractor,
+    FETCH_STRATEGY_WHMCS: whmcs_extractor,
+}
+
+
+def extract_stock_for_strategy(
+    strategy: str,
+    html_text: str,
+    target_keyword: str,
+    task: Any,
+    fetch_result: FetchResult,
+) -> ExtractorResult:
+    extractor = EXTRACTOR_REGISTRY.get(normalize_fetch_strategy(strategy), default_stock_extractor)
+    return extractor(html_text, target_keyword, task, fetch_result)
 
 
 DISCOVERY_SKIP_URL_PARTS = (
@@ -3133,6 +3942,8 @@ def make_app() -> Flask:
             return "", 204
         if request.endpoint == "static":
             return None
+        if is_public_webhook_request():
+            return None
         if not is_browser_user_agent(request.headers.get("User-Agent")):
             return ("Not Found", 404)
         if request.method in {"POST", "PUT", "PATCH", "DELETE"}:
@@ -3382,8 +4193,8 @@ def make_app() -> Flask:
             connection.execute(
                 """
                 UPDATE tasks
-                SET name = ?, group_name = ?, monitor_url = ?, target_keyword = ?, restock_template = ?,
-                    soldout_template = ?, button_1_text = ?, button_1_url = ?,
+                SET name = ?, group_name = ?, monitor_url = ?, target_keyword = ?, fetch_strategy = ?,
+                    source_config = ?, restock_template = ?, soldout_template = ?, button_1_text = ?, button_1_url = ?,
                     button_2_text = ?, button_2_url = ?, source_item_id = ?, source_item_key = ?,
                     source_source_url = ?, source_source_name = ?, source_item_url = ?, source_snapshot = ?,
                     source_last_sync_at = ?, enabled = ?, updated_at = ?
@@ -3394,6 +4205,8 @@ def make_app() -> Flask:
                     normalize_task_group(payload.get("group_name")),
                     str(payload["monitor_url"]).strip(),
                     str(payload["target_keyword"]).strip(),
+                    normalize_fetch_strategy(payload.get("fetch_strategy")),
+                    normalize_source_config_text(payload.get("source_config", {})),
                     str(payload["restock_template"]).strip() or DEFAULT_RESTOCK_TEMPLATE,
                     str(payload["soldout_template"]).strip() or DEFAULT_SOLDOUT_TEMPLATE,
                     str(payload.get("button_1_text", "")).strip(),
@@ -3500,6 +4313,127 @@ def make_app() -> Flask:
         except Exception as exc:
             return jsonify({"ok": False, "message": str(exc)}), 400
         return jsonify({"ok": True, "message": "测试消息已发送。", "result": result})
+
+    @app.route("/api/tasks/<int:task_id>/manual-stock", methods=["POST"])
+    @login_required
+    @limiter.limit(GENERAL_MUTATION_LIMIT)
+    def manual_stock_update(task_id: int):
+        payload = read_json()
+        try:
+            stock, detail, checked_at = parse_external_stock_payload(payload)
+        except ValueError as exc:
+            return jsonify({"ok": False, "message": str(exc)}), 400
+
+        with open_connection() as connection:
+            task = connection.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()
+        if not task:
+            return jsonify({"ok": False, "message": "任务不存在。"}), 404
+        if task_fetch_strategy(task) != FETCH_STRATEGY_MANUAL:
+            return jsonify({"ok": False, "message": "只有手动录入任务可以使用该接口。"}), 400
+
+        result = ScrapeResult(
+            stock=stock,
+            fragment="",
+            detail=detail or "手动录入库存状态。",
+            used_test_browser=False,
+        )
+        try:
+            processed = app.extensions["monitor_engine"].apply_task_result(
+                task,
+                app.extensions["monitor_engine"].get_runtime_settings(),
+                result,
+                checked_at,
+            )
+        except Exception as exc:
+            return jsonify({"ok": False, "message": str(exc)}), 400
+        log_activity("info", f"task:{task_id}", f"{task['name']} 已手动录入库存：{stock}。")
+        return jsonify(
+            {
+                "ok": True,
+                "message": "手动库存状态已写入。",
+                "result": {
+                    "task_id": task_id,
+                    "stock": stock,
+                    "processed": processed,
+                    "checked_at": checked_at.isoformat(timespec="seconds"),
+                },
+            }
+        )
+
+    @app.route("/api/tasks/<int:task_id>/webhook-token", methods=["POST"])
+    @login_required
+    @limiter.limit("8 per minute")
+    def reset_webhook_token(task_id: int):
+        read_json()
+        timestamp = now_iso()
+        with open_connection() as connection:
+            task = connection.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()
+            if not task:
+                return jsonify({"ok": False, "message": "任务不存在。"}), 404
+            if task_fetch_strategy(task) != FETCH_STRATEGY_WEBHOOK:
+                return jsonify({"ok": False, "message": "只有 Webhook 任务可以生成 ingest token。"}), 400
+            token, hint = reset_task_ingest_token(connection, task_id, timestamp)
+            connection.commit()
+        log_activity("info", f"task:{task_id}", f"{task['name']} Webhook ingest token 已重置。")
+        return jsonify(
+            {
+                "ok": True,
+                "message": "Webhook token 已重置，请只在外部推送端保存一次性明文。",
+                "result": {
+                    "task_id": task_id,
+                    "ingest_token": token,
+                    "ingest_token_hint": hint,
+                    "webhook_endpoint": webhook_endpoint_for_task(task_id),
+                },
+            }
+        )
+
+    @app.route("/api/webhooks/restock/<int:task_id>", methods=["POST"])
+    @limiter.limit("120 per minute")
+    def webhook_ingest(task_id: int):
+        payload = read_json()
+        supplied_token = extract_ingest_token_from_request(payload)
+        with open_connection() as connection:
+            task = connection.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()
+        if not task or task_fetch_strategy(task) != FETCH_STRATEGY_WEBHOOK:
+            return jsonify({"ok": False, "message": "Webhook 任务不存在。"}), 404
+        if not verify_ingest_token(task, supplied_token):
+            log_activity("warning", f"task:{task_id}", "Webhook ingest token 校验失败。")
+            return jsonify({"ok": False, "message": "Webhook token 无效。"}), 401
+
+        try:
+            stock, detail, checked_at = parse_external_stock_payload(payload)
+        except ValueError as exc:
+            return jsonify({"ok": False, "message": str(exc)}), 400
+
+        result = ScrapeResult(
+            stock=stock,
+            fragment="",
+            detail=detail or "Webhook 外部库存写入。",
+            used_test_browser=False,
+        )
+        try:
+            processed = app.extensions["monitor_engine"].apply_task_result(
+                task,
+                app.extensions["monitor_engine"].get_runtime_settings(),
+                result,
+                checked_at,
+            )
+        except Exception as exc:
+            return jsonify({"ok": False, "message": str(exc)}), 400
+        log_activity("info", f"task:{task_id}", f"{task['name']} 已接收 Webhook 库存：{stock}。")
+        return jsonify(
+            {
+                "ok": True,
+                "message": "Webhook 库存状态已写入。",
+                "result": {
+                    "task_id": task_id,
+                    "stock": stock,
+                    "processed": processed,
+                    "checked_at": checked_at.isoformat(timespec="seconds"),
+                },
+            }
+        )
 
     @app.route("/api/merchant/import", methods=["POST"])
     @login_required

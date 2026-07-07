@@ -95,6 +95,7 @@
         taskGroupCustom: document.getElementById("task-group-custom"),
         taskUrl: document.getElementById("task-url"),
         taskKeyword: document.getElementById("task-keyword"),
+        taskFetchStrategy: document.getElementById("task-fetch-strategy"),
         taskRestock: document.getElementById("task-restock"),
         taskSoldout: document.getElementById("task-soldout"),
         taskButton1Text: document.getElementById("task-button-1-text"),
@@ -117,6 +118,28 @@
         restock: "<b>{name}</b>\n库存：{stock}\n链接：{url}\n检测时间：{checked_at}",
         soldout: "<b>{name}</b>\n已售罄\n最后库存：{stock}\n检测时间：{checked_at}"
     };
+
+    function normalizeFetchStrategy(value) {
+        const strategy = String(value || "").trim().toLowerCase().replaceAll("-", "_");
+        return strategy || "browser";
+    }
+
+    function fetchStrategyLabel(value) {
+        switch (normalizeFetchStrategy(value)) {
+            case "static_http":
+                return "静态 HTTP";
+            case "generic_pricing_table":
+                return "通用价格页";
+            case "whmcs":
+                return "WHMCS";
+            case "manual":
+                return "手动录入";
+            case "webhook":
+                return "Webhook";
+            default:
+                return "浏览器渲染";
+        }
+    }
 
     function errorKindLabel(kind) {
         switch (kind) {
@@ -146,6 +169,10 @@
 
     function formatTaskLogLine(task, logHint) {
         if (task.last_error) {
+            const protectedNotice = protectedSourceNoticeText(task);
+            if (protectedNotice) {
+                return `> ${protectedNotice}`;
+            }
             const label = errorKindLabel(task.last_error_kind);
             const detail = task.last_error_detail || task.last_error;
             return label ? `> ${label}${detail ? `：${detail}` : ""}` : `> ${detail}`;
@@ -308,6 +335,22 @@
         return parsed.toLocaleString("zh-CN", { hour12: false });
     }
 
+    function protectedSourceNoticeText(task) {
+        if (task.last_error_kind !== "cloudflare_challenge" || !task.cooldown_until) {
+            return "";
+        }
+        return `受保护站点 · 冷却至 ${formatTime(task.cooldown_until)} · 建议改用 Webhook、手动录入或替代公开页面`;
+    }
+
+    function webhookMetaText(task) {
+        if (normalizeFetchStrategy(task.fetch_strategy) !== "webhook") {
+            return "";
+        }
+        const endpoint = task.webhook_endpoint || "";
+        const hint = task.ingest_token_hint || "未生成";
+        return `Webhook: ${endpoint || "-"} · token ${hint}`;
+    }
+
     function showToast(message, type = "success") {
         const toast = document.createElement("div");
         toast.className = `toast ${type}`;
@@ -383,13 +426,16 @@
         }
 
         const [statusClass, statusText, logHint] = statusMeta(task);
-        const stockText = task.last_stock === null || task.last_stock === undefined ? "Hidden" : String(task.last_stock);
+        const stockText = task.last_stock === null || task.last_stock === undefined ? "-" : String(task.last_stock);
         const lastChecked = task.last_checked_at ? formatTime(task.last_checked_at) : "尚未检查";
-        const actionLabel = task.enabled ? "停用节点" : "启用节点";
+        const actionLabel = task.enabled ? "停用任务" : "启用任务";
         const sourceLine = task.source_source_name
             ? `来源：${task.source_source_name}${task.source_item_url ? ` · ${task.source_item_url}` : ""}`
             : "";
+        const fetchStrategyText = fetchStrategyLabel(task.fetch_strategy);
         const logLine = formatTaskLogLine(task, logHint);
+        const protectedNotice = protectedSourceNoticeText(task);
+        const webhookMeta = webhookMetaText(task);
 
         const statusBadge = card.querySelector("[data-task-status]");
         if (statusBadge) {
@@ -417,7 +463,11 @@
 
         const keyword = card.querySelector("[data-task-keyword-text]");
         if (keyword) {
-            keyword.textContent = `切片狙击: ${task.target_keyword || ""}`;
+            keyword.textContent = `关键词: ${task.target_keyword || ""}`;
+        }
+        const fetchStrategy = card.querySelector("[data-task-fetch-strategy]");
+        if (fetchStrategy) {
+            fetchStrategy.textContent = fetchStrategyText;
         }
 
         const terminal = card.querySelector("[data-task-terminal]");
@@ -435,6 +485,31 @@
         if (log) {
             log.textContent = logLine;
             log.className = `truncate-two font-mono text-sm leading-relaxed ${task.last_error ? errorKindTone(task.last_error_kind) : "animate-pulse-soft text-emerald-400"}`;
+        }
+        const protectedNoticeEl = card.querySelector("[data-task-protected-notice]");
+        if (protectedNoticeEl) {
+            protectedNoticeEl.textContent = protectedNotice;
+            protectedNoticeEl.classList.toggle("hidden", !protectedNotice);
+        }
+        const webhookMetaEl = card.querySelector("[data-task-webhook-meta]");
+        if (webhookMetaEl) {
+            webhookMetaEl.textContent = webhookMeta;
+            webhookMetaEl.classList.toggle("hidden", !webhookMeta);
+        }
+        const manualActions = card.querySelector("[data-task-manual-actions]");
+        if (manualActions) {
+            manualActions.classList.toggle("hidden", normalizeFetchStrategy(task.fetch_strategy) !== "manual");
+        }
+        const webhookAction = card.querySelector("[data-task-webhook-action]");
+        if (webhookAction) {
+            webhookAction.classList.toggle("hidden", normalizeFetchStrategy(task.fetch_strategy) !== "webhook");
+        }
+        const testAction = card.querySelector("[data-task-test-action]");
+        if (testAction) {
+            testAction.classList.toggle(
+                "hidden",
+                ["manual", "webhook"].includes(normalizeFetchStrategy(task.fetch_strategy))
+            );
         }
 
         const meta = card.querySelector("[data-task-meta]");
@@ -555,7 +630,7 @@
         els.navSettings.classList.toggle("nav-item-active", !tasks);
         els.mobileNavTasks?.classList.toggle("nav-item-active", tasks);
         els.mobileNavSettings?.classList.toggle("nav-item-active", !tasks);
-        els.viewTitle.textContent = tasks ? "监控任务池" : "全局配置";
+        els.viewTitle.textContent = tasks ? "监控任务" : "系统设置";
     }
 
     function openTaskModal(task = null) {
@@ -567,6 +642,7 @@
             setTaskGroupSelection(task.group_name, [task.group_name]);
             els.taskUrl.value = task.monitor_url || "";
             els.taskKeyword.value = task.target_keyword || "";
+            els.taskFetchStrategy.value = normalizeFetchStrategy(task.fetch_strategy);
             els.taskRestock.value = task.restock_template || defaultTemplates.restock;
             els.taskSoldout.value = task.soldout_template || defaultTemplates.soldout;
             els.taskButton1Text.value = task.button_1_text || "";
@@ -577,7 +653,7 @@
             els.taskSubmitButton.textContent = "更新节点";
         } else {
             resetTaskForm();
-            els.taskModalTitle.textContent = "新增监控节点";
+            els.taskModalTitle.textContent = "新增任务";
             els.taskSubmitButton.textContent = "保存节点";
         }
         els.taskModal.classList.remove("hidden");
@@ -601,6 +677,7 @@
         }
         els.taskRestock.value = defaultTemplates.restock;
         els.taskSoldout.value = defaultTemplates.soldout;
+        els.taskFetchStrategy.value = "browser";
         els.taskEnabled.checked = true;
         updateGroupVisibility(els.taskGroup, els.taskGroupCustomWrap, els.taskGroupCustom);
     }
@@ -810,7 +887,7 @@
                     const lastSync = source.last_sync_at ? formatTime(source.last_sync_at) : "尚未同步";
                     const lastError = source.last_error ? `<p class="mt-2 truncate-two text-sm text-rose-300">${escapeHtml(source.last_error)}</p>` : "";
                     return `
-                        <article class="rounded-xl border border-slate-800/80 bg-slate-950/50 p-4">
+                        <article class="merchant-card rounded-xl border border-slate-800/80 bg-slate-950/50 p-4">
                             <div class="flex flex-wrap items-start justify-between gap-3">
                                 <div class="min-w-0">
                                     <h4 class="truncate text-sm font-bold text-white">${escapeHtml(source.source_name || source.source_url)}</h4>
@@ -852,7 +929,7 @@
                     const actionLabel = linkedTask ? "编辑任务" : "生成任务";
                     const actionName = linkedTask ? "open-task" : "promote-item";
                     return `
-                        <article class="rounded-xl border border-slate-800/80 bg-slate-950/50 p-4">
+                        <article class="merchant-card rounded-xl border border-slate-800/80 bg-slate-950/50 p-4">
                             <div class="flex flex-wrap items-start justify-between gap-3">
                                 <div class="min-w-0">
                                     <h4 class="truncate text-sm font-bold text-white">${escapeHtml(item.title)}</h4>
@@ -916,10 +993,10 @@
     }
 
     function statusMeta(task) {
-        if (!task.enabled) return ["status-disabled", "● DISABLED", "停用中"];
-        if (task.last_state === "in_stock") return ["status-in-stock", "● IN STOCK", "补货监控命中"];
-        if (task.last_state === "sold_out") return ["status-sold-out", "○ OUT OF STOCK", "持续缺货中"];
-        return ["status-unknown", "◌ UNKNOWN", "等待首次识别"];
+        if (!task.enabled) return ["status-disabled", "DISABLED", "停用中"];
+        if (task.last_state === "in_stock") return ["status-in-stock", "IN STOCK", "补货监控命中"];
+        if (task.last_state === "sold_out") return ["status-sold-out", "OUT OF STOCK", "持续缺货中"];
+        return ["status-unknown", "UNKNOWN", "等待首次识别"];
     }
 
     function groupTasks(tasks) {
@@ -937,12 +1014,15 @@
     function renderTaskCards(tasks, animateCards) {
         return tasks.map((task) => {
             const [statusClass, statusText, logHint] = statusMeta(task);
-            const stockText = task.last_stock === null || task.last_stock === undefined ? "Hidden" : String(task.last_stock);
+            const stockText = task.last_stock === null || task.last_stock === undefined ? "-" : String(task.last_stock);
             const logMessage = task.last_error
                 ? escapeHtml(formatTaskLogLine(task, logHint))
                 : `> ${escapeHtml(logHint)} ${escapeHtml(formatTime(task.last_checked_at))}`;
             const lastChecked = task.last_checked_at ? escapeHtml(formatTime(task.last_checked_at)) : "尚未检查";
-            const actionLabel = task.enabled ? "停用节点" : "启用节点";
+            const actionLabel = task.enabled ? "停用任务" : "启用任务";
+            const protectedNotice = protectedSourceNoticeText(task);
+            const webhookMeta = webhookMetaText(task);
+            const normalizedStrategy = normalizeFetchStrategy(task.fetch_strategy);
             const cardClass = animateCards ? "task-card reveal" : "task-card";
             return `
                 <article class="${cardClass}" data-task-id="${task.id}">
@@ -960,29 +1040,39 @@
                         <svg class="mr-1.5 h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/>
                         </svg>
-                        <span data-task-keyword-text>切片狙击: ${escapeHtml(task.target_keyword)}</span>
+                        <span data-task-keyword-text>关键词: ${escapeHtml(task.target_keyword)}</span>
+                        <span class="ml-2 rounded border border-slate-700/70 bg-slate-950/70 px-2 py-0.5 text-[10px] text-slate-400" data-task-fetch-strategy>${escapeHtml(fetchStrategyLabel(task.fetch_strategy))}</span>
                     </div>
 
                     <div class="terminal-box mb-5 flex flex-1 flex-col justify-center p-4 ${task.last_error ? "" : "opacity-95"}" data-task-terminal>
                         <div class="mb-3 flex items-center justify-between border-b border-slate-800/80 pb-2">
-                            <span class="text-[10px] font-bold uppercase tracking-widest text-slate-500">Engine Log</span>
+                            <span class="text-[10px] font-bold uppercase tracking-widest text-slate-500">任务记录</span>
                             <span class="rounded border border-slate-700 bg-slate-800/80 px-2 py-0.5 font-mono text-[10px] text-slate-400">
-                                库存嗅探: <span class="${task.last_stock > 0 ? "text-emerald-400" : "text-slate-300"} font-bold" data-task-stock>${escapeHtml(stockText)}</span>
+                                库存: <span class="${task.last_stock > 0 ? "text-emerald-400" : "text-slate-300"} font-bold" data-task-stock>${escapeHtml(stockText)}</span>
                             </span>
                         </div>
             <p class="truncate-two font-mono text-sm leading-relaxed ${task.last_error ? errorKindTone(task.last_error_kind) : "animate-pulse-soft text-emerald-400"}" data-task-log>${logMessage}</p>
+                        <p class="mt-3 rounded border border-amber-500/20 bg-amber-500/10 px-3 py-2 text-xs leading-5 text-amber-200 ${protectedNotice ? "" : "hidden"}" data-task-protected-notice>${escapeHtml(protectedNotice)}</p>
+                        <p class="mt-3 rounded border border-cyan-500/20 bg-cyan-500/10 px-3 py-2 font-mono text-[11px] leading-5 text-cyan-200 ${webhookMeta ? "" : "hidden"}" data-task-webhook-meta>${escapeHtml(webhookMeta)}</p>
                         <div class="mt-3 font-mono text-[11px] text-slate-600" data-task-meta>
                             message_id: ${task.message_id ?? "-"} · checked: ${lastChecked}
                         </div>
                     </div>
 
-                    <div class="mt-auto flex items-center justify-between border-t border-slate-700/60 pt-4">
-                        <button type="button" class="ghost-button !min-h-[2.4rem] !rounded-lg !px-4 !py-2 text-[13px] font-bold text-indigo-300" data-action="test">
-                            <svg class="mr-1.5 h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8"/>
-                            </svg>
-                            探针测试
-                        </button>
+                    <div class="task-actions mt-auto flex flex-col gap-3 border-t border-slate-700/60 pt-4">
+                        <div class="flex flex-wrap items-center gap-2">
+                            <button type="button" class="ghost-button !min-h-[2.4rem] !rounded-lg !px-4 !py-2 text-[13px] font-bold text-indigo-300 ${["manual", "webhook"].includes(normalizedStrategy) ? "hidden" : ""}" data-action="test" data-task-test-action>
+                                <svg class="mr-1.5 h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8"/>
+                                </svg>
+                                立即测试
+                            </button>
+                            <div class="flex gap-1 ${normalizedStrategy === "manual" ? "" : "hidden"}" data-task-manual-actions>
+                                <button type="button" class="ghost-button !min-h-9 !rounded-lg !px-3 !py-2 text-[12px] text-emerald-300" data-action="manual-in-stock">有货</button>
+                                <button type="button" class="ghost-button !min-h-9 !rounded-lg !px-3 !py-2 text-[12px] text-rose-300" data-action="manual-sold-out">售罄</button>
+                            </div>
+                            <button type="button" class="ghost-button !min-h-9 !rounded-lg !px-3 !py-2 text-[12px] text-cyan-300 ${normalizedStrategy === "webhook" ? "" : "hidden"}" data-action="webhook-token" data-task-webhook-action>重置 Token</button>
+                        </div>
                         <div class="flex space-x-1">
                             <button type="button" class="icon-button !h-9 !w-9" title="${escapeHtml(actionLabel)}" aria-label="${escapeHtml(actionLabel)}" data-action="toggle" data-task-toggle>
                                 <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -1015,8 +1105,8 @@
                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/>
                     </svg>
                 </div>
-                <p class="mb-1 font-bold text-slate-300">新增监控节点</p>
-                <p class="px-4 text-center text-[13px] text-slate-500">填入商品链接与解析参数，立即开启 24H 自动化嗅探。</p>
+                <p class="mb-1 font-bold text-slate-300">新增任务</p>
+                <p class="px-4 text-center text-[13px] text-slate-500">填写商品链接、关键词与采集方式。</p>
             </button>
         `;
     }
@@ -1031,6 +1121,8 @@
                 task.name || "",
                 task.monitor_url || "",
                 task.target_keyword || "",
+                task.fetch_strategy || "",
+                task.source_config || "",
                 task.restock_template || "",
                 task.soldout_template || "",
                 task.button_1_text || "",
@@ -1039,7 +1131,9 @@
                 task.button_2_url || "",
                 task.source_source_name || "",
                 task.source_item_url || "",
-                task.source_source_url || ""
+                task.source_source_url || "",
+                task.webhook_endpoint || "",
+                task.ingest_token_hint || ""
             ].join(":"))
             .join("|");
         const nextTaskStateSignature = tasks
@@ -1048,8 +1142,12 @@
                 task.last_state || "",
                 task.last_stock ?? "",
                 task.last_error || "",
+                task.last_error_kind || "",
                 task.message_id ?? "",
-                task.last_checked_at || ""
+                task.last_checked_at || "",
+                task.blocked_count ?? "",
+                task.last_blocked_at || "",
+                task.cooldown_until || ""
             ].join(":"))
             .join("|");
         const animateCards = initial || !tasksRendered || taskIdsSignature !== nextTaskIdsSignature;
@@ -1157,6 +1255,8 @@
             group_name: groupName,
             monitor_url: els.taskUrl.value.trim(),
             target_keyword: els.taskKeyword.value.trim(),
+            fetch_strategy: normalizeFetchStrategy(els.taskFetchStrategy.value),
+            source_config: {},
             restock_template: els.taskRestock.value.trim(),
             soldout_template: els.taskSoldout.value.trim(),
             button_1_text: els.taskButton1Text.value.trim(),
@@ -1329,6 +1429,27 @@
                     body: JSON.stringify({})
                 });
                 showToast(`测试消息已发送，库存识别：${data.result?.stock ?? "未知"}`);
+            } else if (action === "manual-in-stock" || action === "manual-sold-out") {
+                const stock = action === "manual-in-stock" ? 1 : 0;
+                await apiFetch(`/api/tasks/${taskId}/manual-stock`, {
+                    method: "POST",
+                    body: JSON.stringify({
+                        stock,
+                        detail: action === "manual-in-stock" ? "后台手动标记有货" : "后台手动标记售罄"
+                    })
+                });
+                showToast(stock > 0 ? "已手动标记有货。" : "已手动标记售罄。");
+            } else if (action === "webhook-token") {
+                const data = await apiFetch(`/api/tasks/${taskId}/webhook-token`, {
+                    method: "POST",
+                    body: JSON.stringify({})
+                });
+                const token = data.result?.ingest_token || "";
+                const copied = await copyText(token);
+                if (!copied && token) {
+                    window.prompt("Webhook token", token);
+                }
+                showToast(copied ? "Webhook token 已重置并复制。" : "Webhook token 已重置。");
             } else if (action === "toggle") {
                 await apiFetch(`/api/tasks/${taskId}/toggle`, {
                     method: "POST",
