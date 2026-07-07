@@ -124,6 +124,8 @@ class PortalAppTestCase(unittest.TestCase):
             connection = sqlite3.connect(legacy_db_path)
             try:
                 columns = {row[1] for row in connection.execute("PRAGMA table_info(tasks)").fetchall()}
+                node_columns = {row[1] for row in connection.execute("PRAGMA table_info(task_group_nodes)").fetchall()}
+                tables = {row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type = 'table'").fetchall()}
                 row = connection.execute(
                     """
                     SELECT dflt_value
@@ -136,6 +138,10 @@ class PortalAppTestCase(unittest.TestCase):
 
             self.assertIn("fetch_strategy", columns)
             self.assertIn("subgroup_name", columns)
+            self.assertIn("sort_order", columns)
+            self.assertIn("sort_order", node_columns)
+            self.assertIn("task_groups", tables)
+            self.assertIn("task_group_nodes", tables)
             self.assertIn("source_config", columns)
             self.assertIn("blocked_count", columns)
             self.assertIn("last_blocked_at", columns)
@@ -835,6 +841,154 @@ class PortalAppTestCase(unittest.TestCase):
 
         self.assertEqual(remaining_tasks, 0)
         self.assertEqual(source_group, app_module.DEFAULT_TASK_GROUP)
+
+    def test_task_subgroup_nodes_can_be_created_renamed_and_bulk_deleted(self) -> None:
+        _, headers = self.login()
+        timestamp = app_module.now_iso()
+        with app_module.open_connection() as connection:
+            connection.execute(
+                """
+                INSERT INTO tasks (
+                    name, group_name, subgroup_name, monitor_url, target_keyword,
+                    restock_template, soldout_template, enabled, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
+                """,
+                (
+                    "HK WEE",
+                    "DMIT",
+                    "香港 / Tier 1 / AS3",
+                    "https://example.com/hk-wee",
+                    "HKG.AS3.T1.WEE",
+                    "{name} restock",
+                    "{name} soldout",
+                    timestamp,
+                    timestamp,
+                ),
+            )
+            connection.commit()
+
+        create = self.client.post(
+            f"{app_module.PORTAL_PATH}/api/task-subgroups",
+            headers=headers,
+            base_url=BASE_URL,
+            json={"group_name": "DMIT", "parent_subgroup_name": "香港 / Tier 1", "name": "AS4"},
+        )
+        self.assertEqual(create.status_code, 200)
+        self.assertEqual(create.get_json()["result"]["subgroup_name"], "香港 / Tier 1 / AS4")
+
+        rename = self.client.post(
+            f"{app_module.PORTAL_PATH}/api/task-subgroups/rename",
+            headers=headers,
+            base_url=BASE_URL,
+            json={"group_name": "DMIT", "old_subgroup_name": "香港 / Tier 1", "new_name": "HK Tier 1"},
+        )
+        self.assertEqual(rename.status_code, 200)
+        self.assertEqual(rename.get_json()["result"]["new_subgroup_name"], "香港 / HK Tier 1")
+
+        snapshot = self.client.get(
+            f"{app_module.PORTAL_PATH}/api/snapshot",
+            headers=self.browser_headers(),
+            base_url=BASE_URL,
+        ).get_json()
+        self.assertEqual(snapshot["tasks"][0]["subgroup_name"], "香港 / HK Tier 1 / AS3")
+        self.assertIn(
+            "香港 / HK Tier 1 / AS4",
+            {node["subgroup_name"] for node in snapshot["task_group_nodes"]},
+        )
+
+        bulk_delete = self.client.post(
+            f"{app_module.PORTAL_PATH}/api/task-subgroups/bulk-delete",
+            headers=headers,
+            base_url=BASE_URL,
+            json={"group_name": "DMIT", "subgroup_names": ["香港 / HK Tier 1"]},
+        )
+        self.assertEqual(bulk_delete.status_code, 200)
+        self.assertEqual(bulk_delete.get_json()["result"]["task_count"], 1)
+
+        with app_module.open_connection() as connection:
+            remaining_tasks = connection.execute("SELECT COUNT(*) FROM tasks").fetchone()[0]
+            remaining_nodes = connection.execute("SELECT COUNT(*) FROM task_group_nodes").fetchone()[0]
+        self.assertEqual(remaining_tasks, 0)
+        self.assertEqual(remaining_nodes, 0)
+
+    def test_task_browser_reorder_endpoints_persist_sort_order(self) -> None:
+        _, headers = self.login()
+        timestamp = app_module.now_iso()
+        with app_module.open_connection() as connection:
+            task_ids = []
+            for name, group_name, subgroup_name in (
+                ("HK WEE", "IDC-A", "香港"),
+                ("HK TINY", "IDC-A", "洛杉矶"),
+                ("SG MINI", "IDC-B", "新加坡"),
+            ):
+                cursor = connection.execute(
+                    """
+                    INSERT INTO tasks (
+                        name, group_name, subgroup_name, monitor_url, target_keyword,
+                        restock_template, soldout_template, enabled, created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
+                    """,
+                    (
+                        name,
+                        group_name,
+                        subgroup_name,
+                        f"https://example.com/{name.lower().replace(' ', '-')}",
+                        name,
+                        "{name} restock",
+                        "{name} soldout",
+                        timestamp,
+                        timestamp,
+                    ),
+                )
+                task_ids.append(cursor.lastrowid)
+            connection.commit()
+
+        group_reorder = self.client.post(
+            f"{app_module.PORTAL_PATH}/api/task-groups/reorder",
+            headers=headers,
+            base_url=BASE_URL,
+            json={"group_names": ["IDC-B", "IDC-A"]},
+        )
+        self.assertEqual(group_reorder.status_code, 200)
+        self.assertEqual(group_reorder.get_json()["result"]["group_count"], 2)
+
+        subgroup_reorder = self.client.post(
+            f"{app_module.PORTAL_PATH}/api/task-subgroups/reorder",
+            headers=headers,
+            base_url=BASE_URL,
+            json={"group_name": "IDC-A", "subgroup_names": ["洛杉矶", "香港"]},
+        )
+        self.assertEqual(subgroup_reorder.status_code, 200)
+        self.assertEqual(subgroup_reorder.get_json()["result"]["subgroup_count"], 2)
+
+        task_reorder = self.client.post(
+            f"{app_module.PORTAL_PATH}/api/tasks/reorder",
+            headers=headers,
+            base_url=BASE_URL,
+            json={"task_ids": [task_ids[1], task_ids[0]]},
+        )
+        self.assertEqual(task_reorder.status_code, 200)
+        self.assertEqual(task_reorder.get_json()["result"]["task_count"], 2)
+
+        snapshot = self.client.get(
+            f"{app_module.PORTAL_PATH}/api/snapshot",
+            headers=self.browser_headers(),
+            base_url=BASE_URL,
+        ).get_json()
+        group_orders = {group["group_name"]: group["sort_order"] for group in snapshot["task_groups"]}
+        node_orders = {
+            node["subgroup_name"]: node["sort_order"]
+            for node in snapshot["task_group_nodes"]
+            if node["group_name"] == "IDC-A"
+        }
+        task_orders = {task["id"]: task["sort_order"] for task in snapshot["tasks"]}
+
+        self.assertEqual(group_orders["IDC-B"], 100)
+        self.assertEqual(group_orders["IDC-A"], 200)
+        self.assertEqual(node_orders["洛杉矶"], 100)
+        self.assertEqual(node_orders["香港"], 200)
+        self.assertEqual(task_orders[task_ids[1]], 100)
+        self.assertEqual(task_orders[task_ids[0]], 200)
 
     def test_merchant_item_promote_creates_linked_task(self) -> None:
         _, headers = self.login()
@@ -3144,6 +3298,47 @@ class PortalAppTestCase(unittest.TestCase):
         self.assertEqual(lax_tiny.stock, 0)
         self.assertIn("LAX.AS3.Pro.TINY", lax_tiny.fragment)
         self.assertIn("售罄", lax_tiny.detail)
+
+    def test_generic_pricing_table_treats_selected_idc_checkout_page_as_in_stock(self) -> None:
+        fetch_result = app_module.FetchResult(
+            html="",
+            final_url="https://www.example.com/cart.php?region=hong-kong&network=tier-1&generation=as3&product=hkg.as3.t1.wee",
+        )
+        filler = " routing cpu ram ssd transfer " * 260
+        html_text = f"""
+        <main>
+          <section>
+            <h2>選擇實例類型</h2>
+            <article class="plan-card active">
+              <h3>HKG.AS3.T1.WEE</h3>
+              <p>$ 36.90 USD / 年繳</p>
+              <p>{filler}</p>
+            </article>
+            <article class="plan-card">
+              <h3>HKG.AS3.T1.TINY</h3>
+              <p>$ 6.90 USD / 月繳</p>
+            </article>
+          </section>
+          <footer class="cart-summary">
+            <button type="button">繼續</button>
+          </footer>
+        </main>
+        """
+
+        result = app_module.extract_stock_for_strategy(
+            "generic_pricing_table",
+            html_text,
+            "HKG.AS3.T1.WEE",
+            {
+                "fetch_strategy": "firecrawl",
+                "monitor_url": "https://www.example.com/cart.php?product=hkg.as3.t1.wee",
+            },
+            fetch_result,
+        )
+
+        self.assertEqual(result.stock, 1)
+        self.assertIn("HKG.AS3.T1.WEE", result.fragment)
+        self.assertIn("可继续下单页面", result.detail)
 
     def test_scrape_task_generic_pricing_table_limits_to_target_product(self) -> None:
         class FakeResponse:

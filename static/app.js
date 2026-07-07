@@ -3,6 +3,8 @@
     let csrfToken = document.querySelector('meta[name="csrf-token"]')?.content || "";
     let snapshotTimer = null;
     let currentTasks = new Map();
+    let currentTaskGroups = [];
+    let currentTaskGroupNodes = [];
     let currentMerchant = { sources: [], items: [], metrics: {} };
     let currentSettings = {};
     let currentSystem = null;
@@ -13,6 +15,9 @@
     let logsSignature = null;
     let merchantSignature = null;
     let firecrawlGuideIndex = 0;
+    let taskBrowserPath = { groupName: "", subgroupName: "" };
+    let taskDragState = null;
+    let taskDragSuppressClickUntil = 0;
 
     const els = {
         loginShell: document.getElementById("login-shell"),
@@ -389,7 +394,6 @@
 
     const defaultTaskGroup = "默认分组";
     const defaultTaskSubgroup = "默认子分组";
-    const taskGroupStoragePrefix = "noaff.taskGroupCollapsed.";
     let pendingGroupRename = "";
 
     function normalizeTaskGroup(value) {
@@ -398,28 +402,79 @@
     }
 
     function normalizeTaskSubgroup(value) {
-        const subgroup = String(value ?? "").trim().replace(/\s+/g, " ");
-        return subgroup || defaultTaskSubgroup;
+        const raw = String(value ?? "").trim().replace(/\s+/g, " ");
+        const parts = raw.split(/\s*\/\s*/).map((part) => part.trim()).filter(Boolean);
+        return parts.length ? parts.join(" / ") : defaultTaskSubgroup;
     }
 
-    function taskGroupStorageKey(groupName) {
-        return `${taskGroupStoragePrefix}${encodeURIComponent(groupName)}`;
+    function splitTaskSubgroupPath(value) {
+        const normalized = normalizeTaskSubgroup(value);
+        if (normalized === defaultTaskSubgroup) {
+            return [];
+        }
+        return normalized.split(" / ").map((part) => part.trim()).filter(Boolean);
     }
 
-    function isTaskGroupCollapsed(groupName) {
-        try {
-            return window.localStorage.getItem(taskGroupStorageKey(groupName)) === "1";
-        } catch (error) {
+    function joinTaskSubgroupPath(parts) {
+        const cleaned = (parts || []).map((part) => String(part || "").trim()).filter(Boolean);
+        return cleaned.length ? normalizeTaskSubgroup(cleaned.join(" / ")) : defaultTaskSubgroup;
+    }
+
+    function taskSubgroupPath(task) {
+        return joinTaskSubgroupPath(splitTaskSubgroupPath(task?.subgroup_name));
+    }
+
+    function isSameSubgroupPath(left, right) {
+        return joinTaskSubgroupPath(splitTaskSubgroupPath(left)) === joinTaskSubgroupPath(splitTaskSubgroupPath(right));
+    }
+
+    function isSubgroupDescendant(path, parentPath) {
+        const pathParts = splitTaskSubgroupPath(path);
+        const parentParts = splitTaskSubgroupPath(parentPath);
+        if (pathParts.length <= parentParts.length) {
             return false;
         }
+        return parentParts.every((part, index) => pathParts[index] === part);
     }
 
-    function setTaskGroupCollapsed(groupName, collapsed) {
-        try {
-            window.localStorage.setItem(taskGroupStorageKey(groupName), collapsed ? "1" : "0");
-        } catch (error) {
-            // Ignore storage failures; collapsing is a convenience only.
+    function directChildSubgroupPath(path, parentPath) {
+        const pathParts = splitTaskSubgroupPath(path);
+        const parentParts = splitTaskSubgroupPath(parentPath);
+        if (pathParts.length <= parentParts.length) {
+            return "";
         }
+        if (!parentParts.every((part, index) => pathParts[index] === part)) {
+            return "";
+        }
+        return joinTaskSubgroupPath(pathParts.slice(0, parentParts.length + 1));
+    }
+
+    function groupSortOrder(groupName) {
+        const normalized = normalizeTaskGroup(groupName);
+        const row = currentTaskGroups.find((group) => normalizeTaskGroup(group.group_name) === normalized);
+        return Number(row?.sort_order || 0);
+    }
+
+    function subgroupSortOrder(groupName, subgroupName) {
+        const normalizedGroup = normalizeTaskGroup(groupName);
+        const normalizedSubgroup = normalizeTaskSubgroup(subgroupName);
+        const row = currentTaskGroupNodes.find((node) => (
+            normalizeTaskGroup(node.group_name) === normalizedGroup
+            && normalizeTaskSubgroup(node.subgroup_name) === normalizedSubgroup
+        ));
+        return Number(row?.sort_order || 0);
+    }
+
+    function compareCardsByOrderName(left, right) {
+        const orderDelta = Number(left.sort_order || 0) - Number(right.sort_order || 0);
+        if (orderDelta) return orderDelta;
+        return String(left.name || "").localeCompare(String(right.name || ""), "zh-Hans-CN");
+    }
+
+    function compareTasksByOrder(left, right) {
+        const orderDelta = Number(left.sort_order || 0) - Number(right.sort_order || 0);
+        if (orderDelta) return orderDelta;
+        return Number(right.id || 0) - Number(left.id || 0);
     }
 
     function collectGroupNames(tasks, extraGroupNames = []) {
@@ -843,7 +898,6 @@
         const subgroupSummaryMap = new Map();
         tasks.forEach((task) => {
             const groupName = normalizeTaskGroup(task.group_name);
-            const subgroupName = normalizeTaskSubgroup(task.subgroup_name);
             if (!summaryMap.has(groupName)) {
                 summaryMap.set(groupName, { count: 0, errorCount: 0 });
             }
@@ -852,15 +906,19 @@
             if (task.last_error) {
                 summary.errorCount += 1;
             }
-            const subgroupKey = `${groupName}\u0000${subgroupName}`;
-            if (!subgroupSummaryMap.has(subgroupKey)) {
-                subgroupSummaryMap.set(subgroupKey, { count: 0, errorCount: 0 });
-            }
-            const subgroupSummary = subgroupSummaryMap.get(subgroupKey);
-            subgroupSummary.count += 1;
-            if (task.last_error) {
-                subgroupSummary.errorCount += 1;
-            }
+            const subgroupParts = splitTaskSubgroupPath(task.subgroup_name);
+            subgroupParts.forEach((_, index) => {
+                const subgroupName = joinTaskSubgroupPath(subgroupParts.slice(0, index + 1));
+                const subgroupKey = `${groupName}\u0000${subgroupName}`;
+                if (!subgroupSummaryMap.has(subgroupKey)) {
+                    subgroupSummaryMap.set(subgroupKey, { count: 0, errorCount: 0 });
+                }
+                const subgroupSummary = subgroupSummaryMap.get(subgroupKey);
+                subgroupSummary.count += 1;
+                if (task.last_error) {
+                    subgroupSummary.errorCount += 1;
+                }
+            });
         });
 
         els.tasksGrid?.querySelectorAll?.("[data-task-group-section]")?.forEach((section) => {
@@ -1065,6 +1123,10 @@
             }
         } else {
             resetTaskForm();
+            if (taskBrowserPath.groupName) {
+                setTaskGroupSelection(taskBrowserPath.groupName, [taskBrowserPath.groupName]);
+                setTaskSubgroupSelection(taskBrowserPath.groupName, taskBrowserPath.subgroupName || defaultTaskSubgroup, [taskBrowserPath.subgroupName || defaultTaskSubgroup]);
+            }
             els.taskModalTitle.textContent = "新增任务";
             els.taskSubmitButton.textContent = "保存节点";
             if (els.taskSaveCheckButton) {
@@ -1495,28 +1557,132 @@
         return ["status-unknown", "未知", "等待首次检测"];
     }
 
-    function groupTasks(tasks) {
+    function taskErrorCount(tasks) {
+        return tasks.filter((task) => task.last_error).length;
+    }
+
+    function collectTaskBrowserGroups(tasks) {
         const groups = new Map();
+        groups.set(defaultTaskGroup, { name: defaultTaskGroup, tasks: [] });
         tasks.forEach((task) => {
             const groupName = normalizeTaskGroup(task.group_name);
             if (!groups.has(groupName)) {
-                groups.set(groupName, { name: groupName, tasks: [], subgroups: new Map() });
+                groups.set(groupName, { name: groupName, tasks: [] });
             }
-            const group = groups.get(groupName);
-            const subgroupName = normalizeTaskSubgroup(task.subgroup_name);
-            if (!group.subgroups.has(subgroupName)) {
-                group.subgroups.set(subgroupName, { name: subgroupName, tasks: [] });
-            }
-            group.tasks.push(task);
-            group.subgroups.get(subgroupName).tasks.push(task);
+            groups.get(groupName).tasks.push(task);
         });
-        return Array.from(groups.values()).map((group) => ({
-            name: group.name,
-            tasks: group.tasks,
-            subgroups: Array.from(group.subgroups.values())
-        }));
+        currentTaskGroupNodes.forEach((node) => {
+            const groupName = normalizeTaskGroup(node.group_name);
+            if (!groups.has(groupName)) {
+                groups.set(groupName, { name: groupName, tasks: [] });
+            }
+        });
+        return Array.from(groups.values())
+            .filter((group) => group.name !== defaultTaskGroup || group.tasks.length)
+            .map((group) => ({
+                ...group,
+                sort_order: groupSortOrder(group.name),
+                tasks: group.tasks.slice().sort(compareTasksByOrder)
+            }))
+            .sort(compareCardsByOrderName);
     }
 
+    function collectChildSubgroups(tasks, groupName, parentPath) {
+        const children = new Map();
+        const normalizedGroup = normalizeTaskGroup(groupName);
+        const addChild = (path, task = null) => {
+            const childPath = directChildSubgroupPath(path, parentPath);
+            if (!childPath) return;
+            if (!children.has(childPath)) {
+                const parts = splitTaskSubgroupPath(childPath);
+                children.set(childPath, {
+                    name: parts[parts.length - 1] || childPath,
+                    path: childPath,
+                    sort_order: subgroupSortOrder(normalizedGroup, childPath),
+                    tasks: []
+                });
+            }
+            if (task) {
+                children.get(childPath).tasks.push(task);
+            }
+        };
+        tasks.forEach((task) => {
+            if (normalizeTaskGroup(task.group_name) !== normalizedGroup) return;
+            addChild(taskSubgroupPath(task), task);
+        });
+        currentTaskGroupNodes.forEach((node) => {
+            if (normalizeTaskGroup(node.group_name) !== normalizedGroup) return;
+            addChild(normalizeTaskSubgroup(node.subgroup_name), null);
+        });
+        return Array.from(children.values())
+            .map((child) => ({
+                ...child,
+                tasks: child.tasks.slice().sort(compareTasksByOrder)
+            }))
+            .sort(compareCardsByOrderName);
+    }
+
+    function tasksAtBrowserPath(tasks, groupName, subgroupPath) {
+        const normalizedGroup = normalizeTaskGroup(groupName);
+        const normalizedPath = joinTaskSubgroupPath(splitTaskSubgroupPath(subgroupPath));
+        return tasks.filter((task) => (
+            normalizeTaskGroup(task.group_name) === normalizedGroup
+            && isSameSubgroupPath(taskSubgroupPath(task), normalizedPath)
+        )).sort(compareTasksByOrder);
+    }
+
+    function taskBrowserPathExists(tasks) {
+        if (!taskBrowserPath.groupName) {
+            return true;
+        }
+        const groupName = normalizeTaskGroup(taskBrowserPath.groupName);
+        const groups = collectTaskBrowserGroups(tasks).map((group) => group.name);
+        if (!groups.includes(groupName)) {
+            return false;
+        }
+        const subgroupPath = joinTaskSubgroupPath(splitTaskSubgroupPath(taskBrowserPath.subgroupName));
+        if (subgroupPath === defaultTaskSubgroup) {
+            return true;
+        }
+        const hasTaskPath = tasks.some((task) => (
+            normalizeTaskGroup(task.group_name) === groupName
+            && (isSameSubgroupPath(taskSubgroupPath(task), subgroupPath) || isSubgroupDescendant(taskSubgroupPath(task), subgroupPath))
+        ));
+        const hasNodePath = currentTaskGroupNodes.some((node) => (
+            normalizeTaskGroup(node.group_name) === groupName
+            && (isSameSubgroupPath(node.subgroup_name, subgroupPath) || isSubgroupDescendant(node.subgroup_name, subgroupPath))
+        ));
+        return hasTaskPath || hasNodePath;
+    }
+
+    function taskBrowserCrumbs() {
+        const crumbs = [{ label: "全部分组", groupName: "", subgroupName: "" }];
+        if (!taskBrowserPath.groupName) {
+            return crumbs;
+        }
+        const groupName = normalizeTaskGroup(taskBrowserPath.groupName);
+        crumbs.push({ label: groupName, groupName, subgroupName: "" });
+        const parts = splitTaskSubgroupPath(taskBrowserPath.subgroupName);
+        parts.forEach((part, index) => {
+            crumbs.push({
+                label: part,
+                groupName,
+                subgroupName: joinTaskSubgroupPath(parts.slice(0, index + 1))
+            });
+        });
+        return crumbs;
+    }
+
+    function renderTaskBrowserBreadcrumbs() {
+        return taskBrowserCrumbs().map((crumb, index, list) => {
+            const current = index === list.length - 1;
+            return `
+                <button type="button" class="task-crumb ${current ? "is-current" : ""}" data-task-crumb-group="${escapeHtml(crumb.groupName)}" data-task-crumb-subgroup="${escapeHtml(crumb.subgroupName)}" ${current ? "disabled" : ""}>
+                    ${escapeHtml(crumb.label)}
+                </button>
+            `;
+        }).join('<span class="text-slate-700">/</span>');
+    }
     function renderTaskCards(tasks, animateCards) {
         return tasks.map((task) => {
             const [statusClass, statusText, logHint] = statusMeta(task);
@@ -1532,7 +1698,12 @@
             const attemptMeta = fetchAttemptMeta(task);
             const rowClass = animateCards ? "task-row reveal" : "task-row";
             return `
-                <article class="${rowClass}" data-task-id="${task.id}">
+                <article class="${rowClass}" data-task-id="${task.id}" data-drag-kind="task" data-drag-id="${task.id}" draggable="true">
+                    <span class="task-drag-handle" aria-hidden="true" title="拖动排序">
+                        <svg viewBox="0 0 20 20" fill="currentColor">
+                            <path d="M7 4a1.5 1.5 0 11-3 0 1.5 1.5 0 013 0zm0 6a1.5 1.5 0 11-3 0 1.5 1.5 0 013 0zm0 6a1.5 1.5 0 11-3 0 1.5 1.5 0 013 0zm9-12a1.5 1.5 0 11-3 0 1.5 1.5 0 013 0zm0 6a1.5 1.5 0 11-3 0 1.5 1.5 0 013 0zm0 6a1.5 1.5 0 11-3 0 1.5 1.5 0 013 0z"/>
+                        </svg>
+                    </span>
                     <div class="task-row-product">
                         <label class="task-select-pill" title="选择任务">
                             <input type="checkbox" value="${task.id}" data-task-select aria-label="选择任务 ${escapeHtml(task.name)}">
@@ -1623,13 +1794,135 @@
         `;
     }
 
+    function renderTaskGroupCards(tasks, animateCards) {
+        const groupCards = collectTaskBrowserGroups(tasks).map((group) => {
+            const errorCount = taskErrorCount(group.tasks);
+            const stockCount = group.tasks.filter((task) => task.last_state === "in_stock").length;
+            const canManageGroup = group.name !== defaultTaskGroup;
+            const cardClass = animateCards ? "task-browser-card reveal" : "task-browser-card";
+            return `
+                <article class="${cardClass}" data-task-group-section data-task-group-name="${escapeHtml(group.name)}" data-drag-kind="group" data-drag-id="${escapeHtml(group.name)}" draggable="true">
+                    <span class="task-drag-handle" aria-hidden="true" title="拖动排序">
+                        <svg viewBox="0 0 20 20" fill="currentColor">
+                            <path d="M7 4a1.5 1.5 0 11-3 0 1.5 1.5 0 013 0zm0 6a1.5 1.5 0 11-3 0 1.5 1.5 0 013 0zm0 6a1.5 1.5 0 11-3 0 1.5 1.5 0 013 0zm9-12a1.5 1.5 0 11-3 0 1.5 1.5 0 013 0zm0 6a1.5 1.5 0 11-3 0 1.5 1.5 0 013 0zm0 6a1.5 1.5 0 11-3 0 1.5 1.5 0 013 0z"/>
+                        </svg>
+                    </span>
+                    <button type="button" class="task-browser-card-main" data-group-open="${escapeHtml(group.name)}">
+                        <span class="task-browser-kicker">IDC GROUP</span>
+                        <strong>${escapeHtml(group.name)}</strong>
+                        <span class="task-browser-meta">
+                            <span data-task-group-count>${group.tasks.length} 个任务</span>
+                            <span>${stockCount} 有货</span>
+                            <span class="${errorCount ? "" : "hidden"}" data-task-group-error>${errorCount} 错误</span>
+                        </span>
+                    </button>
+                    <div class="task-browser-card-actions">
+                        <button type="button" class="icon-button !h-9 !w-9 ${canManageGroup ? "" : "opacity-40"}" title="${canManageGroup ? "重命名分组" : "默认分组不可重命名"}" data-group-action="rename" data-group-name="${escapeHtml(group.name)}" ${canManageGroup ? "" : "disabled"}>
+                            <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/>
+                            </svg>
+                        </button>
+                        <button type="button" class="icon-button !h-9 !w-9 text-rose-300 ${canManageGroup ? "" : "opacity-40"}" title="${canManageGroup ? "删除分组" : "默认分组不可整体删除"}" data-group-action="delete" data-group-name="${escapeHtml(group.name)}" ${canManageGroup ? "" : "disabled"}>
+                            <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/>
+                            </svg>
+                        </button>
+                    </div>
+                </article>
+            `;
+        }).join("");
+        const empty = `
+            <div class="task-empty-state">
+                <p class="font-bold text-slate-200">还没有监控分组</p>
+                <p class="text-sm text-slate-500">新增任务后会自动形成主分组。</p>
+            </div>
+        `;
+        return `<div class="task-browser-grid" data-drag-scope="group">${groupCards || empty}</div>`;
+    }
+
+    function renderTaskSubgroupCards(children, animateCards) {
+        if (!children.length) {
+            return "";
+        }
+        return `
+            <section class="task-browser-section">
+                <div class="task-browser-section-head">
+                    <div>
+                        <p class="task-browser-kicker">SUBGROUPS</p>
+                        <h3>子分组</h3>
+                    </div>
+                    <button type="button" class="ghost-button !min-h-9 !rounded-lg !px-3 !py-2 text-[12px]" data-subgroup-action="bulk-delete" disabled>删除选中子分组</button>
+                </div>
+                <div class="task-browser-grid" data-drag-scope="subgroup">
+                    ${children.map((child) => {
+                        const errorCount = taskErrorCount(child.tasks);
+                        const cardClass = animateCards ? "task-browser-card reveal" : "task-browser-card";
+                        return `
+                            <article class="${cardClass}" data-task-subgroup-section data-task-group-name="${escapeHtml(taskBrowserPath.groupName)}" data-task-subgroup-name="${escapeHtml(child.path)}" data-drag-kind="subgroup" data-drag-id="${escapeHtml(child.path)}" draggable="true">
+                                <span class="task-drag-handle" aria-hidden="true" title="拖动排序">
+                                    <svg viewBox="0 0 20 20" fill="currentColor">
+                                        <path d="M7 4a1.5 1.5 0 11-3 0 1.5 1.5 0 013 0zm0 6a1.5 1.5 0 11-3 0 1.5 1.5 0 013 0zm0 6a1.5 1.5 0 11-3 0 1.5 1.5 0 013 0zm9-12a1.5 1.5 0 11-3 0 1.5 1.5 0 013 0zm0 6a1.5 1.5 0 11-3 0 1.5 1.5 0 013 0zm0 6a1.5 1.5 0 11-3 0 1.5 1.5 0 013 0z"/>
+                                    </svg>
+                                </span>
+                                <label class="task-select-pill task-subgroup-select" title="选择子分组">
+                                    <input type="checkbox" value="${escapeHtml(child.path)}" data-subgroup-select aria-label="选择子分组 ${escapeHtml(child.name)}">
+                                    <span></span>
+                                </label>
+                                <button type="button" class="task-browser-card-main" data-subgroup-open="${escapeHtml(child.path)}">
+                                    <span class="task-browser-kicker">SUBGROUP</span>
+                                    <strong>${escapeHtml(child.name)}</strong>
+                                    <span class="task-browser-meta">
+                                        <span data-task-subgroup-count>${child.tasks.length} 个任务</span>
+                                        <span class="${errorCount ? "" : "hidden"}" data-task-subgroup-error>${errorCount} 错误</span>
+                                    </span>
+                                </button>
+                                <div class="task-browser-card-actions">
+                                    <button type="button" class="icon-button !h-9 !w-9" title="重命名子分组" data-subgroup-action="rename" data-subgroup-name="${escapeHtml(child.path)}">
+                                        <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/>
+                                        </svg>
+                                    </button>
+                                    <button type="button" class="icon-button !h-9 !w-9 text-rose-300" title="删除子分组" data-subgroup-action="delete" data-subgroup-name="${escapeHtml(child.path)}">
+                                        <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/>
+                                        </svg>
+                                    </button>
+                                </div>
+                            </article>
+                        `;
+                    }).join("")}
+                </div>
+            </section>
+        `;
+    }
+
+    function renderTaskBrowserToolbar() {
+        const inGroup = Boolean(taskBrowserPath.groupName);
+        return `
+            <div class="task-browser-toolbar">
+                <div class="task-breadcrumbs">${renderTaskBrowserBreadcrumbs()}</div>
+                <div class="flex flex-wrap justify-end gap-2">
+                    ${inGroup ? '<button type="button" class="ghost-button !min-h-9 !rounded-lg !px-3 !py-2 text-[12px]" data-task-browser-back>返回上级</button>' : ""}
+                    ${inGroup ? '<button type="button" class="ghost-button !min-h-9 !rounded-lg !px-3 !py-2 text-[12px]" data-subgroup-action="create">创建子分组</button>' : ""}
+                </div>
+            </div>
+        `;
+    }
+
     function renderTasks(tasks, initial = false, force = false) {
         currentTasks = new Map(tasks.map((task) => [String(task.id), task]));
+        const groupSignature = currentTaskGroups
+            .map((group) => `${normalizeTaskGroup(group.group_name)}:${Number(group.sort_order || 0)}`)
+            .join("|");
+        const nodeSignature = currentTaskGroupNodes
+            .map((node) => `${normalizeTaskGroup(node.group_name)}:${normalizeTaskSubgroup(node.subgroup_name)}:${Number(node.sort_order || 0)}`)
+            .join("|");
         const nextTaskIdsSignature = tasks
             .map((task) => [
                 String(task.id),
                 normalizeTaskGroup(task.group_name),
                 normalizeTaskSubgroup(task.subgroup_name),
+                Number(task.sort_order || 0),
                 task.enabled ? "1" : "0",
                 task.name || "",
                 task.monitor_url || "",
@@ -1648,7 +1941,7 @@
                 task.webhook_endpoint || "",
                 task.ingest_token_hint || ""
             ].join(":"))
-            .join("|");
+            .join("|") + `::groups:${groupSignature}::nodes:${nodeSignature}::path:${taskBrowserPath.groupName}:${taskBrowserPath.subgroupName}`;
         const nextTaskStateSignature = tasks
             .map((task) => [
                 String(task.id),
@@ -1676,88 +1969,52 @@
             return;
         }
 
-        const groupSections = groupTasks(tasks).map((group) => {
-            const collapsed = isTaskGroupCollapsed(group.name);
-            const errorCount = group.tasks.filter((task) => task.last_error).length;
-            const canManageGroup = group.name !== defaultTaskGroup;
-            const summaryBadge = `
-                <span class="rounded-full border border-slate-700 bg-slate-900/80 px-2.5 py-1 font-mono text-[11px] text-slate-400" data-task-group-count>${group.tasks.length} 个任务</span>
-                <span class="rounded-full border border-rose-900/70 bg-rose-500/10 px-2.5 py-1 font-mono text-[11px] text-rose-300${errorCount ? "" : " hidden"}" data-task-group-error>${errorCount} 错误</span>`;
-            const subgroupSections = collapsed ? "" : group.subgroups.map((subgroup) => {
-                const subgroupErrorCount = subgroup.tasks.filter((task) => task.last_error).length;
-                return `
-                    <section class="task-subgroup-panel" data-task-subgroup-section data-task-group-name="${escapeHtml(group.name)}" data-task-subgroup-name="${escapeHtml(subgroup.name)}">
-                        <div class="task-subgroup-head">
-                            <div class="min-w-0">
-                                <p class="font-mono text-[11px] uppercase tracking-[0.18em] text-slate-600">SUBGROUP</p>
-                                <div class="mt-1 flex flex-wrap items-center gap-2">
-                                    <h4 class="truncate text-base font-extrabold text-slate-100">${escapeHtml(subgroup.name)}</h4>
-                                    <span class="rounded-full border border-slate-700 bg-slate-950/70 px-2.5 py-1 font-mono text-[11px] text-slate-400" data-task-subgroup-count>${subgroup.tasks.length} 个任务</span>
-                                    <span class="rounded-full border border-rose-900/70 bg-rose-500/10 px-2.5 py-1 font-mono text-[11px] text-rose-300${subgroupErrorCount ? "" : " hidden"}" data-task-subgroup-error>${subgroupErrorCount} 错误</span>
-                                </div>
-                            </div>
-                            <div class="flex flex-wrap justify-end gap-2">
-                                <button type="button" class="ghost-button !min-h-9 !rounded-lg !px-3 !py-2 text-[12px]" data-group-action="bulk-delete" data-group-name="${escapeHtml(group.name)}" data-subgroup-name="${escapeHtml(subgroup.name)}" disabled>删除选中</button>
-                                <button type="button" class="ghost-button !min-h-9 !rounded-lg !px-3 !py-2 text-[12px] text-rose-300" data-group-action="delete-subgroup" data-group-name="${escapeHtml(group.name)}" data-subgroup-name="${escapeHtml(subgroup.name)}">删除子分组</button>
-                            </div>
-                        </div>
-                        <div class="task-list-stack mt-3">${renderTaskCards(subgroup.tasks, animateCards)}</div>
-                    </section>
-                `;
-            }).join("");
-            const groupClass = animateCards ? "reveal" : "";
+        if (!taskBrowserPathExists(tasks)) {
+            taskBrowserPath = { groupName: "", subgroupName: "" };
+        }
 
-            return `
-                <section class="${groupClass} rounded-2xl border border-slate-800/90 bg-slate-950/35 p-4 shadow-[0_20px_60px_rgba(0,0,0,0.18)] md:p-5" data-task-group-section data-task-group-name="${escapeHtml(group.name)}">
-                    <div class="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-                        <button type="button" class="flex min-w-0 flex-1 items-center justify-between gap-4 text-left" data-group-toggle="true" data-group-name="${escapeHtml(group.name)}">
-                            <div class="min-w-0">
-                                <div class="flex flex-wrap items-center gap-2">
-                                    <h3 class="truncate text-lg font-extrabold text-white">${escapeHtml(group.name)}</h3>
-                                    ${summaryBadge}
-                                </div>
-                            </div>
-                            <svg class="h-5 w-5 shrink-0 text-slate-400 transition-transform ${collapsed ? "" : "rotate-180"}" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/>
-                            </svg>
-                        </button>
-                        <div class="flex flex-wrap justify-end gap-2">
-                            <button type="button" class="ghost-button !min-h-9 !rounded-lg !px-3 !py-2 text-[12px]" data-group-action="bulk-delete" data-group-name="${escapeHtml(group.name)}" disabled>删除选中</button>
-                            <button
-                                type="button"
-                                class="icon-button !h-9 !w-9 shrink-0 ${canManageGroup ? "" : "opacity-40"}"
-                                title="${canManageGroup ? "重命名分组" : "默认分组不可重命名"}"
-                                aria-label="${canManageGroup ? "重命名分组" : "默认分组不可重命名"}"
-                                data-group-action="rename"
-                                data-group-name="${escapeHtml(group.name)}"
-                                ${canManageGroup ? "" : "disabled"}
-                            >
-                                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/>
-                                </svg>
-                            </button>
-                            <button
-                                type="button"
-                                class="icon-button !h-9 !w-9 shrink-0 text-rose-300 ${canManageGroup ? "" : "opacity-40"}"
-                                title="${canManageGroup ? "删除分组" : "默认分组不可整体删除"}"
-                                aria-label="${canManageGroup ? "删除分组" : "默认分组不可整体删除"}"
-                                data-group-action="delete"
-                                data-group-name="${escapeHtml(group.name)}"
-                                ${canManageGroup ? "" : "disabled"}
-                            >
-                                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/>
-                                </svg>
-                            </button>
-                        </div>
-                    </div>
-                    <div class="mt-4 grid gap-4">${subgroupSections}</div>
-                </section>
-            `;
-        }).join("");
-
+        const toolbar = renderTaskBrowserToolbar();
         const addRow = `<div class="task-add-stack">${renderAddTaskCard(animateCards)}</div>`;
-        els.tasksGrid.innerHTML = tasks.length ? `${groupSections}${addRow}` : addRow;
+        if (!taskBrowserPath.groupName) {
+            els.tasksGrid.innerHTML = `
+                <section class="task-browser-shell">
+                    ${toolbar}
+                    ${renderTaskGroupCards(tasks, animateCards)}
+                </section>
+                ${addRow}
+            `;
+            return;
+        }
+
+        const children = collectChildSubgroups(tasks, taskBrowserPath.groupName, taskBrowserPath.subgroupName);
+        const directTasks = tasksAtBrowserPath(tasks, taskBrowserPath.groupName, taskBrowserPath.subgroupName);
+        const taskList = directTasks.length ? `
+            <section class="task-browser-section">
+                <div class="task-browser-section-head">
+                    <div>
+                        <p class="task-browser-kicker">PRODUCTS</p>
+                        <h3>当前层级商品</h3>
+                    </div>
+                    <button type="button" class="ghost-button !min-h-9 !rounded-lg !px-3 !py-2 text-[12px]" data-group-action="bulk-delete" disabled>删除选中商品</button>
+                </div>
+                <div class="task-list-stack mt-3" data-drag-scope="task">${renderTaskCards(directTasks, animateCards)}</div>
+            </section>
+        ` : "";
+        const empty = !children.length && !directTasks.length ? `
+            <div class="task-empty-state">
+                <p class="font-bold text-slate-200">当前层级还没有子分组或商品</p>
+                <p class="text-sm text-slate-500">可以创建子分组，或新增任务并归入当前层级。</p>
+            </div>
+        ` : "";
+        els.tasksGrid.innerHTML = `
+            <section class="task-browser-shell">
+                ${toolbar}
+                ${renderTaskSubgroupCards(children, animateCards)}
+                ${taskList}
+                ${empty}
+            </section>
+            ${addRow}
+        `;
     }
 
     function renderSnapshot(data, initial = false) {
@@ -1767,6 +2024,8 @@
         renderSystem(data.system || {});
         renderAdmin(data.admin || {});
         renderLogs(data.logs || []);
+        currentTaskGroups = Array.isArray(data.task_groups) ? data.task_groups : [];
+        currentTaskGroupNodes = Array.isArray(data.task_group_nodes) ? data.task_group_nodes : [];
         renderTasks(data.tasks || [], initial);
         renderMerchant(data.merchant || {});
         const merchantSources = Array.isArray(data.merchant?.sources) ? data.merchant.sources : [];
@@ -2015,13 +2274,6 @@
                     new_name: nextName
                 })
             });
-            const collapsed = isTaskGroupCollapsed(oldName);
-            setTaskGroupCollapsed(nextName, collapsed);
-            try {
-                window.localStorage.removeItem(taskGroupStorageKey(oldName));
-            } catch (error) {
-                // Ignore storage cleanup failures.
-            }
             showToast(data.message || "分组已重命名。");
             closeTaskGroupRenameModal();
             await loadSnapshot(false);
@@ -2038,17 +2290,29 @@
             .filter((taskId) => Number.isInteger(taskId) && taskId > 0);
     }
 
+    function selectedSubgroupPathsIn(scope) {
+        return Array.from(scope?.querySelectorAll?.("[data-subgroup-select]:checked") || [])
+            .map((input) => normalizeTaskSubgroup(input.value))
+            .filter((path) => path && path !== defaultTaskSubgroup);
+    }
+
     function updateBulkDeleteButtons(scope = els.tasksGrid) {
         scope?.querySelectorAll?.("[data-group-action=\"bulk-delete\"]")?.forEach((button) => {
-            const container = button.closest("[data-task-subgroup-section]") || button.closest("[data-task-group-section]");
+            const container = button.closest(".task-browser-section") || button.closest("[data-task-subgroup-section]") || button.closest("[data-task-group-section]") || els.tasksGrid;
             const selectedCount = selectedTaskIdsIn(container).length;
             button.disabled = selectedCount === 0;
             button.textContent = selectedCount ? `删除选中 (${selectedCount})` : "删除选中";
         });
+        scope?.querySelectorAll?.("[data-subgroup-action=\"bulk-delete\"]")?.forEach((button) => {
+            const container = button.closest(".task-browser-section") || els.tasksGrid;
+            const selectedCount = selectedSubgroupPathsIn(container).length;
+            button.disabled = selectedCount === 0;
+            button.textContent = selectedCount ? `删除选中子分组 (${selectedCount})` : "删除选中子分组";
+        });
     }
 
     async function bulkDeleteSelectedTasks(button) {
-        const scope = button.closest("[data-task-subgroup-section]") || button.closest("[data-task-group-section]") || els.tasksGrid;
+        const scope = button.closest(".task-browser-section") || button.closest("[data-task-subgroup-section]") || button.closest("[data-task-group-section]") || els.tasksGrid;
         const taskIds = selectedTaskIdsIn(scope);
         if (!taskIds.length) {
             showToast("请先选择要删除的任务。", "error");
@@ -2119,6 +2383,219 @@
         } finally {
             button.disabled = false;
         }
+    }
+
+    async function createTaskSubgroup(button) {
+        const groupName = normalizeTaskGroup(taskBrowserPath.groupName);
+        if (!groupName) {
+            showToast("请先进入一个主分组。", "error");
+            return;
+        }
+        const name = window.prompt("新子分组名称");
+        if (!name || !name.trim()) {
+            return;
+        }
+        button.disabled = true;
+        try {
+            const data = await apiFetch("/api/task-subgroups", {
+                method: "POST",
+                body: JSON.stringify({
+                    group_name: groupName,
+                    parent_subgroup_name: taskBrowserPath.subgroupName || defaultTaskSubgroup,
+                    name: name.trim()
+                })
+            });
+            showToast(data.message || "子分组已创建。");
+            await loadSnapshot(false);
+        } catch (error) {
+            showToast(error.message, "error");
+        } finally {
+            button.disabled = false;
+        }
+    }
+
+    async function renameTaskSubgroup(subgroupName, button) {
+        const groupName = normalizeTaskGroup(taskBrowserPath.groupName);
+        const currentPath = normalizeTaskSubgroup(subgroupName);
+        const parts = splitTaskSubgroupPath(currentPath);
+        const currentName = parts[parts.length - 1] || currentPath;
+        const nextName = window.prompt("新的子分组名称", currentName);
+        if (!nextName || !nextName.trim() || nextName.trim() === currentName) {
+            return;
+        }
+        button.disabled = true;
+        try {
+            const data = await apiFetch("/api/task-subgroups/rename", {
+                method: "POST",
+                body: JSON.stringify({
+                    group_name: groupName,
+                    old_subgroup_name: currentPath,
+                    new_name: nextName.trim()
+                })
+            });
+            const renamedPath = data.result?.new_subgroup_name || currentPath;
+            if (isSameSubgroupPath(taskBrowserPath.subgroupName, currentPath) || isSubgroupDescendant(taskBrowserPath.subgroupName, currentPath)) {
+                taskBrowserPath = { groupName, subgroupName: renamedPath };
+            }
+            showToast(data.message || "子分组已重命名。");
+            await loadSnapshot(false);
+        } catch (error) {
+            showToast(error.message, "error");
+        } finally {
+            button.disabled = false;
+        }
+    }
+
+    async function bulkDeleteSelectedSubgroups(button) {
+        const scope = button.closest(".task-browser-section") || els.tasksGrid;
+        const subgroupNames = selectedSubgroupPathsIn(scope);
+        if (!subgroupNames.length) {
+            showToast("请先选择要删除的子分组。", "error");
+            return;
+        }
+        if (!window.confirm(`确认删除选中的 ${subgroupNames.length} 个子分组及其商品？`)) {
+            return;
+        }
+        button.disabled = true;
+        try {
+            const data = await apiFetch("/api/task-subgroups/bulk-delete", {
+                method: "POST",
+                body: JSON.stringify({
+                    group_name: normalizeTaskGroup(taskBrowserPath.groupName),
+                    subgroup_names: subgroupNames
+                })
+            });
+            showToast(data.message || "子分组已删除。");
+            await loadSnapshot(false);
+        } catch (error) {
+            showToast(error.message, "error");
+        } finally {
+            button.disabled = false;
+            updateBulkDeleteButtons();
+        }
+    }
+
+    function cleanupTaskDragClasses() {
+        els.tasksGrid?.querySelectorAll(".is-dragging, .is-drop-target, .is-drag-active").forEach((element) => {
+            element.classList.remove("is-dragging", "is-drop-target", "is-drag-active");
+        });
+    }
+
+    function draggableCardFromEvent(event) {
+        return event.target.closest("[data-drag-kind][data-drag-id]");
+    }
+
+    function handleTaskDragStart(event) {
+        const card = draggableCardFromEvent(event);
+        if (!card) return;
+        const interactive = event.target.closest("button, a, input, textarea, select, label");
+        if (interactive && !event.target.closest(".task-drag-handle")) {
+            event.preventDefault();
+            return;
+        }
+        const kind = card.dataset.dragKind;
+        const container = card.closest(`[data-drag-scope="${kind}"]`);
+        if (!kind || !container) {
+            event.preventDefault();
+            return;
+        }
+        taskDragState = {
+            kind,
+            id: card.dataset.dragId,
+            container,
+            moved: false
+        };
+        card.classList.add("is-dragging");
+        container.classList.add("is-drag-active");
+        event.dataTransfer.effectAllowed = "move";
+        event.dataTransfer.setData("text/plain", `${kind}:${card.dataset.dragId}`);
+    }
+
+    function shouldPlaceAfter(target, event) {
+        const rect = target.getBoundingClientRect();
+        const midY = rect.top + rect.height / 2;
+        const midX = rect.left + rect.width / 2;
+        const sameRowBias = Math.abs(event.clientY - midY) < Math.max(16, rect.height * 0.35);
+        return event.clientY > midY || (sameRowBias && event.clientX > midX);
+    }
+
+    function handleTaskDragOver(event) {
+        if (!taskDragState) return;
+        const container = event.target.closest(`[data-drag-scope="${taskDragState.kind}"]`);
+        if (!container || container !== taskDragState.container) return;
+        const dragging = container.querySelector(`[data-drag-kind="${taskDragState.kind}"].is-dragging`);
+        const target = draggableCardFromEvent(event);
+        if (!dragging || !target || target === dragging || target.dataset.dragKind !== taskDragState.kind) {
+            event.preventDefault();
+            return;
+        }
+        event.preventDefault();
+        container.querySelectorAll(".is-drop-target").forEach((element) => element.classList.remove("is-drop-target"));
+        target.classList.add("is-drop-target");
+        const after = shouldPlaceAfter(target, event);
+        container.insertBefore(dragging, after ? target.nextElementSibling : target);
+        taskDragState.moved = true;
+    }
+
+    function currentDragOrder(kind, container) {
+        return Array.from(container.querySelectorAll(`[data-drag-kind="${kind}"][data-drag-id]`))
+            .map((element) => element.dataset.dragId)
+            .filter(Boolean);
+    }
+
+    async function persistTaskDragOrder(kind, order) {
+        if (!order.length) return;
+        let endpoint = "";
+        let body = {};
+        if (kind === "group") {
+            endpoint = "/api/task-groups/reorder";
+            body = { group_names: order };
+        } else if (kind === "subgroup") {
+            endpoint = "/api/task-subgroups/reorder";
+            body = {
+                group_name: normalizeTaskGroup(taskBrowserPath.groupName),
+                parent_subgroup_name: taskBrowserPath.subgroupName || defaultTaskSubgroup,
+                subgroup_names: order
+            };
+        } else if (kind === "task") {
+            endpoint = "/api/tasks/reorder";
+            body = { task_ids: order.map((value) => Number(value)).filter((value) => Number.isInteger(value) && value > 0) };
+        }
+        if (!endpoint) return;
+        try {
+            await apiFetch(endpoint, {
+                method: "POST",
+                body: JSON.stringify(body)
+            });
+            await loadSnapshot(false);
+        } catch (error) {
+            showToast(error.message || "排序保存失败。", "error");
+            await loadSnapshot(false);
+        }
+    }
+
+    async function handleTaskDragDrop(event) {
+        if (!taskDragState) return;
+        const state = taskDragState;
+        const container = event.target.closest(`[data-drag-scope="${state.kind}"]`) || state.container;
+        if (!container || container !== state.container) {
+            cleanupTaskDragClasses();
+            taskDragState = null;
+            return;
+        }
+        event.preventDefault();
+        const order = currentDragOrder(state.kind, container);
+        taskDragSuppressClickUntil = Date.now() + 300;
+        cleanupTaskDragClasses();
+        taskDragState = null;
+        if (state.moved) {
+            await persistTaskDragOrder(state.kind, order);
+        }
+    }
+
+    function handleTaskDragEnd() {
+        cleanupTaskDragClasses();
+        taskDragState = null;
     }
 
     async function runTaskStockCheck(taskId) {
@@ -2419,6 +2896,11 @@
     });
 
     els.tasksGrid?.addEventListener("click", (event) => {
+        if (Date.now() < taskDragSuppressClickUntil) {
+            event.preventDefault();
+            event.stopPropagation();
+            return;
+        }
         const groupAction = event.target.closest("[data-group-action]");
         if (groupAction) {
             const groupName = groupAction.dataset.groupName || defaultTaskGroup;
@@ -2426,17 +2908,61 @@
                 openTaskGroupRenameModal(groupName);
             } else if (groupAction.dataset.groupAction === "delete") {
                 deleteTaskGroup(groupName, groupAction);
-            } else if (groupAction.dataset.groupAction === "delete-subgroup") {
-                deleteTaskSubgroup(groupName, groupAction.dataset.subgroupName || defaultTaskSubgroup, groupAction);
             } else if (groupAction.dataset.groupAction === "bulk-delete") {
                 bulkDeleteSelectedTasks(groupAction);
             }
             return;
         }
-        const groupToggle = event.target.closest("[data-group-toggle]");
-        if (groupToggle) {
-            const groupName = groupToggle.dataset.groupName || defaultTaskGroup;
-            setTaskGroupCollapsed(groupName, !isTaskGroupCollapsed(groupName));
+        const subgroupAction = event.target.closest("[data-subgroup-action]");
+        if (subgroupAction) {
+            const action = subgroupAction.dataset.subgroupAction;
+            const subgroupName = subgroupAction.dataset.subgroupName || defaultTaskSubgroup;
+            if (action === "create") {
+                createTaskSubgroup(subgroupAction);
+            } else if (action === "rename") {
+                renameTaskSubgroup(subgroupName, subgroupAction);
+            } else if (action === "delete") {
+                deleteTaskSubgroup(taskBrowserPath.groupName, subgroupName, subgroupAction);
+            } else if (action === "bulk-delete") {
+                bulkDeleteSelectedSubgroups(subgroupAction);
+            }
+            return;
+        }
+        const crumb = event.target.closest("[data-task-crumb-group]");
+        if (crumb) {
+            taskBrowserPath = {
+                groupName: crumb.dataset.taskCrumbGroup || "",
+                subgroupName: crumb.dataset.taskCrumbSubgroup || ""
+            };
+            renderTasks(Array.from(currentTasks.values()), false, true);
+            return;
+        }
+        const back = event.target.closest("[data-task-browser-back]");
+        if (back) {
+            if (taskBrowserPath.subgroupName) {
+                const parts = splitTaskSubgroupPath(taskBrowserPath.subgroupName);
+                taskBrowserPath = {
+                    groupName: taskBrowserPath.groupName,
+                    subgroupName: joinTaskSubgroupPath(parts.slice(0, -1))
+                };
+            } else {
+                taskBrowserPath = { groupName: "", subgroupName: "" };
+            }
+            renderTasks(Array.from(currentTasks.values()), false, true);
+            return;
+        }
+        const groupOpen = event.target.closest("[data-group-open]");
+        if (groupOpen) {
+            taskBrowserPath = { groupName: normalizeTaskGroup(groupOpen.dataset.groupOpen), subgroupName: "" };
+            renderTasks(Array.from(currentTasks.values()), false, true);
+            return;
+        }
+        const subgroupOpen = event.target.closest("[data-subgroup-open]");
+        if (subgroupOpen) {
+            taskBrowserPath = {
+                groupName: normalizeTaskGroup(taskBrowserPath.groupName),
+                subgroupName: normalizeTaskSubgroup(subgroupOpen.dataset.subgroupOpen)
+            };
             renderTasks(Array.from(currentTasks.values()), false, true);
             return;
         }
@@ -2450,8 +2976,12 @@
             handleTaskAction(actionButton);
         }
     });
+    els.tasksGrid?.addEventListener("dragstart", handleTaskDragStart);
+    els.tasksGrid?.addEventListener("dragover", handleTaskDragOver);
+    els.tasksGrid?.addEventListener("drop", handleTaskDragDrop);
+    els.tasksGrid?.addEventListener("dragend", handleTaskDragEnd);
     els.tasksGrid?.addEventListener("change", (event) => {
-        if (event.target.closest("[data-task-select]")) {
+        if (event.target.closest("[data-task-select]") || event.target.closest("[data-subgroup-select]")) {
             updateBulkDeleteButtons();
         }
     });

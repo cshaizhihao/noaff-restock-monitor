@@ -548,19 +548,21 @@ OUT_OF_STOCK_AVAILABILITY_PATTERNS = [
 ORDERABLE_PATTERNS = [
     re.compile(
         r"\b(?:order\s*now|configure|add\s*to\s*cart|buy\s*now|checkout|purchase|"
-        r"pre[-\s]?order|back[-\s]?order|back\s*in\s*stock|available\s*now|coming\s*soon)\b",
+        r"continue|proceed|next\s*step|select(?:ed)?|choose|pre[-\s]?order|back[-\s]?order|"
+        r"back\s*in\s*stock|available\s*now|coming\s*soon)\b",
         re.IGNORECASE,
     ),
     re.compile(
         r"(?:立即(?:订购|訂購|购买|購買|下单|下單)|加入(?:购物车|購物車)|现在购买|現在購買|可下单|可下單|"
-        r"可购买|可購買|选择套餐|選擇套餐|订购|訂購|预售|預售|预订|預訂|预约|預約|补货|補貨|到货通知|到貨通知|"
-        r"即将到货|即將到貨|现货|現貨|有货|有貨)",
+        r"可购买|可購買|选择套餐|選擇套餐|已选|已選|选取此套餐|選取此套餐|继续|繼續|下一步|"
+        r"结账|結帳|前往付款|提交订单|提交訂單|订购|訂購|预售|預售|预订|預訂|预约|預約|补货|補貨|"
+        r"到货通知|到貨通知|即将到货|即將到貨|现货|現貨|有货|有貨)",
     ),
     re.compile(r"(?:cart\.php\?a=add|/cart/add|/checkout|/order)", re.IGNORECASE),
 ]
 GENERIC_ORDERABLE_PATTERNS = [
-    re.compile(r"\b(?:order\s*now|buy\s*now|configure|available|add\s*to\s*cart)\b", re.IGNORECASE),
-    re.compile(r"(?:下单|下單|购买|購買)", re.IGNORECASE),
+    re.compile(r"\b(?:order\s*now|buy\s*now|configure|available|add\s*to\s*cart|continue|proceed|checkout)\b", re.IGNORECASE),
+    re.compile(r"(?:下单|下單|购买|購買|繼續|继续|結帳|结账|加入購物車|加入购物车)", re.IGNORECASE),
 ]
 GENERIC_SOLD_OUT_PATTERNS = [
     re.compile(r"\b(?:out\s*of\s*stock|sold\s*out|unavailable)\b", re.IGNORECASE),
@@ -612,8 +614,28 @@ def normalize_task_group(value: Any) -> str:
 
 
 def normalize_task_subgroup(value: Any) -> str:
-    subgroup_name = re.sub(r"\s+", " ", str(value or "").strip())
-    return (subgroup_name or DEFAULT_TASK_SUBGROUP)[:48]
+    raw = re.sub(r"\s+", " ", str(value or "").strip())
+    parts = [part.strip() for part in re.split(r"\s*/\s*", raw) if part.strip()]
+    subgroup_name = " / ".join(parts)
+    return (subgroup_name or DEFAULT_TASK_SUBGROUP)[:120]
+
+
+def split_task_subgroup_path(value: Any) -> list[str]:
+    normalized = normalize_task_subgroup(value)
+    if normalized == DEFAULT_TASK_SUBGROUP:
+        return []
+    return [part.strip() for part in normalized.split(" / ") if part.strip()]
+
+
+def join_task_subgroup_path(parts: list[str]) -> str:
+    cleaned = [normalize_task_subgroup(part) for part in parts if normalize_task_subgroup(part) != DEFAULT_TASK_SUBGROUP]
+    return normalize_task_subgroup(" / ".join(cleaned))
+
+
+def child_task_subgroup_path(parent_path: Any, child_name: Any) -> str:
+    parent_parts = split_task_subgroup_path(parent_path)
+    child_parts = split_task_subgroup_path(child_name)
+    return join_task_subgroup_path(parent_parts + child_parts)
 
 
 def mapping_value(source: Any, key: str, default: Any = None) -> Any:
@@ -1213,6 +1235,8 @@ BACKUP_TABLES = (
     "settings",
     "merchant_sources",
     "merchant_items",
+    "task_groups",
+    "task_group_nodes",
     "tasks",
     "activity_logs",
 )
@@ -1221,6 +1245,8 @@ BACKUP_RESTORE_ORDER = (
     "settings",
     "merchant_sources",
     "merchant_items",
+    "task_groups",
+    "task_group_nodes",
     "tasks",
     "activity_logs",
 )
@@ -1228,6 +1254,8 @@ BACKUP_AUTOINCREMENT_TABLES = (
     "admins",
     "merchant_sources",
     "merchant_items",
+    "task_groups",
+    "task_group_nodes",
     "tasks",
     "activity_logs",
 )
@@ -1566,6 +1594,7 @@ def initialize_database() -> None:
                 name TEXT NOT NULL,
                 group_name TEXT NOT NULL DEFAULT '默认分组',
                 subgroup_name TEXT NOT NULL DEFAULT '默认子分组',
+                sort_order INTEGER NOT NULL DEFAULT 0,
                 monitor_url TEXT NOT NULL,
                 target_keyword TEXT NOT NULL,
                 fetch_strategy TEXT NOT NULL DEFAULT 'browser',
@@ -1642,10 +1671,29 @@ def initialize_database() -> None:
                 updated_at TEXT NOT NULL,
                 UNIQUE(source_id, item_key)
             );
+
+            CREATE TABLE IF NOT EXISTS task_group_nodes (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                group_name TEXT NOT NULL,
+                subgroup_name TEXT NOT NULL,
+                sort_order INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                UNIQUE(group_name, subgroup_name)
+            );
+
+            CREATE TABLE IF NOT EXISTS task_groups (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                group_name TEXT NOT NULL UNIQUE,
+                sort_order INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
             """
         )
         ensure_column(connection, "tasks", "group_name", "TEXT NOT NULL DEFAULT '默认分组'")
         ensure_column(connection, "tasks", "subgroup_name", "TEXT NOT NULL DEFAULT '默认子分组'")
+        ensure_column(connection, "tasks", "sort_order", "INTEGER NOT NULL DEFAULT 0")
         ensure_column(connection, "tasks", "source_item_id", "INTEGER")
         ensure_column(connection, "tasks", "source_item_key", "TEXT DEFAULT ''")
         ensure_column(connection, "tasks", "source_source_url", "TEXT DEFAULT ''")
@@ -1665,6 +1713,7 @@ def initialize_database() -> None:
         ensure_column(connection, "tasks", "ingest_token_hash", "TEXT DEFAULT ''")
         ensure_column(connection, "tasks", "ingest_token_hint", "TEXT DEFAULT ''")
         ensure_column(connection, "merchant_sources", "group_name", "TEXT NOT NULL DEFAULT '默认分组'")
+        ensure_column(connection, "task_group_nodes", "sort_order", "INTEGER NOT NULL DEFAULT 0")
 
         existing_admin = connection.execute("SELECT id FROM admins LIMIT 1").fetchone()
         if not existing_admin:
@@ -1689,6 +1738,26 @@ def initialize_database() -> None:
         missing = {key: value for key, value in SETTINGS_DEFAULTS.items() if key not in current}
         if missing:
             save_settings(connection, missing)
+
+        timestamp = now_iso()
+        for row in connection.execute(
+            """
+            SELECT DISTINCT group_name FROM tasks
+            UNION
+            SELECT DISTINCT group_name FROM merchant_sources
+            """
+        ).fetchall():
+            upsert_task_group(connection, row["group_name"], timestamp)
+        for row in connection.execute(
+            """
+            SELECT DISTINCT group_name, subgroup_name
+            FROM tasks
+            WHERE subgroup_name IS NOT NULL AND subgroup_name != ?
+            """,
+            (DEFAULT_TASK_SUBGROUP,),
+        ).fetchall():
+            upsert_task_group_node(connection, row["group_name"], row["subgroup_name"], timestamp)
+        connection.commit()
 
 
 def login_required(view):
@@ -1729,6 +1798,7 @@ def to_task_payload(row: sqlite3.Row) -> dict[str, Any]:
         "name": row["name"],
         "group_name": normalize_task_group(row["group_name"] if "group_name" in keys else ""),
         "subgroup_name": normalize_task_subgroup(row["subgroup_name"] if "subgroup_name" in keys else ""),
+        "sort_order": int(row["sort_order"] or 0) if "sort_order" in keys else 0,
         "monitor_url": row["monitor_url"],
         "target_keyword": row["target_keyword"],
         "fetch_strategy": normalize_fetch_strategy(row["fetch_strategy"] if "fetch_strategy" in keys else ""),
@@ -1783,6 +1853,29 @@ def to_source_payload(row: sqlite3.Row, item_count: int = 0, linked_count: int =
         "linked_count": linked_count,
         "last_sync_at": row["last_sync_at"] or "",
         "last_error": row["last_error"] or "",
+        "created_at": row["created_at"],
+        "updated_at": row["updated_at"],
+    }
+
+
+def to_task_group_node_payload(row: sqlite3.Row) -> dict[str, Any]:
+    keys = set(row.keys())
+    return {
+        "id": row["id"],
+        "group_name": normalize_task_group(row["group_name"]),
+        "subgroup_name": normalize_task_subgroup(row["subgroup_name"]),
+        "sort_order": int(row["sort_order"] or 0) if "sort_order" in keys else 0,
+        "created_at": row["created_at"],
+        "updated_at": row["updated_at"],
+    }
+
+
+def to_task_group_payload(row: sqlite3.Row) -> dict[str, Any]:
+    keys = set(row.keys())
+    return {
+        "id": row["id"],
+        "group_name": normalize_task_group(row["group_name"]),
+        "sort_order": int(row["sort_order"] or 0) if "sort_order" in keys else 0,
         "created_at": row["created_at"],
         "updated_at": row["updated_at"],
     }
@@ -1897,6 +1990,7 @@ def build_task_insert_values(payload: dict[str, Any], source_fields: dict[str, A
         str(payload["name"]).strip(),
         normalize_task_group(payload.get("group_name")),
         normalize_task_subgroup(payload.get("subgroup_name")),
+        int(payload.get("sort_order") or 0),
         str(payload["monitor_url"]).strip(),
         str(payload["target_keyword"]).strip(),
         normalize_fetch_strategy(payload.get("fetch_strategy")),
@@ -1920,19 +2014,224 @@ def build_task_insert_values(payload: dict[str, Any], source_fields: dict[str, A
     )
 
 
+def upsert_task_group_node(
+    connection: sqlite3.Connection,
+    group_name: Any,
+    subgroup_name: Any,
+    timestamp: str,
+    sort_order: int | None = None,
+) -> None:
+    normalized_group = normalize_task_group(group_name)
+    normalized_subgroup = normalize_task_subgroup(subgroup_name)
+    if normalized_subgroup == DEFAULT_TASK_SUBGROUP:
+        return
+    existing = connection.execute(
+        "SELECT id FROM task_group_nodes WHERE group_name = ? AND subgroup_name = ?",
+        (normalized_group, normalized_subgroup),
+    ).fetchone()
+    if existing:
+        if sort_order is not None:
+            connection.execute(
+                """
+                UPDATE task_group_nodes
+                SET sort_order = ?, updated_at = ?
+                WHERE group_name = ? AND subgroup_name = ?
+                """,
+                (int(sort_order), timestamp, normalized_group, normalized_subgroup),
+            )
+        else:
+            connection.execute(
+                """
+                UPDATE task_group_nodes
+                SET updated_at = ?
+                WHERE group_name = ? AND subgroup_name = ?
+                """,
+                (timestamp, normalized_group, normalized_subgroup),
+            )
+        return
+    connection.execute(
+        """
+        INSERT INTO task_group_nodes (group_name, subgroup_name, sort_order, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?)
+        """,
+        (
+            normalized_group,
+            normalized_subgroup,
+            int(sort_order) if sort_order is not None else next_sort_order(
+                connection,
+                "task_group_nodes",
+                "group_name = ?",
+                (normalized_group,),
+            ),
+            timestamp,
+            timestamp,
+        ),
+    )
+
+
+def next_sort_order(connection: sqlite3.Connection, table: str, where_clause: str = "", params: tuple[Any, ...] = ()) -> int:
+    sql = f"SELECT COALESCE(MAX(sort_order), 0) + 100 FROM {sql_identifier(table)}"
+    if where_clause:
+        sql += f" WHERE {where_clause}"
+    return int(connection.execute(sql, params).fetchone()[0] or 100)
+
+
+def upsert_task_group(connection: sqlite3.Connection, group_name: Any, timestamp: str, sort_order: int | None = None) -> None:
+    normalized_group = normalize_task_group(group_name)
+    existing = connection.execute("SELECT id FROM task_groups WHERE group_name = ?", (normalized_group,)).fetchone()
+    if existing:
+        if sort_order is not None:
+            connection.execute(
+                "UPDATE task_groups SET sort_order = ?, updated_at = ? WHERE group_name = ?",
+                (int(sort_order), timestamp, normalized_group),
+            )
+        return
+    connection.execute(
+        """
+        INSERT INTO task_groups (group_name, sort_order, created_at, updated_at)
+        VALUES (?, ?, ?, ?)
+        """,
+        (
+            normalized_group,
+            int(sort_order) if sort_order is not None else next_sort_order(connection, "task_groups"),
+            timestamp,
+            timestamp,
+        ),
+    )
+
+
+def normalize_ordered_values(raw_values: Any, normalizer: Callable[[Any], str], limit: int) -> list[str]:
+    if not isinstance(raw_values, list):
+        return []
+    ordered: list[str] = []
+    for raw_value in raw_values:
+        value = normalizer(raw_value)
+        if value and value not in ordered:
+            ordered.append(value)
+        if len(ordered) > limit:
+            break
+    return ordered
+
+
+def subgroup_descendant_like(subgroup_name: str) -> str:
+    return f"{normalize_task_subgroup(subgroup_name)} / %"
+
+
+def delete_task_subgroup_tree(connection: sqlite3.Connection, group_name: str, subgroup_name: str) -> int:
+    normalized_group = normalize_task_group(group_name)
+    normalized_subgroup = normalize_task_subgroup(subgroup_name)
+    task_count = connection.execute(
+        """
+        SELECT COUNT(*) FROM tasks
+        WHERE group_name = ? AND (subgroup_name = ? OR subgroup_name LIKE ?)
+        """,
+        (normalized_group, normalized_subgroup, subgroup_descendant_like(normalized_subgroup)),
+    ).fetchone()[0]
+    connection.execute(
+        """
+        DELETE FROM tasks
+        WHERE group_name = ? AND (subgroup_name = ? OR subgroup_name LIKE ?)
+        """,
+        (normalized_group, normalized_subgroup, subgroup_descendant_like(normalized_subgroup)),
+    )
+    connection.execute(
+        """
+        DELETE FROM task_group_nodes
+        WHERE group_name = ? AND (subgroup_name = ? OR subgroup_name LIKE ?)
+        """,
+        (normalized_group, normalized_subgroup, subgroup_descendant_like(normalized_subgroup)),
+    )
+    return int(task_count)
+
+
+def rename_task_subgroup_tree(
+    connection: sqlite3.Connection,
+    group_name: str,
+    old_subgroup_name: str,
+    new_leaf_name: str,
+    timestamp: str,
+) -> tuple[str, int, int]:
+    normalized_group = normalize_task_group(group_name)
+    old_path = normalize_task_subgroup(old_subgroup_name)
+    old_parts = split_task_subgroup_path(old_path)
+    if not old_parts:
+        raise ValueError("默认子分组暂不支持重命名。")
+    new_parts = split_task_subgroup_path(new_leaf_name)
+    if not new_parts:
+        raise ValueError("新的子分组名称不能为空。")
+    new_path = join_task_subgroup_path(old_parts[:-1] + new_parts)
+    if new_path == old_path:
+        return new_path, 0, 0
+
+    task_rows = connection.execute(
+        """
+        SELECT id, subgroup_name FROM tasks
+        WHERE group_name = ? AND (subgroup_name = ? OR subgroup_name LIKE ?)
+        """,
+        (normalized_group, old_path, subgroup_descendant_like(old_path)),
+    ).fetchall()
+    node_rows = connection.execute(
+        """
+        SELECT id, subgroup_name FROM task_group_nodes
+        WHERE group_name = ? AND (subgroup_name = ? OR subgroup_name LIKE ?)
+        """,
+        (normalized_group, old_path, subgroup_descendant_like(old_path)),
+    ).fetchall()
+    if not task_rows and not node_rows:
+        raise LookupError("子分组不存在。")
+
+    def next_path(current_path: str) -> str:
+        if current_path == old_path:
+            return new_path
+        suffix = current_path[len(old_path) :].lstrip(" /")
+        return normalize_task_subgroup(f"{new_path} / {suffix}")
+
+    for row in task_rows:
+        connection.execute(
+            "UPDATE tasks SET subgroup_name = ?, updated_at = ? WHERE id = ?",
+            (next_path(row["subgroup_name"]), timestamp, row["id"]),
+        )
+    for row in node_rows:
+        connection.execute(
+            "UPDATE OR IGNORE task_group_nodes SET subgroup_name = ?, updated_at = ? WHERE id = ?",
+            (next_path(row["subgroup_name"]), timestamp, row["id"]),
+        )
+    connection.execute(
+        """
+        DELETE FROM task_group_nodes
+        WHERE group_name = ? AND (subgroup_name = ? OR subgroup_name LIKE ?)
+        """,
+        (normalized_group, old_path, subgroup_descendant_like(old_path)),
+    )
+    upsert_task_group_node(connection, normalized_group, new_path, timestamp)
+    return new_path, len(task_rows), len(node_rows)
+
+
 def insert_task_record(connection: sqlite3.Connection, payload: dict[str, Any], timestamp: str, fallback: sqlite3.Row | None = None) -> int:
     source_fields = normalize_task_source_fields(payload, fallback)
+    normalized_group = normalize_task_group(payload.get("group_name"))
+    normalized_subgroup = normalize_task_subgroup(payload.get("subgroup_name"))
+    payload_with_order = dict(payload)
+    if not payload_with_order.get("sort_order"):
+        payload_with_order["sort_order"] = next_sort_order(
+            connection,
+            "tasks",
+            "group_name = ? AND subgroup_name = ?",
+            (normalized_group, normalized_subgroup),
+        )
     cursor = connection.execute(
         """
         INSERT INTO tasks (
-            name, group_name, subgroup_name, monitor_url, target_keyword, fetch_strategy, source_config, restock_template, soldout_template,
+            name, group_name, subgroup_name, sort_order, monitor_url, target_keyword, fetch_strategy, source_config, restock_template, soldout_template,
             button_1_text, button_1_url, button_2_text, button_2_url,
             source_item_id, source_item_key, source_source_url, source_source_name, source_item_url,
             source_snapshot, source_last_sync_at, enabled, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
-        build_task_insert_values(payload, source_fields, timestamp),
+        build_task_insert_values(payload_with_order, source_fields, timestamp),
     )
+    upsert_task_group(connection, normalized_group, timestamp)
+    upsert_task_group_node(connection, normalized_group, normalized_subgroup, timestamp)
     connection.commit()
     return int(cursor.lastrowid)
 
@@ -4492,6 +4791,69 @@ def has_generic_sold_out_marker(fragment: str, cleaned_text: str) -> bool:
     return has_sold_out_marker(cleaned_text) or any(pattern.search(lowered) for pattern in GENERIC_SOLD_OUT_PATTERNS)
 
 
+def normalized_product_token(value: Any) -> str:
+    return re.sub(r"[^a-z0-9]+", "", str(value or "").lower())
+
+
+def target_selected_by_url(task: Any, fetch_result: FetchResult, target_keyword: str) -> bool:
+    target_token = normalized_product_token(target_keyword)
+    if not target_token:
+        return False
+    urls = [
+        mapping_value(task, "monitor_url", ""),
+        getattr(fetch_result, "final_url", ""),
+    ]
+    for raw_url in urls:
+        try:
+            parsed = urlparse(html_module.unescape(str(raw_url or "")))
+        except Exception:
+            continue
+        query = parse_qs(parsed.query)
+        for key in ("product", "pid", "plan", "sku", "package", "service"):
+            for value in query.get(key, []):
+                if normalized_product_token(value) == target_token:
+                    return True
+    return False
+
+
+def page_has_enabled_orderable_control(html_text: str) -> bool:
+    control_pattern = re.compile(r"(?is)<(?P<tag>a|button)\b(?P<attrs>[^>]*)>(?P<body>.{0,240}?)</(?P=tag)>")
+    for match in control_pattern.finditer(html_text or ""):
+        attrs = html_module.unescape(match.group("attrs") or "")
+        body = clean_fragment_text(match.group("body") or "")
+        control_text = f"{attrs}\n{body}"
+        lowered_attrs = attrs.lower()
+        if (
+            "disabled" in lowered_attrs
+            or "aria-disabled=\"true\"" in lowered_attrs
+            or "aria-disabled='true'" in lowered_attrs
+            or re.search(r"\bdisabled\b", lowered_attrs)
+        ):
+            continue
+        if has_orderable_marker(control_text, body):
+            return True
+    return False
+
+
+def page_level_orderable_for_target(
+    html_text: str,
+    target_keyword: str,
+    task: Any,
+    fetch_result: FetchResult,
+    fragment: str,
+) -> bool:
+    if find_html_text_position(fragment, target_keyword) < 0 and find_html_text_position(html_text, target_keyword) < 0:
+        return False
+    if has_generic_sold_out_marker(fragment, clean_fragment_text(fragment)):
+        return False
+    page_cleaned = clean_fragment_text(html_text)
+    if has_generic_sold_out_marker(html_text, page_cleaned) and not target_selected_by_url(task, fetch_result, target_keyword):
+        return False
+    if not page_has_enabled_orderable_control(html_text):
+        return False
+    return target_selected_by_url(task, fetch_result, target_keyword) or has_generic_orderable_marker(html_text, page_cleaned)
+
+
 def has_generic_pricing_signal(fragment: str) -> bool:
     stock, _ = parse_stock(fragment)
     if stock is not None:
@@ -4596,6 +4958,12 @@ def generic_pricing_table_extractor(
             stock=1,
             fragment=fragment,
             detail="generic_pricing_table：未显示库存数字，但命中可下单/购买入口，按有货处理。",
+        )
+    if page_level_orderable_for_target(html_text, target_keyword, task, fetch_result, fragment):
+        return ExtractorResult(
+            stock=1,
+            fragment=fragment,
+            detail="generic_pricing_table：目标产品已出现在可继续下单页面，按有货处理。",
         )
     return ExtractorResult(stock=None, fragment=fragment, detail="generic_pricing_table：未找到库存数字或售罄标记。")
 
@@ -5460,7 +5828,11 @@ def make_app() -> Flask:
     def dashboard_snapshot():
         with open_connection() as connection:
             settings_payload = normalize_settings(load_settings(connection))
-            tasks = connection.execute("SELECT * FROM tasks ORDER BY id DESC").fetchall()
+            tasks = connection.execute("SELECT * FROM tasks ORDER BY sort_order ASC, id DESC").fetchall()
+            task_groups = connection.execute("SELECT * FROM task_groups ORDER BY sort_order ASC, group_name ASC").fetchall()
+            task_group_nodes = connection.execute(
+                "SELECT * FROM task_group_nodes ORDER BY group_name ASC, sort_order ASC, subgroup_name ASC"
+            ).fetchall()
             source_rows = connection.execute("SELECT * FROM merchant_sources ORDER BY id DESC").fetchall()
             item_rows = connection.execute("SELECT * FROM merchant_items ORDER BY updated_at DESC, id DESC LIMIT 120").fetchall()
             task_source_rows = connection.execute(
@@ -5524,6 +5896,8 @@ def make_app() -> Flask:
             {
                 "ok": True,
                 "tasks": [to_task_payload(task) for task in tasks],
+                "task_groups": [to_task_group_payload(row) for row in task_groups],
+                "task_group_nodes": [to_task_group_node_payload(row) for row in task_group_nodes],
                 "merchant": {
                     "sources": catalog_sources,
                     "items": catalog_items,
@@ -5666,6 +6040,8 @@ def make_app() -> Flask:
                     task_id,
                 ),
             )
+            upsert_task_group(connection, payload.get("group_name"), timestamp)
+            upsert_task_group_node(connection, payload.get("group_name"), payload.get("subgroup_name"), timestamp)
             connection.commit()
         log_activity("info", "tasks", f"已更新任务 #{task_id}。")
         return jsonify({"ok": True, "message": "任务已更新。", "task_id": task_id})
@@ -5765,6 +6141,21 @@ def make_app() -> Flask:
                 "UPDATE merchant_sources SET group_name = ?, updated_at = ? WHERE group_name = ?",
                 (new_name, timestamp, old_name),
             )
+            connection.execute(
+                "UPDATE task_group_nodes SET group_name = ?, updated_at = ? WHERE group_name = ?",
+                (new_name, timestamp, old_name),
+            )
+            old_group_sort = connection.execute(
+                "SELECT sort_order FROM task_groups WHERE group_name = ?",
+                (old_name,),
+            ).fetchone()
+            connection.execute("DELETE FROM task_groups WHERE group_name = ?", (old_name,))
+            upsert_task_group(
+                connection,
+                new_name,
+                timestamp,
+                int(old_group_sort["sort_order"]) if old_group_sort else None,
+            )
             connection.commit()
 
         log_activity("info", "tasks", f'分组「{old_name}」已重命名为「{new_name}」。')
@@ -5803,6 +6194,8 @@ def make_app() -> Flask:
                 "UPDATE merchant_sources SET group_name = ?, updated_at = ? WHERE group_name = ?",
                 (DEFAULT_TASK_GROUP, timestamp, group_name),
             )
+            connection.execute("DELETE FROM task_group_nodes WHERE group_name = ?", (group_name,))
+            connection.execute("DELETE FROM task_groups WHERE group_name = ?", (group_name,))
             connection.commit()
 
         log_activity("warning", "tasks", f"分组「{group_name}」已删除，移除了 {int(task_count)} 个任务。")
@@ -5823,18 +6216,31 @@ def make_app() -> Flask:
         subgroup_name = normalize_task_subgroup(payload.get("subgroup_name"))
         if not group_name or not subgroup_name:
             return jsonify({"ok": False, "message": "分组和子分组不能为空。"}), 400
+        if subgroup_name == DEFAULT_TASK_SUBGROUP:
+            return jsonify({"ok": False, "message": "默认子分组暂不支持整体删除。"}), 400
 
         with open_connection() as connection:
-            task_count = connection.execute(
-                "SELECT COUNT(*) FROM tasks WHERE group_name = ? AND subgroup_name = ?",
-                (group_name, subgroup_name),
-            ).fetchone()[0]
-            if not task_count:
+            exists = connection.execute(
+                """
+                SELECT 1 FROM tasks
+                WHERE group_name = ? AND (subgroup_name = ? OR subgroup_name LIKE ?)
+                UNION
+                SELECT 1 FROM task_group_nodes
+                WHERE group_name = ? AND (subgroup_name = ? OR subgroup_name LIKE ?)
+                LIMIT 1
+                """,
+                (
+                    group_name,
+                    subgroup_name,
+                    subgroup_descendant_like(subgroup_name),
+                    group_name,
+                    subgroup_name,
+                    subgroup_descendant_like(subgroup_name),
+                ),
+            ).fetchone()
+            if not exists:
                 return jsonify({"ok": False, "message": "子分组不存在或没有任务。"}), 404
-            connection.execute(
-                "DELETE FROM tasks WHERE group_name = ? AND subgroup_name = ?",
-                (group_name, subgroup_name),
-            )
+            task_count = delete_task_subgroup_tree(connection, group_name, subgroup_name)
             connection.commit()
 
         log_activity("warning", "tasks", f"子分组「{group_name} / {subgroup_name}」已删除，移除了 {int(task_count)} 个任务。")
@@ -5843,6 +6249,201 @@ def make_app() -> Flask:
                 "ok": True,
                 "message": f"子分组已删除，移除了 {int(task_count)} 个任务。",
                 "result": {"group_name": group_name, "subgroup_name": subgroup_name, "task_count": int(task_count)},
+            }
+        )
+
+    @app.route("/api/task-subgroups", methods=["POST"])
+    @login_required
+    @limiter.limit(GENERAL_MUTATION_LIMIT)
+    def create_task_subgroup():
+        payload = read_json()
+        group_name = normalize_task_group(payload.get("group_name"))
+        parent_path = normalize_task_subgroup(payload.get("parent_subgroup_name"))
+        subgroup_name = child_task_subgroup_path(parent_path, payload.get("name") or payload.get("subgroup_name"))
+        if not group_name:
+            return jsonify({"ok": False, "message": "主分组不能为空。"}), 400
+        if subgroup_name == DEFAULT_TASK_SUBGROUP:
+            return jsonify({"ok": False, "message": "子分组名称不能为空。"}), 400
+
+        timestamp = now_iso()
+        with open_connection() as connection:
+            upsert_task_group_node(connection, group_name, subgroup_name, timestamp)
+            connection.commit()
+        log_activity("info", "tasks", f"已创建子分组「{group_name} / {subgroup_name}」。")
+        return jsonify(
+            {
+                "ok": True,
+                "message": "子分组已创建。",
+                "result": {"group_name": group_name, "subgroup_name": subgroup_name},
+            }
+        )
+
+    @app.route("/api/task-subgroups/rename", methods=["POST"])
+    @login_required
+    @limiter.limit(GENERAL_MUTATION_LIMIT)
+    def rename_task_subgroup():
+        payload = read_json()
+        group_name = normalize_task_group(payload.get("group_name"))
+        old_path = normalize_task_subgroup(payload.get("old_subgroup_name") or payload.get("subgroup_name"))
+        new_name = normalize_task_subgroup(payload.get("new_name") or payload.get("new_subgroup_name"))
+        if not group_name or not old_path or not new_name:
+            return jsonify({"ok": False, "message": "分组和新的子分组名称不能为空。"}), 400
+        if old_path == DEFAULT_TASK_SUBGROUP:
+            return jsonify({"ok": False, "message": "默认子分组暂不支持重命名。"}), 400
+
+        timestamp = now_iso()
+        try:
+            with open_connection() as connection:
+                new_path, task_count, node_count = rename_task_subgroup_tree(connection, group_name, old_path, new_name, timestamp)
+                connection.commit()
+        except LookupError:
+            return jsonify({"ok": False, "message": "子分组不存在。"}), 404
+        except ValueError as exc:
+            return jsonify({"ok": False, "message": str(exc)}), 400
+
+        log_activity("info", "tasks", f"子分组「{group_name} / {old_path}」已重命名为「{new_path}」。")
+        return jsonify(
+            {
+                "ok": True,
+                "message": "子分组已重命名。",
+                "result": {
+                    "group_name": group_name,
+                    "old_subgroup_name": old_path,
+                    "new_subgroup_name": new_path,
+                    "task_count": task_count,
+                    "node_count": node_count,
+                },
+            }
+        )
+
+    @app.route("/api/task-subgroups/bulk-delete", methods=["POST"])
+    @login_required
+    @limiter.limit(GENERAL_MUTATION_LIMIT)
+    def bulk_delete_task_subgroups():
+        payload = read_json()
+        group_name = normalize_task_group(payload.get("group_name"))
+        raw_subgroups = payload.get("subgroup_names")
+        if not group_name or not isinstance(raw_subgroups, list):
+            return jsonify({"ok": False, "message": "请选择要删除的子分组。"}), 400
+        subgroup_names = []
+        for item in raw_subgroups:
+            subgroup_name = normalize_task_subgroup(item)
+            if subgroup_name != DEFAULT_TASK_SUBGROUP and subgroup_name not in subgroup_names:
+                subgroup_names.append(subgroup_name)
+        if not subgroup_names:
+            return jsonify({"ok": False, "message": "请选择要删除的子分组。"}), 400
+        if len(subgroup_names) > 100:
+            return jsonify({"ok": False, "message": "单次最多删除 100 个子分组。"}), 400
+
+        deleted_tasks = 0
+        with open_connection() as connection:
+            for subgroup_name in subgroup_names:
+                deleted_tasks += delete_task_subgroup_tree(connection, group_name, subgroup_name)
+            connection.commit()
+
+        log_activity("warning", "tasks", f"已批量删除 {len(subgroup_names)} 个子分组，移除了 {deleted_tasks} 个任务。")
+        return jsonify(
+            {
+                "ok": True,
+                "message": f"已删除 {len(subgroup_names)} 个子分组，移除了 {deleted_tasks} 个任务。",
+                "result": {"group_name": group_name, "subgroup_count": len(subgroup_names), "task_count": deleted_tasks},
+            }
+        )
+
+    @app.route("/api/task-groups/reorder", methods=["POST"])
+    @login_required
+    @limiter.limit(GENERAL_MUTATION_LIMIT)
+    def reorder_task_groups():
+        payload = read_json()
+        group_names = normalize_ordered_values(payload.get("group_names"), normalize_task_group, 200)
+        if not group_names:
+            return jsonify({"ok": False, "message": "请选择要排序的分组。"}), 400
+        if len(group_names) > 200:
+            return jsonify({"ok": False, "message": "单次最多排序 200 个分组。"}), 400
+
+        timestamp = now_iso()
+        with open_connection() as connection:
+            for index, group_name in enumerate(group_names):
+                upsert_task_group(connection, group_name, timestamp, (index + 1) * 100)
+            connection.commit()
+
+        return jsonify(
+            {
+                "ok": True,
+                "message": "分组排序已保存。",
+                "result": {"group_count": len(group_names)},
+            }
+        )
+
+    @app.route("/api/task-subgroups/reorder", methods=["POST"])
+    @login_required
+    @limiter.limit(GENERAL_MUTATION_LIMIT)
+    def reorder_task_subgroups():
+        payload = read_json()
+        group_name = normalize_task_group(payload.get("group_name"))
+        subgroup_names = [
+            subgroup_name
+            for subgroup_name in normalize_ordered_values(payload.get("subgroup_names"), normalize_task_subgroup, 300)
+            if subgroup_name != DEFAULT_TASK_SUBGROUP
+        ]
+        if not group_name or not subgroup_names:
+            return jsonify({"ok": False, "message": "请选择要排序的子分组。"}), 400
+        if len(subgroup_names) > 300:
+            return jsonify({"ok": False, "message": "单次最多排序 300 个子分组。"}), 400
+
+        timestamp = now_iso()
+        with open_connection() as connection:
+            upsert_task_group(connection, group_name, timestamp)
+            for index, subgroup_name in enumerate(subgroup_names):
+                upsert_task_group_node(connection, group_name, subgroup_name, timestamp, (index + 1) * 100)
+            connection.commit()
+
+        return jsonify(
+            {
+                "ok": True,
+                "message": "子分组排序已保存。",
+                "result": {"group_name": group_name, "subgroup_count": len(subgroup_names)},
+            }
+        )
+
+    @app.route("/api/tasks/reorder", methods=["POST"])
+    @login_required
+    @limiter.limit(GENERAL_MUTATION_LIMIT)
+    def reorder_tasks():
+        payload = read_json()
+        raw_ids = payload.get("task_ids")
+        if not isinstance(raw_ids, list):
+            return jsonify({"ok": False, "message": "请选择要排序的任务。"}), 400
+        task_ids: list[int] = []
+        for raw_id in raw_ids:
+            try:
+                task_id = int(raw_id)
+            except (TypeError, ValueError):
+                continue
+            if task_id > 0 and task_id not in task_ids:
+                task_ids.append(task_id)
+            if len(task_ids) > 500:
+                break
+        if not task_ids:
+            return jsonify({"ok": False, "message": "请选择要排序的任务。"}), 400
+        if len(task_ids) > 500:
+            return jsonify({"ok": False, "message": "单次最多排序 500 个任务。"}), 400
+
+        timestamp = now_iso()
+        with open_connection() as connection:
+            for index, task_id in enumerate(task_ids):
+                connection.execute(
+                    "UPDATE tasks SET sort_order = ?, updated_at = ? WHERE id = ?",
+                    ((index + 1) * 100, timestamp, task_id),
+                )
+            updated_count = connection.total_changes
+            connection.commit()
+
+        return jsonify(
+            {
+                "ok": True,
+                "message": "任务排序已保存。",
+                "result": {"task_count": min(updated_count, len(task_ids))},
             }
         )
 
