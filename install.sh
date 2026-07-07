@@ -2557,6 +2557,7 @@ set_total_steps() {
   [[ "$CERT_MODE" == "dns" ]] && TOTAL_STEPS=$((TOTAL_STEPS + 1))
   bool_is_true "$ORIGIN_LOCKDOWN_TO_CLOUDFLARE" && TOTAL_STEPS=$((TOTAL_STEPS + 1))
   bool_is_true "$ENABLE_NGINX" && TOTAL_STEPS=$((TOTAL_STEPS + 1))
+  return 0
 }
 
 main() {

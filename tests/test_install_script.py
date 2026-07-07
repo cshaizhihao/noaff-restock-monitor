@@ -506,6 +506,25 @@ class InstallScriptTestCase(unittest.TestCase):
         self.assertIn("HEALTHCHECK_LAST_STATUS", script)
         self.assertIn("print_healthcheck_diagnostics", script)
 
+    def test_native_ip_install_step_count_succeeds_without_tls(self) -> None:
+        output = self.assert_shell_ok(
+            textwrap.dedent(
+                r"""
+                set -Eeuo pipefail
+                export NOAFF_INSTALL_LIBRARY_MODE=true
+                export DEPLOY_MODE=native
+                export ACCESS_MODE=ip
+                export APP_PORT=7777
+                export CERT_MODE=none
+                source ./install.sh
+                normalize_access_mode
+                set_total_steps
+                printf 'steps=%s nginx=%s tls=%s\n' "$TOTAL_STEPS" "$ENABLE_NGINX" "$ENABLE_TLS"
+                """
+            )
+        )
+        self.assertIn("steps=10 nginx=false tls=false", output)
+
     def test_native_install_releases_only_noaff_owned_port_before_start(self) -> None:
         script = (ROOT_DIR / "install.sh").read_text(encoding="utf-8")
         self.assertIn("release_native_app_port", script)
