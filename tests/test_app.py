@@ -38,6 +38,7 @@ class PortalAppTestCase(unittest.TestCase):
             "APP_VERSION_OVERRIDE": app_module.APP_VERSION_OVERRIDE,
             "APP_BRANCH_OVERRIDE": app_module.APP_BRANCH_OVERRIDE,
             "UPGRADE_SERVICE_NAME": app_module.UPGRADE_SERVICE_NAME,
+            "PANEL_UPGRADE_ENABLED": app_module.PANEL_UPGRADE_ENABLED,
         }
 
         app_module.DATA_DIR = self.data_dir
@@ -56,6 +57,7 @@ class PortalAppTestCase(unittest.TestCase):
         app_module.REPO_REF = "master"
         app_module.APP_VERSION_OVERRIDE = ""
         app_module.APP_BRANCH_OVERRIDE = ""
+        app_module.PANEL_UPGRADE_ENABLED = False
 
         app_module.initialize_database()
         self.app = app_module.make_app()
@@ -887,6 +889,55 @@ class PortalAppTestCase(unittest.TestCase):
         self.assertEqual(payload["version"], "v1.2.3")
         self.assertEqual(payload["branch"], "main")
         self.assertIn("bash install.sh --docker-upgrade", payload["upgrade_command"])
+
+    def test_system_payload_reports_manual_upgrade_without_systemd_permission(self) -> None:
+        app_module.DEPLOY_MODE = "native"
+        app_module.PANEL_UPGRADE_ENABLED = False
+        original_upgrade_service_exists = app_module.upgrade_service_exists
+        original_is_root_process = app_module.is_root_process
+        original_which = app_module.shutil.which
+        try:
+            app_module.upgrade_service_exists = lambda: True
+            app_module.is_root_process = lambda: False
+            app_module.shutil.which = lambda name: "/usr/bin/systemctl" if name == "systemctl" else original_which(name)
+            payload = app_module.system_payload()
+        finally:
+            app_module.upgrade_service_exists = original_upgrade_service_exists
+            app_module.is_root_process = original_is_root_process
+            app_module.shutil.which = original_which
+
+        self.assertEqual(payload["upgrade_mode"], "manual")
+        self.assertFalse(payload["upgrade_supported"])
+        self.assertEqual(payload["upgrade_state"], "需要手动升级")
+        self.assertIn("sudo systemctl start noaff-monitor-upgrade.service", payload["upgrade_command"])
+
+    def test_system_payload_allows_panel_upgrade_when_explicitly_enabled(self) -> None:
+        app_module.DEPLOY_MODE = "native"
+        app_module.PANEL_UPGRADE_ENABLED = True
+        original_upgrade_service_exists = app_module.upgrade_service_exists
+        original_is_root_process = app_module.is_root_process
+        original_which = app_module.shutil.which
+        try:
+            app_module.upgrade_service_exists = lambda: True
+            app_module.is_root_process = lambda: False
+            app_module.shutil.which = lambda name: "/usr/bin/systemctl" if name == "systemctl" else original_which(name)
+            payload = app_module.system_payload()
+        finally:
+            app_module.upgrade_service_exists = original_upgrade_service_exists
+            app_module.is_root_process = original_is_root_process
+            app_module.shutil.which = original_which
+
+        self.assertEqual(payload["upgrade_mode"], "panel")
+        self.assertTrue(payload["upgrade_supported"])
+        self.assertEqual(payload["upgrade_command"], "systemctl start noaff-monitor-upgrade.service")
+
+    def test_upgrade_start_error_explains_interactive_auth(self) -> None:
+        message = app_module.upgrade_start_error_message(
+            "Failed to start noaff-monitor-upgrade.service: Interactive authentication required."
+        )
+
+        self.assertIn("没有启动 systemd 升级服务的权限", message)
+        self.assertIn("sudo systemctl start noaff-monitor-upgrade.service", message)
 
     def test_system_upgrade_endpoint_reports_docker_manual_command(self) -> None:
         app_module.DEPLOY_MODE = "docker"

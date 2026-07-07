@@ -282,8 +282,10 @@ noaff
 systemctl status noaff-monitor --no-pager
 journalctl -u noaff-monitor -f
 systemctl restart noaff-monitor
-systemctl start noaff-monitor-upgrade.service
+sudo systemctl start noaff-monitor-upgrade.service
 ```
+
+后台“升级”按钮默认会先判断当前 Web 进程是否有启动 systemd 服务的权限。没有权限时会显示手动命令，避免出现 `Interactive authentication required` 这类 systemd 认证错误。需要从面板直接触发 systemd 升级时，可在确认授权方案后设置 `PANEL_UPGRADE_ENABLED=true`。
 
 Docker：
 

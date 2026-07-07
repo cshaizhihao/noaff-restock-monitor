@@ -139,6 +139,7 @@ APP_VERSION_OVERRIDE = os.getenv("APP_VERSION", "").strip()
 APP_BRANCH_OVERRIDE = os.getenv("APP_BRANCH", "").strip()
 UPGRADE_SERVICE_NAME = os.getenv("UPGRADE_SERVICE_NAME", "noaff-monitor-upgrade.service")
 UPGRADE_LOG_PATH = Path(os.getenv("UPGRADE_LOG_PATH", "/var/log/noaff-monitor-upgrade.log"))
+PANEL_UPGRADE_ENABLED = env_bool("PANEL_UPGRADE_ENABLED", False)
 
 LOGIN_RATE_LIMIT = os.getenv("LOGIN_RATE_LIMIT", "5 per minute")
 GENERAL_MUTATION_LIMIT = os.getenv("GENERAL_MUTATION_LIMIT", "40 per minute")
@@ -935,19 +936,37 @@ def upgrade_service_exists() -> bool:
     )
 
 
+def is_root_process() -> bool:
+    try:
+        return hasattr(os, "geteuid") and os.geteuid() == 0
+    except Exception:
+        return False
+
+
+def panel_upgrade_can_start_systemd() -> bool:
+    return PANEL_UPGRADE_ENABLED or is_root_process()
+
+
+def systemd_upgrade_command(use_sudo: bool = False) -> str:
+    prefix = "sudo " if use_sudo else ""
+    return f"{prefix}systemctl start {UPGRADE_SERVICE_NAME}"
+
+
 def docker_upgrade_command() -> str:
     return f"cd {INSTALL_APP_DIR} && bash install.sh --docker-upgrade"
 
 
+def upgrade_start_error_message(raw_message: str) -> str:
+    message = re.sub(r"\s+", " ", str(raw_message or "")).strip()
+    if "interactive authentication required" in message.lower():
+        return (
+            "当前面板进程没有启动 systemd 升级服务的权限。"
+            f"请在服务器终端执行：{systemd_upgrade_command(use_sudo=True)}"
+        )
+    return message or "升级命令执行失败。"
+
+
 def upgrade_mode_payload() -> dict[str, str | bool]:
-    if shutil.which("systemctl") and upgrade_service_exists():
-        return {
-            "upgrade_mode": "panel",
-            "upgrade_supported": True,
-            "upgrade_state": "一键升级可用",
-            "upgrade_hint": "将通过 systemd 在后台拉取最新代码并自动重启服务。",
-            "upgrade_command": f"systemctl start {UPGRADE_SERVICE_NAME}",
-        }
     if DEPLOY_MODE == "docker":
         return {
             "upgrade_mode": "manual",
@@ -955,6 +974,22 @@ def upgrade_mode_payload() -> dict[str, str | bool]:
             "upgrade_state": "Docker 手动升级",
             "upgrade_hint": "Docker 隔离部署为了安全起见，不直接从面板接管宿主机 Docker。请复制命令到服务器执行。",
             "upgrade_command": docker_upgrade_command(),
+        }
+    if shutil.which("systemctl") and upgrade_service_exists():
+        if not panel_upgrade_can_start_systemd():
+            return {
+                "upgrade_mode": "manual",
+                "upgrade_supported": False,
+                "upgrade_state": "需要手动升级",
+                "upgrade_hint": "当前 Web 服务用户没有 systemd 启动权限。请复制命令到服务器终端执行。",
+                "upgrade_command": systemd_upgrade_command(use_sudo=True),
+            }
+        return {
+            "upgrade_mode": "panel",
+            "upgrade_supported": True,
+            "upgrade_state": "一键升级可用",
+            "upgrade_hint": "将通过 systemd 在后台拉取最新代码并自动重启服务。",
+            "upgrade_command": systemd_upgrade_command(),
         }
     return {
         "upgrade_mode": "unsupported",
@@ -5165,7 +5200,7 @@ def make_app() -> Flask:
             return jsonify(
                 {
                     "ok": False,
-                    "message": "Docker 部署请复制下方升级命令后在服务器上执行。",
+                    "message": system.get("upgrade_hint") or "请复制下方升级命令后在服务器上执行。",
                     "system": system,
                 }
             ), 400
@@ -5182,7 +5217,7 @@ def make_app() -> Flask:
         except Exception as exc:
             return jsonify({"ok": False, "message": f"升级服务启动失败：{exc}"}), 500
         if completed.returncode != 0:
-            message = (completed.stderr or completed.stdout or "升级命令执行失败。").strip()
+            message = upgrade_start_error_message(completed.stderr or completed.stdout)
             return jsonify({"ok": False, "message": message}), 500
         log_activity("warning", "system", f"管理员 {session.get('admin_username', '')} 已触发系统升级。")
         return jsonify({"ok": True, "message": "升级任务已触发，服务会在后台自动重启。", "system": system_payload()})
