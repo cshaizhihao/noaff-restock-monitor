@@ -1442,7 +1442,7 @@
             const summaryBadge = `
                 <span class="rounded-full border border-slate-700 bg-slate-900/80 px-2.5 py-1 font-mono text-[11px] text-slate-400" data-task-group-count>${group.tasks.length} 个任务</span>
                 <span class="rounded-full border border-rose-900/70 bg-rose-500/10 px-2.5 py-1 font-mono text-[11px] text-rose-300${errorCount ? "" : " hidden"}" data-task-group-error>${errorCount} 错误</span>`;
-            const groupCards = collapsed ? "" : `<div class="mt-5 grid grid-cols-1 gap-6 md:grid-cols-2 xl:grid-cols-3">${renderTaskCards(group.tasks, animateCards)}</div>`;
+            const groupCards = collapsed ? "" : `<div class="task-list-stack mt-5">${renderTaskCards(group.tasks, animateCards)}</div>`;
             const groupClass = animateCards ? "reveal" : "";
 
             return `
@@ -1478,7 +1478,7 @@
             `;
         }).join("");
 
-        const addCard = `<div class="grid grid-cols-1 gap-6 md:grid-cols-2 xl:grid-cols-3">${renderAddTaskCard(animateCards)}</div>`;
+        const addCard = `<div class="task-list-stack">${renderAddTaskCard(animateCards)}</div>`;
         els.tasksGrid.innerHTML = tasks.length ? `${groupSections}${addCard}` : addCard;
     }
 

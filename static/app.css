@@ -390,7 +390,7 @@ button:disabled,
 
 .settings-grid {
     display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-columns: minmax(0, 46rem);
     gap: 1rem;
 }
 
@@ -399,7 +399,7 @@ button:disabled,
 }
 
 .settings-field-wide {
-    grid-column: 1 / -1;
+    grid-column: auto;
 }
 
 .settings-check {
@@ -499,7 +499,7 @@ button:disabled,
 .task-card {
     position: relative;
     display: flex;
-    min-height: 330px;
+    min-height: 0;
     flex-direction: column;
     border: 1px solid var(--color-line);
     border-radius: var(--radius);
@@ -507,6 +507,16 @@ button:disabled,
     padding: 1.25rem;
     box-shadow: var(--shadow-card);
     transition: border-color 160ms ease, background 160ms ease, box-shadow 160ms ease;
+}
+
+.task-list-stack {
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+}
+
+.task-list-stack .terminal-box {
+    min-height: 7rem;
 }
 
 .task-card:hover {
@@ -517,17 +527,22 @@ button:disabled,
 
 .add-card {
     display: flex;
-    min-height: 330px;
+    min-height: 8.5rem;
     cursor: pointer;
     flex-direction: column;
-    align-items: center;
+    align-items: flex-start;
     justify-content: center;
     border: 1px dashed rgba(148, 163, 184, 0.36);
     border-radius: var(--radius);
     background: rgba(13, 19, 29, 0.5);
     padding: 1.25rem;
-    text-align: center;
+    text-align: left;
     transition: background 150ms ease, border-color 150ms ease;
+}
+
+.add-card p {
+    padding: 0 !important;
+    text-align: left !important;
 }
 
 .add-card:hover {
@@ -790,7 +805,7 @@ button:disabled,
 
     .task-card,
     .add-card {
-        min-height: 300px;
+        min-height: 0;
         padding: 1rem;
     }
 

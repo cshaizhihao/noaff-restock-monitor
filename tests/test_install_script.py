@@ -793,6 +793,19 @@ class InstallScriptTestCase(unittest.TestCase):
         self.assertNotIn("grid-auto-flow: dense", combined_ui)
         self.assertNotIn("masonry", combined_ui.lower())
         self.assertNotIn("waterfall", combined_ui.lower())
+        self.assertNotIn("grid-template-columns: repeat(2", app_css)
+
+    def test_dashboard_uses_linear_lists_instead_of_waterfall_cards(self) -> None:
+        app_js = (ROOT_DIR / "static" / "app.js").read_text(encoding="utf-8")
+        app_css = (ROOT_DIR / "static" / "app.css").read_text(encoding="utf-8")
+        portal_html = (ROOT_DIR / "templates" / "portal.html").read_text(encoding="utf-8")
+
+        self.assertIn("task-list-stack", app_js)
+        self.assertIn(".task-list-stack", app_css)
+        self.assertIn("intake-results-stack", portal_html)
+        self.assertNotIn("md:grid-cols-2 xl:grid-cols-3", app_js)
+        self.assertNotIn("md:grid-cols-2 xl:grid-cols-3", portal_html)
+        self.assertNotIn("xl:grid-cols-[minmax(0,0.8fr)_minmax(0,1.2fr)]", portal_html)
 
     def test_product_intake_workbench_exposes_round7_controls(self) -> None:
         app_js = (ROOT_DIR / "static" / "app.js").read_text(encoding="utf-8")

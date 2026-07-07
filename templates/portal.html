@@ -213,10 +213,10 @@
                         </article>
                     </section>
 
-                    <section id="loading-skeleton" class="grid grid-cols-1 gap-6 md:grid-cols-2 xl:grid-cols-3">
-                        <div class="skeleton-card h-[340px]"></div>
-                        <div class="skeleton-card h-[340px]"></div>
-                        <div class="skeleton-card h-[340px]"></div>
+                    <section id="loading-skeleton" class="space-y-4">
+                        <div class="skeleton-card h-[210px]"></div>
+                        <div class="skeleton-card h-[210px]"></div>
+                        <div class="skeleton-card h-[120px]"></div>
                     </section>
 
                     <section id="dashboard-content" class="hidden">
@@ -369,7 +369,7 @@
                                 </form>
                             </section>
 
-                            <section class="grid gap-6 xl:grid-cols-[minmax(0,0.8fr)_minmax(0,1.2fr)]">
+                            <section class="intake-results-stack space-y-6">
                                 <section class="control-panel reveal p-5">
                                     <h3 class="panel-heading">发现结果</h3>
                                     <div class="mt-4 terminal-box max-h-[520px] overflow-y-auto p-4">
@@ -403,13 +403,13 @@
 
                             <section class="control-panel reveal p-5">
                                 <h3 class="panel-heading">错误恢复建议</h3>
-                                <div class="mt-4 grid gap-3 text-sm leading-6 text-slate-400 md:grid-cols-2 xl:grid-cols-3">
-                                    <p><span class="font-mono text-amber-200">catalog_browser_port_busy</span><br>修改商品入库浏览器端口后重试。</p>
-                                    <p><span class="font-mono text-amber-200">firecrawl_auth_error</span><br>检查 Firecrawl API Key。</p>
-                                    <p><span class="font-mono text-amber-200">firecrawl_credit_required</span><br>检查 Firecrawl 额度。</p>
-                                    <p><span class="font-mono text-amber-200">firecrawl_rate_limited</span><br>降低频率或稍后重试。</p>
-                                    <p><span class="font-mono text-amber-200">cloudflare_challenge</span><br>改用 Webhook、手动录入或替代公开页面。</p>
-                                    <p><span class="font-mono text-amber-200">parse_unknown</span><br>设置目标关键词或更换解析器。</p>
+                                <div class="mt-4 space-y-3 text-sm leading-6 text-slate-400">
+                                    <p class="rounded-lg border border-slate-800 bg-slate-950/50 px-3 py-2"><span class="font-mono text-amber-200">catalog_browser_port_busy</span><br>修改商品入库浏览器端口后重试。</p>
+                                    <p class="rounded-lg border border-slate-800 bg-slate-950/50 px-3 py-2"><span class="font-mono text-amber-200">firecrawl_auth_error</span><br>检查 Firecrawl API Key。</p>
+                                    <p class="rounded-lg border border-slate-800 bg-slate-950/50 px-3 py-2"><span class="font-mono text-amber-200">firecrawl_credit_required</span><br>检查 Firecrawl 额度。</p>
+                                    <p class="rounded-lg border border-slate-800 bg-slate-950/50 px-3 py-2"><span class="font-mono text-amber-200">firecrawl_rate_limited</span><br>降低频率或稍后重试。</p>
+                                    <p class="rounded-lg border border-slate-800 bg-slate-950/50 px-3 py-2"><span class="font-mono text-amber-200">cloudflare_challenge</span><br>改用 Webhook、手动录入或替代公开页面。</p>
+                                    <p class="rounded-lg border border-slate-800 bg-slate-950/50 px-3 py-2"><span class="font-mono text-amber-200">parse_unknown</span><br>设置目标关键词或更换解析器。</p>
                                 </div>
                             </section>
                         </section>
