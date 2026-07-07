@@ -642,7 +642,22 @@ class InstallScriptTestCase(unittest.TestCase):
         self.assertIn("does not bypass Cloudflare / Turnstile / CAPTCHA", release_notes)
         self.assertIn("Cloudflare / Turnstile / CAPTCHA challenge pages are treated as protected sources", release_notes)
         self.assertIn("Webhook tokens are stored as HMAC hashes", release_notes)
-        self.assertIn("104 tests passing", release_notes)
+        self.assertIn("133 tests passing", release_notes)
+        self.assertIn("FIRECRAWL_MAX_AGE_MS=0", release_notes)
+        self.assertIn("catalog_discovery_strategy: firecrawl_map", release_notes)
+
+    def test_env_example_documents_firecrawl_and_catalog_defaults(self) -> None:
+        env_example = (ROOT_DIR / ".env.example").read_text(encoding="utf-8")
+        self.assertIn("FIRECRAWL_ENABLED=false", env_example)
+        self.assertIn("FIRECRAWL_MAX_AGE_MS=0", env_example)
+        self.assertIn("FIRECRAWL_STORE_IN_CACHE=false", env_example)
+        self.assertIn("FIRECRAWL_USE_FOR_MONITOR=false", env_example)
+        self.assertIn("FIRECRAWL_USE_FOR_CATALOG=true", env_example)
+        self.assertIn("CATALOG_DISCOVERY_STRATEGY=local", env_example)
+        self.assertIn("CATALOG_SCRAPE_STRATEGY=browser", env_example)
+        self.assertIn("CATALOG_DEFAULT_FETCH_STRATEGY=browser", env_example)
+        self.assertIn("CATALOG_DEFAULT_EXTRACTOR=generic_pricing_table", env_example)
+        self.assertIn("CATALOG_DEDUPE_POLICY=by_url", env_example)
 
     def test_dashboard_polling_does_not_replay_task_reveal_animation(self) -> None:
         app_js = (ROOT_DIR / "static" / "app.js").read_text(encoding="utf-8")

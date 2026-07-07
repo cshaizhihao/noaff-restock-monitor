@@ -35,9 +35,11 @@ NOAFF Restock Monitor 用来监控 IDC、VPS、独服、WHMCS 商店等公开商
 
 ## 功能概览
 
-- 多采集策略：`browser`、`static_http`、`generic_pricing_table`、`whmcs`、`manual`、`webhook`。
+- 多采集策略：`browser`、`static_http`、`generic_pricing_table`、`whmcs`、`firecrawl`、fallback pipeline、`manual`、`webhook`。
 - IDC 页面解析：围绕目标关键词查找附近 card / table / section，识别库存数字、购买入口和售罄标记。
 - WHMCS 解析：支持常见商店页、`pid`、`cart.php?gid=xx`、`configureproduct`、`Order Now`、`Out of Stock`。
+- 可选 Firecrawl 后端：用于人工触发的商品入库 Map/Scrape 更合适，实时监控默认关闭。
+- 商品入库工作台：入口 URL -> URL 发现 -> 批量抓取 -> 解析预览 -> 批量创建任务。
 - 受保护来源处理：Cloudflare challenge 统一分类为 `cloudflare_challenge`，并按 1 / 3 / 10 分钟递进冷却。
 - Telegram 状态机：补货发新消息，库存变化编辑原消息，售罄覆盖原消息并清空 `message_id`。
 - Manual / Webhook 数据源：没有可抓页面时，也能用后台手动标记或外部系统推送库存。
@@ -87,10 +89,73 @@ curl -H 'Cache-Control: no-cache' -fsSL https://raw.githubusercontent.com/cshaiz
 | `static_http` | 普通静态 HTML 页面 | 使用 `requests` 和浏览器 UA 抓取，分类记录超时、403、429、5xx |
 | `generic_pricing_table` | IDC 套餐卡片、价格页、表格 | 在 `target_keyword` 附近判断库存数字、购买按钮、售罄按钮 |
 | `whmcs` | WHMCS 商店页 | 识别产品块、`pid`、购买链接、售罄标记 |
+| `firecrawl` | 已显式配置 Firecrawl 的页面 | 调用外部 Firecrawl `/v2/scrape`，成功返回 HTML 后继续走本项目解析器 |
+| `static_then_firecrawl` | 静态页面优先，失败后外部补充 | `static_http` 失败后尝试 Firecrawl |
+| `firecrawl_then_static` | 外部抓取优先，失败后本地兜底 | Firecrawl 失败后尝试 `static_http` |
+| `firecrawl_then_browser` | 外部抓取优先，限流等错误后浏览器兜底 | Firecrawl 失败后尝试本地 Chromium |
+| `adaptive` | 不确定页面 | 静态优先，必要时浏览器或已启用的 Firecrawl；不会无限 fallback |
 | `manual` | 没有稳定公开来源 | 后台手动标记有货 / 售罄，复用 Telegram 状态机 |
 | `webhook` | 外部系统知道库存 | 外部 POST 库存状态，复用 Telegram 状态机 |
 
 默认策略是 `browser`，旧任务无需手动迁移。
+
+## Firecrawl 集成
+
+Firecrawl 是可选外部采集后端，不是项目硬依赖。不开启 Firecrawl 时，本项目仍可使用 `static_http`、`browser`、`generic_pricing_table`、`whmcs`、`manual` 和 `webhook`。
+
+推荐用法：
+
+- 商品入库优先：用 Firecrawl `/v2/map` 发现候选 URL，再用 `/v2/scrape` 抓取候选页，最后由本项目解析器判断库存。
+- 实时监控谨慎开启：默认 `FIRECRAWL_USE_FOR_MONITOR=false`，避免每轮监控产生外部调用成本。
+- 库存监控必须使用 `FIRECRAWL_MAX_AGE_MS=0` 和 `FIRECRAWL_STORE_IN_CACHE=false`，避免缓存旧库存。
+- API Key 只保存在后端，snapshot、备份、日志和前端响应不会返回明文。
+
+Hosted Firecrawl 可能提升复杂页面成功率，但页面内容会发送给外部服务，且 enhanced / auto proxy 可能产生额外费用。Self-host Firecrawl 不包含 hosted 版 Fire-engine 等高级 IP block / robot detection 能力，不能把它当成 Cloudflare 绕过能力。
+
+边界保持一致：如果 Firecrawl 返回的是正常页面内容，本项目会继续解析；如果返回 Cloudflare / Turnstile / CAPTCHA challenge，仍会分类为 `cloudflare_challenge` 并进入受保护来源冷却。
+
+最小配置：
+
+```env
+FIRECRAWL_ENABLED=true
+FIRECRAWL_API_URL=https://api.firecrawl.dev
+FIRECRAWL_API_KEY=fc-...
+FIRECRAWL_MAX_AGE_MS=0
+FIRECRAWL_STORE_IN_CACHE=false
+FIRECRAWL_USE_FOR_MONITOR=false
+FIRECRAWL_USE_FOR_CATALOG=true
+```
+
+`FIRECRAWL_PROXY_MODE=enhanced` 或 `auto` 只有在对应 feature flag 显式开启时才会生效：
+
+```env
+FIRECRAWL_PROXY_MODE=auto
+FIRECRAWL_ALLOW_AUTO_PROXY=true
+```
+
+## 商品入库
+
+商品入库适合 IDC 商家没有公开 API、但有公开价格页 / WHMCS 商店页 / sitemap / 商品列表页的场景。当前工作流是：
+
+```text
+入口 URL -> 发现候选 URL -> 过滤商品页 -> 批量抓取 -> 解析器 -> 入库预览 -> 创建任务
+```
+
+工作台字段：
+
+| 字段 | 说明 |
+| --- | --- |
+| 商家 URL | 入口页，例如 pricing、store、cart.php?gid=xx |
+| discovery strategy | `local` / `firecrawl_map` / `hybrid` |
+| scrape strategy | `browser` / `static_http` / `firecrawl` / `adaptive` |
+| extractor | `generic_pricing_table` / `whmcs` / `firecrawl_product_hint` / `fallback_keyword_parser` |
+| search keyword | Firecrawl Map 搜索词，例如 `vps`、`hk`、`pricing` |
+| target keyword | 目标商品关键词，建议用完整产品名 |
+| dedupe policy | `by_url` / `by_title_url` / `by_pid` |
+| include sold out | 是否把售罄商品也放进入库预览 |
+| auto create tasks | 是否导入后直接生成监控任务 |
+
+发现结果和商品预览会展示 URL、来源、状态、解析器、`backend_used` 和是否可创建任务。批量创建任务会按 `source_item_id` 去重；重复执行只会同步已有任务，不会重复创建。
 
 ## IDC / WHMCS 配置示例
 
@@ -156,6 +221,7 @@ cooldown_until: 冷却截止时间
 - 商家公开 RSS / 状态页 / 静态价格页。
 - `manual` 后台手动维护。
 - `webhook` 接入你自己的合法库存来源。
+- 已启用 Firecrawl 时可尝试外部抓取一次；如果仍返回 challenge，同样进入冷却。
 
 ## Manual / Webhook
 
@@ -258,6 +324,27 @@ curl -X POST 'https://your-panel.example.com/api/webhooks/restock/123' \
 | `CATALOG_DEBUG_PORT` | 商家导入浏览器调试端口 | `9445` |
 | `POLL_INTERVAL_SECONDS` | 任务轮询间隔 | `45` |
 | `REQUEST_TIMEOUT_SECONDS` | 页面抓取超时 | `25` |
+| `FIRECRAWL_ENABLED` | 是否启用 Firecrawl 集成 | `false` |
+| `FIRECRAWL_API_URL` | Firecrawl API 地址，hosted 或 self-host | `https://api.firecrawl.dev` |
+| `FIRECRAWL_API_KEY` | Firecrawl API Key，永不通过 snapshot 明文返回 | 空 |
+| `FIRECRAWL_TIMEOUT_SECONDS` | Firecrawl 请求超时 | `60` |
+| `FIRECRAWL_MAX_AGE_MS` | Firecrawl 缓存年龄；库存监控必须为 `0` | `0` |
+| `FIRECRAWL_STORE_IN_CACHE` | 是否允许 Firecrawl 缓存结果 | `false` |
+| `FIRECRAWL_PROXY_MODE` | `basic` / `enhanced` / `auto` | `basic` |
+| `FIRECRAWL_ALLOW_AUTO_PROXY` | 是否允许 auto proxy | `false` |
+| `FIRECRAWL_ALLOW_ENHANCED_PROXY` | 是否允许 enhanced proxy | `false` |
+| `FIRECRAWL_ZERO_DATA_RETENTION` | 请求 Firecrawl 零数据保留 | `true` |
+| `FIRECRAWL_USE_FOR_MONITOR` | 是否允许监控任务默认使用 Firecrawl | `false` |
+| `FIRECRAWL_USE_FOR_CATALOG` | 是否允许商品入库使用 Firecrawl | `true` |
+| `FIRECRAWL_CATALOG_LIMIT` | Firecrawl Map 单次候选 URL 上限 | `50` |
+| `CATALOG_DISCOVERY_STRATEGY` | 商品入库默认发现策略 | `local` |
+| `CATALOG_SCRAPE_STRATEGY` | 商品入库默认抓取策略 | `browser` |
+| `CATALOG_DEFAULT_FETCH_STRATEGY` | 入库后生成任务的默认采集策略 | `browser` |
+| `CATALOG_DEFAULT_EXTRACTOR` | 商品入库默认解析器 | `generic_pricing_table` |
+| `CATALOG_DEDUPE_POLICY` | 商品入库默认去重策略 | `by_url` |
+| `CATALOG_MAX_DISCOVERED_URLS` | 商品入库默认发现 URL 上限 | `50` |
+| `CATALOG_MAX_IMPORT_ITEMS` | 商品入库默认入库上限 | `50` |
+| `CATALOG_TIMEOUT_SECONDS` | 商品入库抓取超时 | `25` |
 | `CHROMIUM_HEADLESS` | Chromium 是否无头 | `true` |
 | `CHROMIUM_BINARY` | Chromium 可执行文件路径 | 自动探测 |
 | `CHROMIUM_USER_AGENT` | 覆盖浏览器和 `static_http` UA | 空 |
@@ -368,9 +455,10 @@ bash -n install.sh
 - 任务创建、编辑、分组、快照字段。
 - 数据库迁移和备份恢复。
 - `static_http`、`browser`、`generic_pricing_table`、`whmcs`。
+- Firecrawl scrape/map/fallback pipeline，全部使用 mock，不依赖实时 Firecrawl。
 - Cloudflare challenge 分类、受保护来源冷却、浏览器不误 rebuild。
 - Manual / Webhook 库存写入和 Telegram 状态机。
-- 商家页面导入和商品提升为任务。
+- 商品入库 URL 发现、Firecrawl Map、商品预览、批量创建任务去重。
 - 安装脚本、Docker、Nginx、升级、卸载。
 - 前端轮询、任务卡片局部更新、UI 静态约束。
 
@@ -405,6 +493,7 @@ bash -n install.sh
 - 页面正常可访问时能识别购买入口、售罄标记和库存数字。
 - Cloudflare challenge 被识别为受保护来源，不触发浏览器 rebuild。
 - 冷却期不会持续请求目标站。
+- Firecrawl 使用 `maxAge=0`、默认不缓存，API Key 不出现在 snapshot / 日志 / 备份里。
 - `manual` / `webhook` 能触发 Telegram send/edit/sold-out 行为。
 - 快照、日志和数据库不泄露 webhook 明文 token。
 - 不添加依赖实时公网商家页面的自动化测试。
