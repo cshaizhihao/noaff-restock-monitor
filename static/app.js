@@ -59,6 +59,13 @@
         merchantGroup: document.getElementById("merchant-group"),
         merchantGroupCustomWrap: document.getElementById("merchant-group-custom-wrap"),
         merchantGroupCustom: document.getElementById("merchant-group-custom"),
+        merchantDiscoveryStrategy: document.getElementById("merchant-discovery-strategy"),
+        merchantScrapeStrategy: document.getElementById("merchant-scrape-strategy"),
+        merchantDefaultFetchStrategy: document.getElementById("merchant-default-fetch-strategy"),
+        merchantDefaultExtractor: document.getElementById("merchant-default-extractor"),
+        merchantSearchKeyword: document.getElementById("merchant-search-keyword"),
+        merchantMaxImportItems: document.getElementById("merchant-max-import-items"),
+        merchantIncludeSoldOut: document.getElementById("merchant-include-sold-out"),
         merchantAutoPromote: document.getElementById("merchant-auto-promote"),
         merchantImportButton: document.getElementById("merchant-import-button"),
         merchantImportButtonLabel: document.getElementById("merchant-import-button-label"),
@@ -948,6 +955,8 @@
                     const sourceLabel = item.source_name || item.source_url || "未知来源";
                     const actionLabel = linkedTask ? "编辑任务" : "生成任务";
                     const actionName = linkedTask ? "open-task" : "promote-item";
+                    const backendLabel = item.backend_used ? fetchStrategyLabel(item.backend_used) : "-";
+                    const discoveryLabel = item.discovery_source || "-";
                     return `
                         <article class="merchant-card rounded-xl border border-slate-800/80 bg-slate-950/50 p-4">
                             <div class="flex flex-wrap items-start justify-between gap-3">
@@ -962,6 +971,8 @@
                                 <span class="truncate rounded-lg border border-slate-800 bg-slate-900/70 px-2.5 py-1">价格：${escapeHtml(item.price_hint || "-")}</span>
                                 <span class="truncate rounded-lg border border-slate-800 bg-slate-900/70 px-2.5 py-1">库存：${escapeHtml(item.stock_hint || "-")}</span>
                                 <span class="truncate rounded-lg border border-slate-800 bg-slate-900/70 px-2.5 py-1">补货：${escapeHtml(item.restock_hint || "-")}</span>
+                                <span class="truncate rounded-lg border border-slate-800 bg-slate-900/70 px-2.5 py-1">后端：${escapeHtml(backendLabel)}</span>
+                                <span class="truncate rounded-lg border border-slate-800 bg-slate-900/70 px-2.5 py-1">发现：${escapeHtml(discoveryLabel)}</span>
                             </div>
                             <div class="mt-3 flex flex-wrap items-center justify-between gap-3">
                                 <p class="truncate font-mono text-[11px] text-slate-500">${escapeHtml(item.item_url || item.monitor_url || "")}</p>
@@ -1297,6 +1308,13 @@
             source_url: els.merchantSourceUrl.value.trim(),
             source_name: els.merchantSourceName.value.trim(),
             group_name: groupName,
+            catalog_discovery_strategy: els.merchantDiscoveryStrategy?.value || "local",
+            catalog_scrape_strategy: els.merchantScrapeStrategy?.value || "browser",
+            default_fetch_strategy: els.merchantDefaultFetchStrategy?.value || "browser",
+            default_extractor: els.merchantDefaultExtractor?.value || "generic_pricing_table",
+            search_keyword: els.merchantSearchKeyword?.value.trim() || "",
+            max_import_items: Number(els.merchantMaxImportItems?.value || 50),
+            include_sold_out: Boolean(els.merchantIncludeSoldOut?.checked),
             auto_promote: Boolean(els.merchantAutoPromote?.checked)
         };
     }

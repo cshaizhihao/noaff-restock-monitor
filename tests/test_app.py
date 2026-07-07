@@ -2027,6 +2027,152 @@ class PortalAppTestCase(unittest.TestCase):
         self.assertTrue(sent_payload["zeroDataRetention"])
         self.assertEqual(sent_payload["proxy"], "basic")
 
+    def test_firecrawl_map_returns_links_with_search_and_limit(self) -> None:
+        class FakeResponse:
+            status_code = 200
+
+            def json(self):
+                return {
+                    "data": {
+                        "links": [
+                            "https://merchant.example.com/cart.php?gid=1",
+                            {"url": "https://merchant.example.com/store/hk-vps"},
+                            {"href": "https://merchant.example.com/login"},
+                        ],
+                        "url": "https://merchant.example.com",
+                    }
+                }
+
+        class FakeSession:
+            def __init__(self) -> None:
+                self.calls: list[dict[str, object]] = []
+
+            def post(self, url, headers=None, json=None, timeout=None):
+                self.calls.append({"url": url, "headers": headers, "json": json, "timeout": timeout})
+                return FakeResponse()
+
+        session = FakeSession()
+        client = app_module.FirecrawlClient(self.firecrawl_settings(), session)
+        result = client.map("https://merchant.example.com", "hk vps", 12)
+
+        self.assertEqual(result.error_kind, "")
+        self.assertEqual(session.calls[0]["url"], "https://api.firecrawl.dev/v2/map")
+        self.assertEqual(session.calls[0]["json"]["search"], "hk vps")
+        self.assertEqual(session.calls[0]["json"]["limit"], 12)
+        self.assertEqual(session.calls[0]["json"]["sitemap"], "include")
+        self.assertEqual(
+            app_module.parse_firecrawl_map_links(result),
+            [
+                "https://merchant.example.com/cart.php?gid=1",
+                "https://merchant.example.com/store/hk-vps",
+                "https://merchant.example.com/login",
+            ],
+        )
+
+    def test_merchant_import_firecrawl_map_discovers_scrapes_and_creates_tasks(self) -> None:
+        engine = self.app.extensions["monitor_engine"]
+
+        class ExplodingCatalogBrowser:
+            def fetch_html(self, url, timeout_seconds):
+                raise AssertionError("firecrawl_map discovery should not fetch the entry page with local browser")
+
+            def rebuild(self, reason):
+                raise AssertionError("firecrawl_map discovery should not rebuild local browser")
+
+        class FakeFirecrawlCatalogProvider:
+            map_calls: list[dict[str, object]] = []
+            scrape_calls: list[str] = []
+
+            def __init__(self, settings_payload, client=None) -> None:
+                self.settings_payload = settings_payload
+
+            def map(self, url: str, search: str = "", limit: int = 50) -> app_module.FetchResult:
+                self.__class__.map_calls.append({"url": url, "search": search, "limit": limit})
+                return app_module.FetchResult(
+                    html=json.dumps(
+                        {
+                            "links": [
+                                "https://merchant.example.com/store/hk-vps",
+                                "https://merchant.example.com/cart.php?gid=8",
+                                "https://merchant.example.com/login",
+                                "https://other.example.com/store/outside",
+                            ]
+                        },
+                        ensure_ascii=False,
+                    ),
+                    final_url=url,
+                    detail="ok",
+                )
+
+            def scrape(self, url: str) -> app_module.FetchResult:
+                self.__class__.scrape_calls.append(url)
+                if url.endswith("/store/hk-vps"):
+                    html = """
+                    <html><body>
+                      <section class="product-card">
+                        <h3>HK Premium VPS</h3>
+                        <p>$9.90/mo</p>
+                        <a href="/cart.php?a=add&pid=88">Order Now</a>
+                      </section>
+                    </body></html>
+                    """
+                elif "cart.php?gid=8" in url:
+                    html = """
+                    <html><body>
+                      <div class="package">
+                        <h3>SG Lite VPS</h3>
+                        <button disabled>Out of Stock</button>
+                      </div>
+                    </body></html>
+                    """
+                else:
+                    html = "<html><body>ignored</body></html>"
+                return app_module.FetchResult(html=html, final_url=url, status_code=200, detail="ok")
+
+        original_browser = engine.catalog_browser
+        original_provider = app_module.FirecrawlCatalogProvider
+        engine.catalog_browser = ExplodingCatalogBrowser()
+        app_module.FirecrawlCatalogProvider = FakeFirecrawlCatalogProvider
+        try:
+            result = engine.import_merchant_source(
+                "https://merchant.example.com/pricing",
+                "",
+                "IDC",
+                {**engine.get_runtime_settings(), **self.firecrawl_settings(), "firecrawl_catalog_limit": 20},
+                auto_promote=True,
+                catalog_options={
+                    "catalog_discovery_strategy": "firecrawl_map",
+                    "catalog_scrape_strategy": "firecrawl",
+                    "default_fetch_strategy": "generic_pricing_table",
+                    "default_extractor": "generic_pricing_table",
+                    "search_keyword": "vps",
+                    "max_discovered_urls": 10,
+                    "max_import_items": 10,
+                    "include_sold_out": True,
+                },
+            )
+        finally:
+            engine.catalog_browser = original_browser
+            app_module.FirecrawlCatalogProvider = original_provider
+
+        self.assertEqual(result.scanned_count, 2)
+        self.assertEqual(result.promoted_count, 2)
+        self.assertEqual(FakeFirecrawlCatalogProvider.map_calls, [{"url": "https://merchant.example.com/pricing", "search": "vps", "limit": 10}])
+        self.assertEqual(
+            FakeFirecrawlCatalogProvider.scrape_calls,
+            ["https://merchant.example.com/store/hk-vps", "https://merchant.example.com/cart.php?gid=8"],
+        )
+        self.assertEqual(sorted(item["title"] for item in result.items), ["HK Premium VPS", "SG Lite VPS"])
+
+        with app_module.open_connection() as connection:
+            task_rows = connection.execute(
+                "SELECT fetch_strategy, source_config FROM tasks ORDER BY name"
+            ).fetchall()
+        self.assertEqual([row["fetch_strategy"] for row in task_rows], ["generic_pricing_table", "generic_pricing_table"])
+        configs = [json.loads(row["source_config"]) for row in task_rows]
+        self.assertTrue(all(config["catalog_backend"] == "firecrawl" for config in configs))
+        self.assertTrue(all(config["catalog_discovery_source"] == "firecrawl_map" for config in configs))
+
     def test_firecrawl_fetcher_classifies_http_errors(self) -> None:
         class FakeResponse:
             def __init__(self, status_code: int) -> None:

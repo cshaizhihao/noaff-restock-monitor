@@ -127,6 +127,10 @@ DEFAULT_FIRECRAWL_ZERO_DATA_RETENTION = env_bool("FIRECRAWL_ZERO_DATA_RETENTION"
 DEFAULT_FIRECRAWL_USE_FOR_MONITOR = env_bool("FIRECRAWL_USE_FOR_MONITOR", False)
 DEFAULT_FIRECRAWL_USE_FOR_CATALOG = env_bool("FIRECRAWL_USE_FOR_CATALOG", True)
 DEFAULT_FIRECRAWL_CATALOG_LIMIT = int(os.getenv("FIRECRAWL_CATALOG_LIMIT", "50"))
+DEFAULT_CATALOG_DISCOVERY_STRATEGY = os.getenv("CATALOG_DISCOVERY_STRATEGY", "local").strip().lower() or "local"
+DEFAULT_CATALOG_SCRAPE_STRATEGY = os.getenv("CATALOG_SCRAPE_STRATEGY", "browser").strip().lower() or "browser"
+DEFAULT_CATALOG_FETCH_STRATEGY = os.getenv("CATALOG_DEFAULT_FETCH_STRATEGY", "browser").strip().lower() or "browser"
+DEFAULT_CATALOG_EXTRACTOR = os.getenv("CATALOG_DEFAULT_EXTRACTOR", "generic_pricing_table").strip().lower() or "generic_pricing_table"
 ENABLE_PROXY_FIX = env_bool("ENABLE_PROXY_FIX", False)
 PROXY_FIX_X_FOR = int(os.getenv("PROXY_FIX_X_FOR", "1"))
 PROXY_FIX_X_PROTO = int(os.getenv("PROXY_FIX_X_PROTO", "1"))
@@ -247,6 +251,17 @@ SETTINGS_DEFAULTS = {
     "firecrawl_use_for_monitor": settings_bool_text(DEFAULT_FIRECRAWL_USE_FOR_MONITOR),
     "firecrawl_use_for_catalog": settings_bool_text(DEFAULT_FIRECRAWL_USE_FOR_CATALOG),
     "firecrawl_catalog_limit": str(DEFAULT_FIRECRAWL_CATALOG_LIMIT),
+    "catalog_discovery_strategy": DEFAULT_CATALOG_DISCOVERY_STRATEGY,
+    "catalog_scrape_strategy": DEFAULT_CATALOG_SCRAPE_STRATEGY,
+    "catalog_default_fetch_strategy": DEFAULT_CATALOG_FETCH_STRATEGY,
+    "catalog_default_extractor": DEFAULT_CATALOG_EXTRACTOR,
+    "catalog_default_group": "默认分组",
+    "catalog_include_sold_out": "true",
+    "catalog_auto_create_tasks": "true",
+    "catalog_dedupe_policy": "by_url",
+    "catalog_max_discovered_urls": "50",
+    "catalog_max_import_items": "50",
+    "catalog_timeout_seconds": str(DEFAULT_TIMEOUT_SECONDS),
 }
 
 DEFAULT_RESTOCK_TEMPLATE = "<b>{name}</b>\n库存：{stock}\n链接：{url}\n检测时间：{checked_at}"
@@ -283,6 +298,65 @@ STATIC_HTTP_FETCH_STRATEGIES = {
 }
 EXTERNAL_INPUT_FETCH_STRATEGIES = {FETCH_STRATEGY_MANUAL, FETCH_STRATEGY_WEBHOOK}
 EXTERNAL_INPUT_PENDING_ERROR_KINDS = {"manual_pending", "webhook_pending"}
+CATALOG_DISCOVERY_LOCAL = "local"
+CATALOG_DISCOVERY_FIRECRAWL_MAP = "firecrawl_map"
+CATALOG_DISCOVERY_HYBRID = "hybrid"
+CATALOG_DISCOVERY_STRATEGIES = {
+    CATALOG_DISCOVERY_LOCAL,
+    CATALOG_DISCOVERY_FIRECRAWL_MAP,
+    CATALOG_DISCOVERY_HYBRID,
+}
+CATALOG_SCRAPE_STATIC_HTTP = FETCH_STRATEGY_STATIC_HTTP
+CATALOG_SCRAPE_BROWSER = FETCH_STRATEGY_BROWSER
+CATALOG_SCRAPE_FIRECRAWL = FETCH_STRATEGY_FIRECRAWL
+CATALOG_SCRAPE_ADAPTIVE = FETCH_STRATEGY_ADAPTIVE
+CATALOG_SCRAPE_STRATEGIES = {
+    CATALOG_SCRAPE_STATIC_HTTP,
+    CATALOG_SCRAPE_BROWSER,
+    CATALOG_SCRAPE_FIRECRAWL,
+    CATALOG_SCRAPE_ADAPTIVE,
+}
+CATALOG_EXTRACTOR_GENERIC = FETCH_STRATEGY_GENERIC_PRICING_TABLE
+CATALOG_EXTRACTOR_WHMCS = FETCH_STRATEGY_WHMCS
+CATALOG_EXTRACTOR_FIRECRAWL_PRODUCT_HINT = "firecrawl_product_hint"
+CATALOG_EXTRACTOR_FALLBACK = "fallback_keyword_parser"
+CATALOG_EXTRACTORS = {
+    CATALOG_EXTRACTOR_GENERIC,
+    CATALOG_EXTRACTOR_WHMCS,
+    CATALOG_EXTRACTOR_FIRECRAWL_PRODUCT_HINT,
+    CATALOG_EXTRACTOR_FALLBACK,
+}
+CATALOG_DEDUPE_POLICIES = {"by_url", "by_title_url", "by_pid"}
+CATALOG_TARGET_KEYWORD_MODES = {"exact", "contains", "fuzzy"}
+CATALOG_URL_KEEP_MARKERS = (
+    "store",
+    "cart",
+    "product",
+    "pricing",
+    "vps",
+    "cloud",
+    "server",
+    "hosting",
+    "cart.php",
+    "gid=",
+    "pid=",
+    "/configureproduct",
+    "/dedicated",
+)
+CATALOG_URL_DROP_MARKERS = (
+    "login",
+    "register",
+    "knowledgebase",
+    "announcements",
+    "terms",
+    "privacy",
+    "contact",
+    "clientarea",
+    "checkout",
+    "viewcart",
+    "submitticket",
+    "affiliates",
+)
 FIRECRAWL_PROXY_MODES = {"basic", "enhanced", "auto"}
 SENSITIVE_SETTINGS_KEYS = {"firecrawl_api_key"}
 STATIC_HTTP_USER_AGENT = (
@@ -549,6 +623,89 @@ def is_supported_fetch_strategy(value: Any) -> bool:
 
 def task_fetch_strategy(task: Any) -> str:
     return normalize_fetch_strategy(mapping_value(task, "fetch_strategy", FETCH_STRATEGY_BROWSER))
+
+
+def normalize_catalog_choice(value: Any, allowed: set[str], default: str) -> str:
+    normalized = str(value or "").strip().lower().replace("-", "_")
+    return normalized if normalized in allowed else default
+
+
+def catalog_option_int(value: Any, default: int, minimum: int = 1, maximum: int = 250) -> int:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        parsed = default
+    return max(minimum, min(maximum, parsed))
+
+
+def split_catalog_paths(value: Any) -> list[str]:
+    if isinstance(value, list):
+        raw_items = value
+    else:
+        raw_items = re.split(r"[\n,]+", str(value or ""))
+    return [str(item).strip().lower() for item in raw_items if str(item).strip()]
+
+
+def normalize_catalog_options(
+    payload: dict[str, Any] | None,
+    settings_payload: dict[str, Any],
+    group_name: str,
+    auto_promote: bool,
+) -> dict[str, Any]:
+    payload = payload or {}
+    return {
+        "catalog_discovery_strategy": normalize_catalog_choice(
+            payload.get("catalog_discovery_strategy") or payload.get("discovery_strategy") or settings_payload.get("catalog_discovery_strategy"),
+            CATALOG_DISCOVERY_STRATEGIES,
+            CATALOG_DISCOVERY_LOCAL,
+        ),
+        "catalog_scrape_strategy": normalize_catalog_choice(
+            payload.get("catalog_scrape_strategy") or payload.get("scrape_strategy") or settings_payload.get("catalog_scrape_strategy"),
+            CATALOG_SCRAPE_STRATEGIES,
+            CATALOG_SCRAPE_BROWSER,
+        ),
+        "default_fetch_strategy": normalize_fetch_strategy(
+            payload.get("default_fetch_strategy") or settings_payload.get("catalog_default_fetch_strategy") or FETCH_STRATEGY_BROWSER
+        ),
+        "default_extractor": normalize_catalog_choice(
+            payload.get("default_extractor") or settings_payload.get("catalog_default_extractor"),
+            CATALOG_EXTRACTORS,
+            CATALOG_EXTRACTOR_GENERIC,
+        ),
+        "default_group": normalize_task_group(group_name or payload.get("default_group") or settings_payload.get("catalog_default_group")),
+        "target_keyword_mode": normalize_catalog_choice(payload.get("target_keyword_mode"), CATALOG_TARGET_KEYWORD_MODES, "contains"),
+        "include_sold_out": parse_setting_bool(payload.get("include_sold_out"), bool(settings_payload.get("catalog_include_sold_out", True))),
+        "auto_create_tasks": bool(auto_promote),
+        "dedupe_policy": normalize_catalog_choice(
+            payload.get("dedupe_policy") or settings_payload.get("catalog_dedupe_policy"),
+            CATALOG_DEDUPE_POLICIES,
+            "by_url",
+        ),
+        "max_discovered_urls": catalog_option_int(
+            payload.get("max_discovered_urls") or settings_payload.get("catalog_max_discovered_urls"),
+            int(settings_payload.get("catalog_max_discovered_urls") or 50),
+            1,
+            250,
+        ),
+        "max_import_items": catalog_option_int(
+            payload.get("max_import_items") or settings_payload.get("catalog_max_import_items"),
+            int(settings_payload.get("catalog_max_import_items") or 50),
+            1,
+            250,
+        ),
+        "timeout_seconds": catalog_option_int(
+            payload.get("timeout_seconds") or settings_payload.get("catalog_timeout_seconds") or settings_payload.get("request_timeout_seconds"),
+            int(settings_payload.get("request_timeout_seconds") or DEFAULT_TIMEOUT_SECONDS),
+            10,
+            180,
+        ),
+        "search_keyword": str(payload.get("search_keyword") or payload.get("catalog_search_keyword") or "").strip(),
+        "target_keyword": str(payload.get("target_keyword") or "").strip(),
+        "include_paths": split_catalog_paths(payload.get("include_paths")),
+        "exclude_paths": split_catalog_paths(payload.get("exclude_paths")),
+        "allow_subdomains": parse_setting_bool(payload.get("allow_subdomains"), False),
+        "ignore_query_parameters": parse_setting_bool(payload.get("ignore_query_parameters"), False),
+    }
 
 
 def scrub_source_config(value: dict[str, Any]) -> dict[str, Any]:
@@ -1269,6 +1426,22 @@ def normalize_settings(raw: dict[str, str]) -> dict[str, Any]:
         firecrawl_proxy_mode = "basic"
     if firecrawl_proxy_mode == "enhanced" and not firecrawl_allow_enhanced_proxy:
         firecrawl_proxy_mode = "basic"
+    catalog_discovery_strategy = normalize_catalog_choice(
+        raw.get("catalog_discovery_strategy"),
+        CATALOG_DISCOVERY_STRATEGIES,
+        DEFAULT_CATALOG_DISCOVERY_STRATEGY,
+    )
+    catalog_scrape_strategy = normalize_catalog_choice(
+        raw.get("catalog_scrape_strategy"),
+        CATALOG_SCRAPE_STRATEGIES,
+        DEFAULT_CATALOG_SCRAPE_STRATEGY,
+    )
+    catalog_default_fetch_strategy = normalize_fetch_strategy(raw.get("catalog_default_fetch_strategy") or DEFAULT_CATALOG_FETCH_STRATEGY)
+    catalog_default_extractor = normalize_catalog_choice(
+        raw.get("catalog_default_extractor"),
+        CATALOG_EXTRACTORS,
+        DEFAULT_CATALOG_EXTRACTOR,
+    )
     return {
         "telegram_bot_token": raw.get("telegram_bot_token", "").strip(),
         "telegram_chat_id": legacy_chat_id,
@@ -1307,6 +1480,17 @@ def normalize_settings(raw: dict[str, str]) -> dict[str, Any]:
             DEFAULT_FIRECRAWL_USE_FOR_CATALOG,
         ),
         "firecrawl_catalog_limit": max(1, min(250, int(raw.get("firecrawl_catalog_limit") or DEFAULT_FIRECRAWL_CATALOG_LIMIT))),
+        "catalog_discovery_strategy": catalog_discovery_strategy,
+        "catalog_scrape_strategy": catalog_scrape_strategy,
+        "catalog_default_fetch_strategy": catalog_default_fetch_strategy,
+        "catalog_default_extractor": catalog_default_extractor,
+        "catalog_default_group": normalize_task_group(raw.get("catalog_default_group") or DEFAULT_TASK_GROUP),
+        "catalog_include_sold_out": parse_setting_bool(raw.get("catalog_include_sold_out"), True),
+        "catalog_auto_create_tasks": parse_setting_bool(raw.get("catalog_auto_create_tasks"), True),
+        "catalog_dedupe_policy": normalize_catalog_choice(raw.get("catalog_dedupe_policy"), CATALOG_DEDUPE_POLICIES, "by_url"),
+        "catalog_max_discovered_urls": max(1, min(250, int(raw.get("catalog_max_discovered_urls") or 50))),
+        "catalog_max_import_items": max(1, min(250, int(raw.get("catalog_max_import_items") or 50))),
+        "catalog_timeout_seconds": max(10, min(180, int(raw.get("catalog_timeout_seconds") or timeout_seconds))),
     }
 
 
@@ -1580,6 +1764,16 @@ def to_merchant_item_payload(
     source_row: sqlite3.Row | None = None,
     task_row: sqlite3.Row | None = None,
 ) -> dict[str, Any]:
+    raw_payload = row["raw_payload"] or ""
+    backend_used = ""
+    discovery_source = ""
+    try:
+        raw_data = json.loads(raw_payload)
+        if isinstance(raw_data, dict):
+            backend_used = str(raw_data.get("catalog_backend") or "")
+            discovery_source = str(raw_data.get("catalog_discovery_source") or "")
+    except json.JSONDecodeError:
+        pass
     return {
         "id": row["id"],
         "source_id": row["source_id"],
@@ -1593,6 +1787,8 @@ def to_merchant_item_payload(
         "price_hint": row["price_hint"] or "",
         "stock_hint": row["stock_hint"] or "",
         "restock_hint": row["restock_hint"] or "",
+        "backend_used": backend_used,
+        "discovery_source": discovery_source,
         "item_state": row["item_state"],
         "last_seen_at": row["last_seen_at"] or "",
         "created_at": row["created_at"],
@@ -1744,6 +1940,8 @@ def create_task_from_catalog_item(
         "target_keyword": item["keyword"],
         "restock_template": DEFAULT_RESTOCK_TEMPLATE,
         "soldout_template": DEFAULT_SOLDOUT_TEMPLATE,
+        "fetch_strategy": item.get("fetch_strategy", FETCH_STRATEGY_BROWSER),
+        "source_config": item.get("source_config", {}),
         "button_1_text": "",
         "button_1_url": "",
         "button_2_text": "",
@@ -2426,6 +2624,78 @@ class FirecrawlClient:
             "proxy": str(self.settings.get("firecrawl_proxy_mode") or "basic"),
         }
 
+    def map_payload(self, url: str, search: str = "", limit: int = 50) -> dict[str, Any]:
+        payload: dict[str, Any] = {
+            "url": url,
+            "limit": max(1, min(250, int(limit or DEFAULT_FIRECRAWL_CATALOG_LIMIT))),
+            "sitemap": "include",
+        }
+        if search:
+            payload["search"] = search
+        return payload
+
+    def map(self, url: str, search: str = "", limit: int = 50) -> FetchResult:
+        if not self.settings.get("firecrawl_enabled"):
+            return FetchResult(html="", final_url=url, error_kind="firecrawl_disabled", detail="Firecrawl 未启用。")
+        if not self.api_key:
+            return FetchResult(html="", final_url=url, error_kind="firecrawl_auth_error", detail="Firecrawl API key 未配置。")
+
+        timeout_seconds = int(self.settings.get("firecrawl_timeout_seconds") or DEFAULT_FIRECRAWL_TIMEOUT_SECONDS)
+        try:
+            response: Response = self.session.post(
+                f"{self.api_url}/v2/map",
+                headers=self.headers(),
+                json=self.map_payload(url, search, limit),
+                timeout=timeout_seconds,
+            )
+        except requests.Timeout:
+            return FetchResult(html="", final_url=url, error_kind="timeout", detail="Firecrawl map 请求超时。")
+        except requests.RequestException as exc:
+            return FetchResult(
+                html="",
+                final_url=url,
+                error_kind="firecrawl_request_error",
+                detail=f"Firecrawl map 请求失败：{sanitize_firecrawl_detail(str(exc), self.api_key)}",
+            )
+
+        if response.status_code in {401, 403}:
+            return FetchResult(html="", final_url=url, status_code=response.status_code, error_kind="firecrawl_auth_error", detail="Firecrawl 认证失败，请检查 API key。")
+        if response.status_code == 402:
+            return FetchResult(html="", final_url=url, status_code=response.status_code, error_kind="firecrawl_credit_required", detail="Firecrawl 额度不足或需要付费额度。")
+        if response.status_code == 429:
+            return FetchResult(html="", final_url=url, status_code=response.status_code, error_kind="firecrawl_rate_limited", detail="Firecrawl 请求频率受限，请降低并发或稍后重试。")
+        if response.status_code >= 500:
+            return FetchResult(html="", final_url=url, status_code=response.status_code, error_kind="firecrawl_upstream_error", detail=f"Firecrawl 上游服务异常（HTTP {response.status_code}）。")
+
+        try:
+            payload = response.json()
+        except ValueError:
+            return FetchResult(html="", final_url=url, status_code=response.status_code, error_kind="firecrawl_bad_response", detail="Firecrawl map 返回了非 JSON 响应。")
+        if not isinstance(payload, dict):
+            return FetchResult(html="", final_url=url, status_code=response.status_code, error_kind="firecrawl_bad_response", detail="Firecrawl map 响应结构不正确。")
+
+        data = payload.get("data") if isinstance(payload.get("data"), dict) else payload
+        if not isinstance(data, dict):
+            return FetchResult(html="", final_url=url, status_code=response.status_code, error_kind="firecrawl_bad_response", detail="Firecrawl map 响应缺少 data 对象。")
+        links_payload = data.get("links", [])
+        links: list[str] = []
+        if isinstance(links_payload, list):
+            for item in links_payload:
+                if isinstance(item, str):
+                    links.append(item)
+                elif isinstance(item, dict):
+                    candidate = str(item.get("url") or item.get("href") or item.get("link") or "").strip()
+                    if candidate:
+                        links.append(candidate)
+        if not links:
+            return FetchResult(html="", final_url=url, status_code=response.status_code, error_kind="empty_response", detail="Firecrawl map 未发现候选链接。")
+        return FetchResult(
+            html=json.dumps({"links": links}, ensure_ascii=False),
+            final_url=str(data.get("url") or url),
+            status_code=response.status_code,
+            detail=f"Firecrawl map 发现 {len(links)} 个链接。",
+        )
+
     def scrape(self, url: str) -> FetchResult:
         if not self.settings.get("firecrawl_enabled"):
             return FetchResult(
@@ -2521,6 +2791,9 @@ class FirecrawlCatalogProvider:
 
     def scrape(self, url: str) -> FetchResult:
         return self.client.scrape(url)
+
+    def map(self, url: str, search: str = "", limit: int = 50) -> FetchResult:
+        return self.client.map(url, search, limit)
 
 
 class ExternalInputFetcher:
@@ -2915,26 +3188,12 @@ class MonitoringEngine:
             fetch_attempts=pipeline_result.attempts,
         )
 
-    def import_merchant_source(
-        self,
-        source_url: str,
-        source_name: str,
-        group_name: str,
-        settings_payload: dict[str, Any],
-        auto_promote: bool = True,
-    ) -> MerchantImportResult:
-        source_url = source_url.strip()
-        if not source_url:
-            raise RuntimeError("商家页面链接不能为空。")
-        if not validate_http_url(source_url):
-            raise RuntimeError("商家页面链接必须是有效的 http(s) 地址。")
-
+    def fetch_catalog_entry_html(self, source_url: str, settings_payload: dict[str, Any], timeout_seconds: int) -> FetchResult:
         last_error = ""
-        html_text = ""
         for attempt in range(2):
             try:
-                html_text = self.catalog_browser.fetch_html(source_url, settings_payload["request_timeout_seconds"])
-                break
+                html_text = self.catalog_browser.fetch_html(source_url, timeout_seconds)
+                return FetchResult(html=html_text, final_url=source_url, detail="ok")
             except CatalogBrowserPortBusyError:
                 raise
             except ProtectedSourceError:
@@ -2948,14 +3207,133 @@ class MonitoringEngine:
                 raise CatalogBrowserConnectionError(
                     catalog_browser_error_message(exc, settings_payload["catalog_debug_port"])
                 ) from exc
-        if not html_text:
-            raise CatalogBrowserConnectionError(last_error or "商家页面抓取失败。")
+        raise CatalogBrowserConnectionError(last_error or "商家页面抓取失败。")
 
-        discovered_items = discover_catalog_items(html_text, source_url)
+    def scrape_catalog_candidate(self, candidate_url: str, settings_payload: dict[str, Any], options: dict[str, Any]) -> FetchResult:
+        strategy = options.get("catalog_scrape_strategy") or CATALOG_SCRAPE_BROWSER
+        timeout_seconds = int(options.get("timeout_seconds") or settings_payload.get("request_timeout_seconds") or DEFAULT_TIMEOUT_SECONDS)
+        if strategy == CATALOG_SCRAPE_STATIC_HTTP:
+            return self.fetcher_selector.static_http_fetcher.fetch(candidate_url, timeout_seconds)
+        if strategy == CATALOG_SCRAPE_FIRECRAWL:
+            return FirecrawlCatalogProvider(settings_payload).scrape(candidate_url)
+        if strategy == CATALOG_SCRAPE_ADAPTIVE:
+            pipeline_result = self.fetcher_selector.fetch_pipeline(
+                {"monitor_url": candidate_url, "fetch_strategy": FETCH_STRATEGY_ADAPTIVE},
+                self.catalog_browser,
+                settings_payload,
+                context="catalog",
+            )
+            return FetchResult(
+                html=pipeline_result.html,
+                final_url=pipeline_result.final_url or candidate_url,
+                status_code=pipeline_result.status_code,
+                error_kind=pipeline_result.error_kind,
+                detail=pipeline_result.detail or fetch_attempts_summary(pipeline_result.attempts),
+            )
+        return self.fetch_catalog_entry_html(candidate_url, settings_payload, timeout_seconds)
+
+    def discover_catalog_candidate_urls(
+        self,
+        source_url: str,
+        entry_html: str,
+        settings_payload: dict[str, Any],
+        options: dict[str, Any],
+    ) -> list[dict[str, str]]:
+        discovery_strategy = options.get("catalog_discovery_strategy") or CATALOG_DISCOVERY_LOCAL
+        candidates: list[dict[str, str]] = []
+        seen: set[str] = set()
+
+        def add_candidate(candidate_url: str, source: str) -> None:
+            normalized_url = normalize_candidate_url(source_url, candidate_url) or candidate_url
+            if not is_catalog_candidate_url(source_url, normalized_url, options):
+                return
+            key = catalog_url_key(normalized_url, options.get("dedupe_policy", "by_url"), bool(options.get("ignore_query_parameters")))
+            if key in seen:
+                return
+            seen.add(key)
+            candidates.append({"url": normalized_url, "source": source})
+
+        if discovery_strategy in {CATALOG_DISCOVERY_LOCAL, CATALOG_DISCOVERY_HYBRID}:
+            for candidate in discover_candidate_urls_from_html(entry_html, source_url, options):
+                add_candidate(candidate["url"], candidate["source"])
+
+        if discovery_strategy in {CATALOG_DISCOVERY_FIRECRAWL_MAP, CATALOG_DISCOVERY_HYBRID}:
+            provider = FirecrawlCatalogProvider(settings_payload)
+            map_result = provider.map(
+                source_url,
+                str(options.get("search_keyword") or ""),
+                min(int(options.get("max_discovered_urls") or 50), int(settings_payload.get("firecrawl_catalog_limit") or DEFAULT_FIRECRAWL_CATALOG_LIMIT)),
+            )
+            if map_result.error_kind:
+                log_activity("warning", "catalog", f"Firecrawl map 发现 URL 失败（{map_result.error_kind}）：{map_result.detail}")
+            for link in parse_firecrawl_map_links(map_result):
+                add_candidate(link, "firecrawl_map")
+
+        return candidates[: int(options.get("max_discovered_urls") or 50)]
+
+    def import_merchant_source(
+        self,
+        source_url: str,
+        source_name: str,
+        group_name: str,
+        settings_payload: dict[str, Any],
+        auto_promote: bool = True,
+        catalog_options: dict[str, Any] | None = None,
+    ) -> MerchantImportResult:
+        source_url = source_url.strip()
+        if not source_url:
+            raise RuntimeError("商家页面链接不能为空。")
+        if not validate_http_url(source_url):
+            raise RuntimeError("商家页面链接必须是有效的 http(s) 地址。")
+
+        options = normalize_catalog_options(catalog_options, settings_payload, group_name, auto_promote)
+        if options["catalog_discovery_strategy"] == CATALOG_DISCOVERY_FIRECRAWL_MAP:
+            entry_result = FetchResult(html="", final_url=source_url, detail="firecrawl_map")
+        else:
+            entry_result = self.fetch_catalog_entry_html(source_url, settings_payload, int(options["timeout_seconds"]))
+        html_text = entry_result.html
+        if not html_text and options["catalog_discovery_strategy"] != CATALOG_DISCOVERY_FIRECRAWL_MAP:
+            raise CatalogBrowserConnectionError(entry_result.detail or "商家页面抓取失败。")
+
+        discovered_items: list[dict[str, Any]] = []
+        seen_item_keys: set[str] = set()
+
+        def add_discovered_items(fetch_result: FetchResult, page_url: str, discovery_source: str, backend_used: str) -> None:
+            if fetch_result.error_kind:
+                log_activity("warning", "catalog", f"商品页抓取失败（{fetch_result.error_kind}）：{fetch_result.detail}")
+                return
+            for item in discover_catalog_items(fetch_result.html, page_url):
+                prepared = prepare_catalog_item(item, source_url, page_url, discovery_source, backend_used, options)
+                if not should_keep_catalog_item(prepared, options):
+                    continue
+                if prepared["source_item_key"] in seen_item_keys:
+                    continue
+                seen_item_keys.add(prepared["source_item_key"])
+                discovered_items.append(prepared)
+                if len(discovered_items) >= int(options["max_import_items"]):
+                    break
+
+        add_discovered_items(entry_result, source_url, "entry", CATALOG_SCRAPE_BROWSER)
+
+        if not (options["catalog_discovery_strategy"] == CATALOG_DISCOVERY_LOCAL and discovered_items):
+            candidate_urls = self.discover_catalog_candidate_urls(source_url, html_text, settings_payload, options)
+            if not candidate_urls:
+                candidate_urls = [{"url": source_url, "source": "entry"}]
+            for candidate in candidate_urls:
+                if len(discovered_items) >= int(options["max_import_items"]):
+                    break
+                candidate_url = candidate["url"]
+                candidate_source = candidate["source"]
+                if candidate_url.rstrip("/") == source_url.rstrip("/") and candidate_source == "entry":
+                    continue
+                fetch_result = self.scrape_catalog_candidate(candidate_url, settings_payload, options)
+                backend_used = options.get("catalog_scrape_strategy") or CATALOG_SCRAPE_BROWSER
+                add_discovered_items(fetch_result, fetch_result.final_url or candidate_url, candidate_source, backend_used)
+
         source_title = normalize_candidate_title(source_name) or extract_page_title(html_text)
         if not source_title:
             source_title = urlparse(source_url).hostname or source_url
-        target_group_name = normalize_task_group(group_name)
+        target_group_name = normalize_task_group(options.get("default_group") or group_name)
 
         timestamp = now_iso()
         upserted_count = 0
@@ -4248,6 +4626,113 @@ def normalize_candidate_url(source_url: str, href: str) -> str:
     return resolved
 
 
+def catalog_url_host_allowed(source_url: str, candidate_url: str, allow_subdomains: bool = False) -> bool:
+    source_host = (urlparse(source_url).hostname or "").lower()
+    candidate_host = (urlparse(candidate_url).hostname or "").lower()
+    if not source_host or not candidate_host:
+        return False
+    if candidate_host == source_host:
+        return True
+    return allow_subdomains and candidate_host.endswith(f".{source_host}")
+
+
+def catalog_url_key(candidate_url: str, dedupe_policy: str = "by_url", ignore_query_parameters: bool = False) -> str:
+    parsed = urlparse(candidate_url)
+    query = parsed.query
+    query_values = parse_qs(query, keep_blank_values=True)
+    if dedupe_policy == "by_pid" and (query_values.get("pid") or query_values.get("gid")):
+        marker = query_values.get("pid", query_values.get("gid", [""]))[0]
+        return f"{parsed.scheme}://{parsed.netloc}{parsed.path}?{('pid' if query_values.get('pid') else 'gid')}={marker}".lower()
+    if ignore_query_parameters:
+        query = ""
+    return parsed._replace(fragment="", query=query).geturl().rstrip("/").lower()
+
+
+def is_catalog_candidate_url(source_url: str, candidate_url: str, options: dict[str, Any]) -> bool:
+    if not candidate_url or not validate_http_url(candidate_url):
+        return False
+    if not catalog_url_host_allowed(source_url, candidate_url, bool(options.get("allow_subdomains"))):
+        return False
+    parsed = urlparse(candidate_url)
+    haystack = f"{parsed.path}?{parsed.query}".lower()
+    include_paths = options.get("include_paths") or []
+    exclude_paths = options.get("exclude_paths") or []
+    if include_paths and not any(part in haystack for part in include_paths):
+        return False
+    if exclude_paths and any(part in haystack for part in exclude_paths):
+        return False
+    if any(marker in haystack for marker in CATALOG_URL_DROP_MARKERS):
+        return False
+    if any(marker in haystack for marker in CATALOG_URL_KEEP_MARKERS):
+        return True
+    return candidate_url.rstrip("/") == source_url.rstrip("/")
+
+
+def discover_candidate_urls_from_html(html_text: str, source_url: str, options: dict[str, Any]) -> list[dict[str, str]]:
+    candidates: list[dict[str, str]] = [{"url": source_url, "source": "entry"}]
+    seen = {catalog_url_key(source_url, options.get("dedupe_policy", "by_url"), bool(options.get("ignore_query_parameters")))}
+    for anchor in ANCHOR_PATTERN.finditer(html_text or ""):
+        attrs = parse_tag_attributes(anchor.group("attrs") or "")
+        href = (attrs.get("href") or "").strip()
+        if not href:
+            continue
+        candidate_url = normalize_candidate_url(source_url, href)
+        if not is_catalog_candidate_url(source_url, candidate_url, options):
+            continue
+        key = catalog_url_key(candidate_url, options.get("dedupe_policy", "by_url"), bool(options.get("ignore_query_parameters")))
+        if key in seen:
+            continue
+        seen.add(key)
+        candidates.append({"url": candidate_url, "source": "page_links"})
+        if len(candidates) >= int(options.get("max_discovered_urls") or 50):
+            break
+    return candidates
+
+
+def parse_firecrawl_map_links(result: FetchResult) -> list[str]:
+    if result.error_kind or not result.html:
+        return []
+    try:
+        payload = json.loads(result.html)
+    except json.JSONDecodeError:
+        return []
+    links = payload.get("links") if isinstance(payload, dict) else []
+    if not isinstance(links, list):
+        return []
+    return [str(link).strip() for link in links if str(link).strip()]
+
+
+def should_keep_catalog_item(item: dict[str, Any], options: dict[str, Any]) -> bool:
+    if options.get("include_sold_out", True):
+        return True
+    stock_hint = normalize_signal_text(item.get("stock_hint", ""))
+    text = normalize_signal_text(f"{item.get('raw_snippet', '')} {item.get('raw_payload', '')}")
+    if stock_hint in {"0", "outofstock", "soldout", "unavailable"}:
+        return False
+    return not any(normalize_signal_text(marker) in text for marker in SOLD_OUT_MARKERS)
+
+
+def prepare_catalog_item(item: dict[str, Any], source_url: str, page_url: str, discovery_source: str, backend_used: str, options: dict[str, Any]) -> dict[str, Any]:
+    prepared = dict(item)
+    prepared["monitor_url"] = normalize_candidate_url(page_url, prepared.get("monitor_url", "")) or page_url
+    prepared["item_url"] = normalize_candidate_url(page_url, prepared.get("item_url", "")) or prepared["monitor_url"]
+    prepared["fetch_strategy"] = options.get("default_fetch_strategy") or FETCH_STRATEGY_BROWSER
+    prepared["source_config"] = {
+        "extractor": options.get("default_extractor") or CATALOG_EXTRACTOR_GENERIC,
+        "catalog_backend": backend_used,
+        "catalog_discovery_source": discovery_source,
+        "catalog_source_url": source_url,
+    }
+    payload = {
+        "catalog_backend": backend_used,
+        "catalog_discovery_source": discovery_source,
+        "catalog_page_url": page_url,
+        "raw_payload": prepared.get("raw_payload", ""),
+    }
+    prepared["raw_payload"] = json.dumps(payload, ensure_ascii=False)[:4000]
+    return prepared
+
+
 def is_action_url(url: str) -> bool:
     lowered = url.lower()
     return any(part in lowered for part in ("cart.php?a=add", "/cart/add", "/checkout", "/order", "add-to-cart", "addtocart"))
@@ -4808,6 +5293,17 @@ def make_app() -> Flask:
                     "firecrawl_use_for_monitor": settings_payload["firecrawl_use_for_monitor"],
                     "firecrawl_use_for_catalog": settings_payload["firecrawl_use_for_catalog"],
                     "firecrawl_catalog_limit": settings_payload["firecrawl_catalog_limit"],
+                    "catalog_discovery_strategy": settings_payload["catalog_discovery_strategy"],
+                    "catalog_scrape_strategy": settings_payload["catalog_scrape_strategy"],
+                    "catalog_default_fetch_strategy": settings_payload["catalog_default_fetch_strategy"],
+                    "catalog_default_extractor": settings_payload["catalog_default_extractor"],
+                    "catalog_default_group": settings_payload["catalog_default_group"],
+                    "catalog_include_sold_out": settings_payload["catalog_include_sold_out"],
+                    "catalog_auto_create_tasks": settings_payload["catalog_auto_create_tasks"],
+                    "catalog_dedupe_policy": settings_payload["catalog_dedupe_policy"],
+                    "catalog_max_discovered_urls": settings_payload["catalog_max_discovered_urls"],
+                    "catalog_max_import_items": settings_payload["catalog_max_import_items"],
+                    "catalog_timeout_seconds": settings_payload["catalog_timeout_seconds"],
                     "telegram_ready": bool(
                         settings_payload["telegram_bot_token"] and settings_payload["telegram_chat_ids"]
                     ),
@@ -5132,6 +5628,7 @@ def make_app() -> Flask:
                 str(payload.get("group_name", "")).strip(),
                 app.extensions["monitor_engine"].get_runtime_settings(),
                 auto_promote=auto_promote,
+                catalog_options=payload,
             )
         except Exception as exc:
             error_kind = catalog_browser_error_kind(exc)
@@ -5179,6 +5676,7 @@ def make_app() -> Flask:
                 source["group_name"] if "group_name" in source.keys() else DEFAULT_TASK_GROUP,
                 app.extensions["monitor_engine"].get_runtime_settings(),
                 auto_promote=auto_promote,
+                catalog_options=payload,
             )
         except Exception as exc:
             error_kind = catalog_browser_error_kind(exc)

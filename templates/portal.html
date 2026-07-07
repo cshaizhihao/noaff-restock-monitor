@@ -281,6 +281,57 @@
                                             <label for="merchant-group-custom" class="form-label">新建分组名称</label>
                                             <input id="merchant-group-custom" type="text" class="input-dark" maxlength="48" placeholder="输入新的分组名称">
                                         </div>
+                                        <div class="grid gap-4 lg:grid-cols-2">
+                                            <div>
+                                                <label for="merchant-discovery-strategy" class="form-label">发现方式</label>
+                                                <select id="merchant-discovery-strategy" class="input-dark">
+                                                    <option value="local">本地页面链接</option>
+                                                    <option value="firecrawl_map">Firecrawl Map</option>
+                                                    <option value="hybrid">混合发现</option>
+                                                </select>
+                                            </div>
+                                            <div>
+                                                <label for="merchant-scrape-strategy" class="form-label">抓取方式</label>
+                                                <select id="merchant-scrape-strategy" class="input-dark">
+                                                    <option value="browser">浏览器渲染</option>
+                                                    <option value="static_http">静态 HTTP</option>
+                                                    <option value="firecrawl">Firecrawl Scrape</option>
+                                                    <option value="adaptive">自适应 fallback</option>
+                                                </select>
+                                            </div>
+                                            <div>
+                                                <label for="merchant-default-fetch-strategy" class="form-label">生成任务采集方式</label>
+                                                <select id="merchant-default-fetch-strategy" class="input-dark">
+                                                    <option value="browser">浏览器渲染</option>
+                                                    <option value="static_http">静态 HTTP</option>
+                                                    <option value="generic_pricing_table">通用价格表</option>
+                                                    <option value="whmcs">WHMCS</option>
+                                                    <option value="firecrawl">Firecrawl</option>
+                                                    <option value="adaptive">自适应 fallback</option>
+                                                </select>
+                                            </div>
+                                            <div>
+                                                <label for="merchant-default-extractor" class="form-label">解析器</label>
+                                                <select id="merchant-default-extractor" class="input-dark">
+                                                    <option value="generic_pricing_table">通用价格表</option>
+                                                    <option value="whmcs">WHMCS</option>
+                                                    <option value="firecrawl_product_hint">Firecrawl Product hint</option>
+                                                    <option value="fallback_keyword_parser">关键词 fallback</option>
+                                                </select>
+                                            </div>
+                                            <div>
+                                                <label for="merchant-search-keyword" class="form-label">Map 搜索词</label>
+                                                <input id="merchant-search-keyword" type="text" class="input-dark" placeholder="vps / hk / pricing / store">
+                                            </div>
+                                            <div>
+                                                <label for="merchant-max-import-items" class="form-label">单次入库上限</label>
+                                                <input id="merchant-max-import-items" type="number" min="1" max="250" class="input-dark" value="50">
+                                            </div>
+                                        </div>
+                                        <label class="flex items-center gap-3 rounded-lg border border-slate-700/60 bg-slate-950/50 px-4 py-3 text-sm text-slate-300">
+                                            <input id="merchant-include-sold-out" type="checkbox" class="h-4 w-4 rounded border-slate-700 bg-slate-950 text-indigo-500" checked>
+                                            包含售罄商品
+                                        </label>
                                         <label class="flex items-center gap-3 rounded-lg border border-slate-700/60 bg-slate-950/50 px-4 py-3 text-sm text-slate-300">
                                             <input id="merchant-auto-promote" type="checkbox" class="h-4 w-4 rounded border-slate-700 bg-slate-950 text-indigo-500" checked>
                                             导入后自动创建任务
