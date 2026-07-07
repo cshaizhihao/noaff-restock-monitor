@@ -1892,6 +1892,7 @@ def to_merchant_item_payload(
     discovery_source = str(raw_data.get("catalog_discovery_source") or "")
     extractor = str(raw_data.get("extractor") or "")
     fetch_strategy = normalize_fetch_strategy(raw_data.get("fetch_strategy") or "")
+    signals = raw_data.get("signals") if isinstance(raw_data.get("signals"), list) else []
     return {
         "id": row["id"],
         "source_id": row["source_id"],
@@ -1909,6 +1910,11 @@ def to_merchant_item_payload(
         "discovery_source": discovery_source,
         "extractor": extractor,
         "fetch_strategy": fetch_strategy,
+        "confidence": int(raw_data.get("confidence") or 0),
+        "candidate_type": str(raw_data.get("candidate_type") or ""),
+        "include_reason": str(raw_data.get("include_reason") or ""),
+        "reject_reason": str(raw_data.get("reject_reason") or ""),
+        "signals": signals[:12],
         "item_state": row["item_state"],
         "last_seen_at": row["last_seen_at"] or "",
         "created_at": row["created_at"],
@@ -3901,6 +3907,11 @@ class MonitoringEngine:
                         "price_hint": item["price_hint"],
                         "stock_hint": item["stock_hint"],
                         "restock_hint": item["restock_hint"],
+                        "confidence": item.get("confidence", 0),
+                        "candidate_type": item.get("candidate_type", ""),
+                        "include_reason": item.get("include_reason", ""),
+                        "reject_reason": item.get("reject_reason", ""),
+                        "signals": item.get("signals", []),
                         "item_state": item_state,
                         "task_id": task_id,
                     }
@@ -4929,6 +4940,22 @@ def extractor_detail(prefix: str, detail: str) -> str:
     return f"{prefix}：{detail}"
 
 
+def extractor_unknown_detail(prefix: str, html_text: str, target_keyword: str, fragment: str) -> str:
+    cleaned_page = clean_fragment_text(html_text)
+    cleaned_fragment = clean_fragment_text(fragment)
+    if not cleaned_page:
+        return f"{prefix}：页面内容为空，可能抓到了 JS 空壳或上游返回空内容。"
+    if target_keyword and find_html_text_position(html_text, target_keyword) < 0:
+        return f"{prefix}：未找到目标商品标题「{target_keyword}」。"
+    if len(cleaned_page) < 80 and not fragment:
+        return f"{prefix}：页面文本过短，可能需要浏览器渲染或 Firecrawl。"
+    if target_keyword and cleaned_fragment:
+        if extract_price_hint(fragment) or has_resource_spec_signal(cleaned_fragment):
+            return f"{prefix}：找到了目标商品，但缺少明确购买入口或售罄标记。"
+        return f"{prefix}：找到了目标商品，但片段中缺少价格、规格、购买入口或售罄标记。"
+    return f"{prefix}：未找到可用于判断库存的商品片段。"
+
+
 def default_stock_extractor(
     html_text: str,
     target_keyword: str,
@@ -4965,7 +4992,7 @@ def generic_pricing_table_extractor(
             fragment=fragment,
             detail="generic_pricing_table：目标产品已出现在可继续下单页面，按有货处理。",
         )
-    return ExtractorResult(stock=None, fragment=fragment, detail="generic_pricing_table：未找到库存数字或售罄标记。")
+    return ExtractorResult(stock=None, fragment=fragment, detail=extractor_unknown_detail("generic_pricing_table", html_text, target_keyword, fragment))
 
 
 def extract_query_int(url: str, key: str) -> int | None:
@@ -5049,7 +5076,7 @@ def whmcs_extractor(
             fragment=fragment,
             detail="WHMCS：未显示库存数字，但命中 WHMCS 下单入口，按有货处理。",
         )
-    return ExtractorResult(stock=None, fragment=fragment, detail="WHMCS：未找到库存数字或售罄标记。")
+    return ExtractorResult(stock=None, fragment=fragment, detail=extractor_unknown_detail("WHMCS", html_text, target_keyword, fragment))
 
 
 EXTRACTOR_REGISTRY: dict[str, StockExtractor] = {
@@ -5146,7 +5173,66 @@ DISCOVERY_GENERIC_TEXTS = {
     "prev",
     "previous",
     "back",
+    "english",
+    "中文",
+    "简体中文",
+    "簡體中文",
+    "繁體中文",
+    "繁体中文",
+    "日本語",
+    "한국어",
 }
+DISCOVERY_LOCALE_TEXTS = {
+    "中文",
+    "简体中文",
+    "簡體中文",
+    "繁體中文",
+    "繁体中文",
+    "english",
+    "en",
+    "日本語",
+    "日本语",
+    "한국어",
+}
+DISCOVERY_SECTION_ONLY_TEXTS = {
+    "选择地区",
+    "選擇地區",
+    "选择区域",
+    "選擇區域",
+    "选择网络",
+    "選擇網絡",
+    "选择网络类型",
+    "選擇網絡類型",
+    "选择套餐",
+    "選擇套餐",
+    "选择套餐类型",
+    "選擇套餐類型",
+    "选择世代",
+    "選擇世代",
+    "选择实例类型",
+    "選擇實例類型",
+    "region",
+    "network",
+    "generation",
+    "products",
+    "plans",
+    "pricing",
+}
+DISCOVERY_RESOURCE_PATTERNS = [
+    re.compile(
+        r"\b(?:v?cpu|cores?|ram|memory|nvme|ssd|hdd|disk|storage|bandwidth|traffic|transfer|ipv4|ipv6|ddos|gbps|mbps|tb|gb)\b",
+        re.IGNORECASE,
+    ),
+    re.compile(r"(?:虚拟核心|虛擬核心|核心|内存|記憶體|內存|硬碟|硬盘|流量|带宽|頻寬|網絡路由|网络路由|防禦|防御)"),
+]
+DISCOVERY_PRODUCT_TITLE_PATTERN = re.compile(
+    r"(?:\b(?:vps|cloud|server|dedicated|premium|starter|tiny|mini|micro|pro|standard|basic|plan|package|nvme)\b|[A-Z0-9]{2,}(?:[._-][A-Z0-9]{2,}){1,})",
+    re.IGNORECASE,
+)
+DISCOVERY_WHMSC_URL_PATTERN = re.compile(
+    r"(?:cart\.php\?[^#]*(?:gid=|pid=|a=(?:add|confproduct))|/store/|configureproduct)",
+    re.IGNORECASE,
+)
 HEADING_PATTERN = re.compile(r"<h[1-6]\b(?P<attrs>[^>]*)>(?P<body>.*?)</h[1-6]>", re.IGNORECASE | re.DOTALL)
 ANCHOR_PATTERN = re.compile(r"<a\b(?P<attrs>[^>]*)>(?P<body>.*?)</a>", re.IGNORECASE | re.DOTALL)
 TITLE_ATTR_PATTERN = re.compile(r"\b(?P<key>[a-zA-Z_:][-a-zA-Z0-9_:.]*)\s*=\s*(?P<quote>['\"])(?P<value>.*?)\2", re.DOTALL)
@@ -5227,20 +5313,142 @@ def collect_context_blob(fragment: str) -> str:
     return " ".join(values)
 
 
-def is_discovery_candidate(title: str, fragment: str, cleaned_fragment: str, stock_value: int | None, price_hint: str, restock_hint: str) -> bool:
+def catalog_signal(signal_type: str, weight: int, text: str) -> dict[str, Any]:
+    return {
+        "type": signal_type,
+        "weight": int(weight),
+        "text": normalize_candidate_title(text)[:160],
+    }
+
+
+def has_resource_spec_signal(text: str) -> bool:
+    return any(pattern.search(text or "") for pattern in DISCOVERY_RESOURCE_PATTERNS)
+
+
+def normalized_title_token(value: Any) -> str:
+    return normalize_signal_text(normalize_candidate_title(value))
+
+
+def is_locale_or_navigation_title(title: str) -> bool:
+    normalized = normalized_title_token(title)
+    if not normalized:
+        return True
+    if normalized in DISCOVERY_GENERIC_TEXTS_NORMALIZED or normalized in DISCOVERY_ACTION_TEXTS_NORMALIZED:
+        return True
+    locale_tokens = {normalize_signal_text(text) for text in DISCOVERY_LOCALE_TEXTS}
+    if normalized in locale_tokens:
+        return True
+    return bool(re.fullmatch(r"(?:en|zh|zhcn|zhtw|cn|tw|hk|jp|ja|kr|ko)", normalized))
+
+
+def is_section_only_title(title: str) -> bool:
+    normalized = normalized_title_token(title)
+    section_tokens = {normalize_signal_text(text) for text in DISCOVERY_SECTION_ONLY_TEXTS}
+    return normalized in section_tokens
+
+
+def catalog_candidate_evaluation(
+    title: str,
+    fragment: str,
+    cleaned_fragment: str,
+    stock_value: int | None,
+    price_hint: str,
+    restock_hint: str,
+    monitor_url: str = "",
+    item_url: str = "",
+    structured: bool = False,
+) -> dict[str, Any]:
     normalized_title = normalize_candidate_title(title)
+    signals: list[dict[str, Any]] = []
+    reject_reasons: list[str] = []
+
     if not is_likely_product_title(normalized_title):
-        return False
+        reject_reasons.append("标题不像商品名称")
+    if is_locale_or_navigation_title(normalized_title):
+        reject_reasons.append("语言切换或导航文本")
+    if is_section_only_title(normalized_title):
+        reject_reasons.append("分类/步骤标题，不是商品")
+
     context_blob = normalize_signal_text(f"{cleaned_fragment} {collect_context_blob(fragment)}")
     has_positive_context = any(marker in context_blob for marker in DISCOVERY_CONTEXT_POSITIVE_MARKERS)
     has_negative_context = any(marker in context_blob for marker in DISCOVERY_CONTEXT_NEGATIVE_MARKERS)
-    has_stock_signal = stock_value is not None and not has_negative_context
-    has_signal = bool(price_hint or restock_hint or has_stock_signal or has_orderable_marker(fragment, cleaned_fragment))
+    has_orderable = has_orderable_marker(fragment, cleaned_fragment)
+    has_sold_out = has_sold_out_marker(cleaned_fragment)
+    has_resource_specs = has_resource_spec_signal(cleaned_fragment)
+    url_text = f"{monitor_url} {item_url}"
+    has_whmcs_url = bool(DISCOVERY_WHMSC_URL_PATTERN.search(url_text))
+    has_product_url = any(marker in url_text.lower() for marker in ("/store/", "product=", "pid=", "gid=", "package=", "sku=", "cart.php"))
+
+    if structured:
+        signals.append(catalog_signal("structured_data", 24, "结构化商品数据"))
+    if has_positive_context:
+        signals.append(catalog_signal("product_context", 18, collect_context_blob(fragment) or "product/pricing/card"))
+    if price_hint:
+        signals.append(catalog_signal("price", 30, price_hint))
+    if stock_value is not None and not has_negative_context:
+        signals.append(catalog_signal("stock", 24, str(stock_value)))
+    if has_orderable:
+        signals.append(catalog_signal("order_button", 34, "命中购买/继续下单入口"))
+    if has_sold_out:
+        signals.append(catalog_signal("sold_out", 24, "命中售罄标记"))
+    if restock_hint:
+        signals.append(catalog_signal("restock_hint", 16, restock_hint))
+    if has_resource_specs:
+        signals.append(catalog_signal("specs", 20, "命中 CPU/RAM/SSD/流量等资源规格"))
+    if has_whmcs_url:
+        signals.append(catalog_signal("whmcs_url", 30, url_text))
+    elif has_product_url:
+        signals.append(catalog_signal("product_url", 16, url_text))
+    if DISCOVERY_PRODUCT_TITLE_PATTERN.search(normalized_title):
+        signals.append(catalog_signal("product_title", 20, normalized_title))
+
+    score = sum(signal["weight"] for signal in signals)
+    if has_negative_context:
+        penalty = 22 if has_positive_context else 70
+        signals.append(catalog_signal("negative_nav", -penalty, collect_context_blob(fragment) or "nav/footer/header"))
+        score -= penalty
+    if len(cleaned_fragment) > 3600 and not has_positive_context:
+        signals.append(catalog_signal("wide_fragment", -12, "片段过大且缺少商品上下文"))
+        score -= 12
+    if is_section_only_title(normalized_title):
+        signals.append(catalog_signal("negative_section_title", -80, normalized_title))
+        score -= 80
+    if is_locale_or_navigation_title(normalized_title):
+        signals.append(catalog_signal("negative_locale_nav", -100, normalized_title))
+        score -= 100
+
+    has_core_signal = bool(price_hint or has_orderable or has_sold_out or stock_value is not None or has_resource_specs or has_whmcs_url)
+    if not has_core_signal:
+        reject_reasons.append("缺少价格、库存、规格或购买入口")
     if has_negative_context and not has_positive_context:
-        return False
-    if not has_positive_context and not has_signal:
-        return False
-    return True
+        reject_reasons.append("位于导航/页脚/菜单区域")
+    if score < 45:
+        reject_reasons.append("置信度过低")
+
+    included = not reject_reasons and score >= 45
+    reason_source = [signal for signal in signals if signal["weight"] > 0]
+    include_reason = "、".join(signal["type"] for signal in reason_source[:4]) if included else ""
+    return {
+        "included": included,
+        "confidence": max(0, min(100, score)),
+        "signals": signals,
+        "include_reason": include_reason,
+        "reject_reason": "；".join(dict.fromkeys(reject_reasons)),
+        "candidate_type": "structured" if structured else ("whmcs" if has_whmcs_url else "html"),
+    }
+
+
+def is_discovery_candidate(title: str, fragment: str, cleaned_fragment: str, stock_value: int | None, price_hint: str, restock_hint: str) -> bool:
+    return bool(
+        catalog_candidate_evaluation(
+            title,
+            fragment,
+            cleaned_fragment,
+            stock_value,
+            price_hint,
+            restock_hint,
+        )["included"]
+    )
 
 
 def normalize_candidate_title(value: Any) -> str:
@@ -5362,6 +5570,11 @@ def prepare_catalog_item(item: dict[str, Any], source_url: str, page_url: str, d
         "fetch_strategy": prepared["fetch_strategy"],
         "extractor": options.get("default_extractor") or CATALOG_EXTRACTOR_GENERIC,
         "source_config": prepared["source_config"],
+        "confidence": prepared.get("confidence", 0),
+        "candidate_type": prepared.get("candidate_type", ""),
+        "include_reason": prepared.get("include_reason", ""),
+        "reject_reason": prepared.get("reject_reason", ""),
+        "signals": prepared.get("signals", []),
         "raw_payload": prepared.get("raw_payload", ""),
     }
     prepared["raw_payload"] = json.dumps(payload, ensure_ascii=False)[:4000]
@@ -5503,7 +5716,7 @@ def extract_jsonld_catalog_candidates(html_text: str, source_url: str) -> list[d
     return candidates
 
 
-def discover_catalog_items(html_text: str, source_url: str) -> list[dict[str, str]]:
+def discover_catalog_items(html_text: str, source_url: str, include_rejected: bool = False) -> list[dict[str, Any]]:
     candidates: dict[str, dict[str, str]] = {}
     source_url = source_url.strip()
     if not html_text or not source_url:
@@ -5526,36 +5739,65 @@ def discover_catalog_items(html_text: str, source_url: str) -> list[dict[str, st
     ) -> None:
         normalized_title = normalize_candidate_title(title)
         cleaned_snippet = clean_fragment_text(snippet)
-        if structured:
-            if not is_likely_product_title(normalized_title):
-                return
-        elif not is_discovery_candidate(normalized_title, snippet, cleaned_snippet, stock_value, price_hint, restock_hint):
-            return
         normalized_monitor = normalize_candidate_url(source_url, monitor_url) if monitor_url else source_url
         normalized_item = normalize_candidate_url(source_url, item_url) if item_url else normalized_monitor
+        effective_price_hint = price_hint or price_hint_global
+        parsed_stock_value = stock_value if isinstance(stock_value, int) else None
+        evaluation = catalog_candidate_evaluation(
+            normalized_title,
+            snippet,
+            cleaned_snippet,
+            parsed_stock_value,
+            effective_price_hint,
+            restock_hint,
+            normalized_monitor,
+            normalized_item,
+            structured,
+        )
+        if not evaluation["included"] and not include_rejected:
+            return
         key = infer_source_item_key(source_url, normalized_title, normalized_monitor, normalized_item)
         if key in candidates:
             existing = candidates[key]
             if len(snippet) > len(existing.get("raw_snippet", "")):
                 existing["raw_snippet"] = snippet[:4000]
-            if price_hint and not existing.get("price_hint"):
-                existing["price_hint"] = price_hint[:120]
+            if effective_price_hint and not existing.get("price_hint"):
+                existing["price_hint"] = effective_price_hint[:120]
             if stock_hint and not existing.get("stock_hint"):
                 existing["stock_hint"] = stock_hint[:80]
             if restock_hint and not existing.get("restock_hint"):
                 existing["restock_hint"] = restock_hint[:120]
+            if int(evaluation.get("confidence") or 0) > int(existing.get("confidence") or 0):
+                existing["confidence"] = int(evaluation.get("confidence") or 0)
+                existing["candidate_type"] = str(evaluation.get("candidate_type") or "")
+                existing["include_reason"] = str(evaluation.get("include_reason") or "")
+                existing["reject_reason"] = str(evaluation.get("reject_reason") or "")
+                existing["signals"] = evaluation.get("signals", [])
             return
+        raw_payload = {
+            "candidate": raw_payload,
+            "confidence": evaluation["confidence"],
+            "candidate_type": evaluation["candidate_type"],
+            "include_reason": evaluation["include_reason"],
+            "reject_reason": evaluation["reject_reason"],
+            "signals": evaluation["signals"],
+        }
         candidates[key] = {
             "source_item_key": key,
             "title": normalized_title,
             "keyword": normalized_title,
             "monitor_url": normalized_monitor or source_url,
             "item_url": normalized_item or normalized_monitor or source_url,
-            "price_hint": (price_hint or price_hint_global)[:120],
+            "price_hint": effective_price_hint[:120],
             "stock_hint": stock_hint[:80],
             "restock_hint": restock_hint[:120],
             "raw_snippet": snippet[:4000],
             "raw_payload": json.dumps(raw_payload, ensure_ascii=False)[:4000],
+            "confidence": int(evaluation["confidence"]),
+            "candidate_type": str(evaluation["candidate_type"]),
+            "include_reason": str(evaluation["include_reason"]),
+            "reject_reason": str(evaluation["reject_reason"]),
+            "signals": evaluation["signals"],
         }
 
     def extract_best_links(fragment: str, start_offset: int = 0, max_gap: int = 420) -> tuple[str, str]:

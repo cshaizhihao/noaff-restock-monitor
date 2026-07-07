@@ -561,6 +561,8 @@ class PortalAppTestCase(unittest.TestCase):
         self.assertEqual(result.source_name, "Geelinx | London BGP")
         self.assertEqual(sorted(item["title"] for item in result.items), ["GB.LON.BGP.Darwin", "GB.LON.BGP.Newton"])
         self.assertEqual(len(result.items), 2)
+        self.assertTrue(all(item["confidence"] >= 45 for item in result.items))
+        self.assertTrue(all(item["include_reason"] for item in result.items))
         self.assertEqual(len(fake_browser.calls), 1)
 
         with app_module.open_connection() as connection:
@@ -583,6 +585,101 @@ class PortalAppTestCase(unittest.TestCase):
         self.assertEqual(payload["merchant"]["metrics"]["total_sources"], 1)
         self.assertEqual(payload["merchant"]["metrics"]["total_items"], 2)
         self.assertEqual(payload["merchant"]["metrics"]["linked_tasks"], 2)
+        self.assertTrue(all(item["confidence"] >= 45 for item in payload["merchant"]["items"]))
+
+    def test_catalog_discovery_scores_products_and_filters_locale_navigation_noise(self) -> None:
+        html_text = """
+        <html>
+          <body>
+            <header class="navbar">
+              <a href="/en">English</a>
+              <a href="/zh">中文</a>
+              <a href="/clientarea.php">Client Area</a>
+            </header>
+            <main class="pricing">
+              <h2>选择地区</h2>
+              <div class="region-picker">
+                <button>Hong Kong</button>
+                <button>Los Angeles</button>
+              </div>
+              <h2>選擇實例類型</h2>
+              <article class="product-card">
+                <h3>HKG.AS3.T1.WEE</h3>
+                <p>$ 36.90 USD / 年繳</p>
+                <ul>
+                  <li>1 vCores</li>
+                  <li>1.0GB RAM</li>
+                  <li>20GB SSD</li>
+                  <li>1000GB Transfer</li>
+                </ul>
+                <a href="/cart.php?a=add&pid=101">Order Now</a>
+              </article>
+            </main>
+            <footer>
+              <a href="/terms">Terms</a>
+              <a href="/privacy">Privacy</a>
+            </footer>
+          </body>
+        </html>
+        """
+
+        accepted = app_module.discover_catalog_items(html_text, "https://example.com/cart.php?gid=1")
+        self.assertEqual([item["title"] for item in accepted], ["HKG.AS3.T1.WEE"])
+        self.assertGreaterEqual(accepted[0]["confidence"], 70)
+        self.assertIn("price", accepted[0]["include_reason"])
+        self.assertTrue(any(signal["type"] == "specs" for signal in accepted[0]["signals"]))
+
+        all_candidates = app_module.discover_catalog_items(
+            html_text,
+            "https://example.com/cart.php?gid=1",
+            include_rejected=True,
+        )
+        rejected = {item["title"]: item["reject_reason"] for item in all_candidates if item["reject_reason"]}
+        self.assertIn("English", rejected)
+        self.assertIn("選擇實例類型", rejected)
+        self.assertIn("语言切换或导航文本", rejected["English"])
+        self.assertIn("分类/步骤标题", rejected["選擇實例類型"])
+
+    def test_catalog_discovery_accepts_idc_plan_cards_with_specs_without_per_card_button(self) -> None:
+        html_text = """
+        <main class="cart-page">
+          <section>
+            <h2>選擇網絡類型</h2>
+            <button>Premium</button>
+            <button>Tier 1</button>
+          </section>
+          <section class="pricing-products">
+            <h2>選擇實例類型</h2>
+            <article class="product-card selected">
+              <h3>HKG.AS3.T1.WEE</h3>
+              <p>$ 36.90 USD / 年繳</p>
+              <p>1 vCores</p>
+              <p>1.0GB RAM</p>
+              <p>20GB SSD</p>
+              <p>1000GB @ 4Gbps</p>
+            </article>
+            <article class="product-card">
+              <h3>HKG.AS3.T1.TINY</h3>
+              <p>$ 6.90 USD / 月繳</p>
+              <p>1 vCores</p>
+              <p>1.0GB RAM</p>
+              <p>2000GB @ 4Gbps</p>
+            </article>
+          </section>
+          <footer><button>繼續</button></footer>
+        </main>
+        """
+
+        items = app_module.discover_catalog_items(
+            html_text,
+            "https://example.com/cart.php?region=hong-kong&network=tier-1&generation=as3&product=hkg.as3.t1.wee",
+        )
+        self.assertEqual(
+            [item["title"] for item in items],
+            ["HKG.AS3.T1.WEE", "HKG.AS3.T1.TINY"],
+        )
+        self.assertTrue(all(item["confidence"] >= 60 for item in items))
+        self.assertTrue(all(any(signal["type"] == "specs" for signal in item["signals"]) for item in items))
 
     def test_merchant_import_port_busy_returns_user_readable_error_kind(self) -> None:
         _, headers = self.login()
@@ -3339,6 +3436,37 @@ class PortalAppTestCase(unittest.TestCase):
         self.assertEqual(result.stock, 1)
         self.assertIn("HKG.AS3.T1.WEE", result.fragment)
         self.assertIn("可继续下单页面", result.detail)
+
+    def test_generic_pricing_table_unknown_detail_explains_missing_signal_or_target(self) -> None:
+        fetch_result = app_module.FetchResult(html="", final_url="https://example.com/pricing")
+        missing_signal_html = """
+        <main>
+          <article class="product-card">
+            <h3>HK Premium VPS</h3>
+            <p>$ 9.90 USD / month</p>
+            <p>1 vCPU 1GB RAM 20GB SSD</p>
+          </article>
+        </main>
+        """
+        no_target = app_module.extract_stock_for_strategy(
+            "generic_pricing_table",
+            missing_signal_html,
+            "Tokyo Premium VPS",
+            {"fetch_strategy": "generic_pricing_table"},
+            fetch_result,
+        )
+        missing_signal = app_module.extract_stock_for_strategy(
+            "generic_pricing_table",
+            missing_signal_html,
+            "HK Premium VPS",
+            {"fetch_strategy": "generic_pricing_table"},
+            fetch_result,
+        )
+
+        self.assertIsNone(no_target.stock)
+        self.assertIn("未找到目标商品标题", no_target.detail)
+        self.assertIsNone(missing_signal.stock)
+        self.assertIn("缺少明确购买入口或售罄标记", missing_signal.detail)
 
     def test_scrape_task_generic_pricing_table_limits_to_target_product(self) -> None:
         class FakeResponse:
