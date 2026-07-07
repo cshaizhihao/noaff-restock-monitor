@@ -12,6 +12,7 @@
     let taskStateSignature = "";
     let logsSignature = null;
     let merchantSignature = null;
+    let firecrawlGuideIndex = 0;
 
     const els = {
         loginShell: document.getElementById("login-shell"),
@@ -46,7 +47,10 @@
         settingsPages: document.getElementById("settings-pages"),
         firecrawlGuideModal: document.getElementById("firecrawl-guide-modal"),
         firecrawlGuideClose: document.getElementById("firecrawl-guide-close"),
-        firecrawlGuideDone: document.getElementById("firecrawl-guide-done"),
+        firecrawlGuideTrack: document.getElementById("firecrawl-guide-track"),
+        firecrawlGuideDots: document.getElementById("firecrawl-guide-dots"),
+        firecrawlGuidePrev: document.getElementById("firecrawl-guide-prev"),
+        firecrawlGuideNext: document.getElementById("firecrawl-guide-next"),
         tasksGrid: document.getElementById("tasks-grid"),
         toastStack: document.getElementById("toast-stack"),
         logStream: document.getElementById("log-stream"),
@@ -841,7 +845,37 @@
         panel.scrollIntoView({ block: "start" });
     }
 
+    function firecrawlGuideSlideCount() {
+        return els.firecrawlGuideTrack?.children?.length || 0;
+    }
+
+    function renderFirecrawlGuide() {
+        const total = firecrawlGuideSlideCount();
+        firecrawlGuideIndex = Math.min(Math.max(firecrawlGuideIndex, 0), Math.max(total - 1, 0));
+        if (els.firecrawlGuideTrack) {
+            els.firecrawlGuideTrack.style.transform = `translateX(-${firecrawlGuideIndex * 100}%)`;
+        }
+        els.firecrawlGuideDots?.querySelectorAll("[data-firecrawl-step]").forEach((button) => {
+            const isActive = Number(button.dataset.firecrawlStep) === firecrawlGuideIndex;
+            button.classList.toggle("is-active", isActive);
+            button.setAttribute("aria-current", isActive ? "step" : "false");
+        });
+        if (els.firecrawlGuidePrev) {
+            els.firecrawlGuidePrev.disabled = firecrawlGuideIndex === 0;
+        }
+        if (els.firecrawlGuideNext) {
+            els.firecrawlGuideNext.textContent = firecrawlGuideIndex >= total - 1 ? "看完了，关闭" : "下一步";
+        }
+    }
+
+    function setFirecrawlGuideStep(index) {
+        firecrawlGuideIndex = index;
+        renderFirecrawlGuide();
+    }
+
     function openFirecrawlGuideModal() {
+        firecrawlGuideIndex = 0;
+        renderFirecrawlGuide();
         els.firecrawlGuideModal?.classList.remove("hidden");
     }
 
@@ -2033,7 +2067,22 @@
     els.taskTemplateHelpButton?.addEventListener("click", openTemplateHelpModal);
     els.templateHelpClose?.addEventListener("click", closeTemplateHelpModal);
     els.firecrawlGuideClose?.addEventListener("click", closeFirecrawlGuideModal);
-    els.firecrawlGuideDone?.addEventListener("click", closeFirecrawlGuideModal);
+    els.firecrawlGuidePrev?.addEventListener("click", () => {
+        setFirecrawlGuideStep(firecrawlGuideIndex - 1);
+    });
+    els.firecrawlGuideNext?.addEventListener("click", () => {
+        const total = firecrawlGuideSlideCount();
+        if (firecrawlGuideIndex >= total - 1) {
+            closeFirecrawlGuideModal();
+            return;
+        }
+        setFirecrawlGuideStep(firecrawlGuideIndex + 1);
+    });
+    els.firecrawlGuideDots?.addEventListener("click", (event) => {
+        const dot = event.target.closest("[data-firecrawl-step]");
+        if (!dot) return;
+        setFirecrawlGuideStep(Number(dot.dataset.firecrawlStep || 0));
+    });
     els.firecrawlGuideModal?.addEventListener("click", (event) => {
         if (event.target === els.firecrawlGuideModal) {
             closeFirecrawlGuideModal();

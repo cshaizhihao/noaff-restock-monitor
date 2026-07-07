@@ -748,33 +748,54 @@
                     </button>
                 </div>
                 <div class="firecrawl-guide-body">
-                    <div class="firecrawl-guide-steps" aria-label="Firecrawl 步骤">
-                        <span>1. 准备 API Key</span>
-                        <span>2. 保存集成配置</span>
-                        <span>3. 商品入库优先使用</span>
-                        <span>4. 受保护页面处理</span>
-                    </div>
-                    <div class="firecrawl-guide-copy">
-                        <section>
-                            <h4>准备 API Key</h4>
-                            <p>在 Firecrawl 控制台创建 API Key，填入本页 API Key。Key 只保存在后端，前端和快照不会明文返回。</p>
-                        </section>
-                        <section>
-                            <h4>库存监控配置</h4>
-                            <p>实时监控默认不启用 Firecrawl。需要使用时先启用集成，再显式勾选“允许用于实时监控”。库存场景保持 maxAge=0、storeInCache=false。</p>
-                        </section>
-                        <section>
-                            <h4>商品入库配置</h4>
-                            <p>更推荐把 Firecrawl 用在商品入库：开启“允许用于商品入库”后，到商品入库页选择 Firecrawl Map 或 Scrape，先发现商品，再创建任务。</p>
-                        </section>
-                        <section>
-                            <h4>Cloudflare 边界</h4>
-                            <p>本项目不内置验证码绕过。Firecrawl 返回正常内容就解析；如果仍返回 challenge，会进入受保护站点冷却，建议改用 Webhook、手动录入或替代公开页面。</p>
-                        </section>
+                    <div class="firecrawl-guide-viewport">
+                        <div id="firecrawl-guide-track" class="firecrawl-guide-track">
+                            <section class="firecrawl-guide-slide">
+                                <p class="settings-kicker">Step 1 / 5</p>
+                                <h4>程序已经集成 Firecrawl</h4>
+                                <p>这里不是让你再装一个插件。本项目已经内置 Firecrawl 请求后端，可以调用 hosted Firecrawl 或你自托管的 Firecrawl API。</p>
+                                <p>如果使用 hosted Firecrawl，API Key 绑定你的账号、额度和费用，所以程序不能也不应该替你生成。你只需要把自己的 Key 填到本页。</p>
+                            </section>
+                            <section class="firecrawl-guide-slide">
+                                <p class="settings-kicker">Step 2 / 5</p>
+                                <h4>怎么拿 API Key</h4>
+                                <p>点击下面按钮打开 Firecrawl 登录页，登录后点顶部 Dashboard。API Key 会出现在主屏，也可以进 API Keys 页面查看，复制以 <span class="font-mono">fc-</span> 开头的 Key。</p>
+                                <p>如果你使用自托管 Firecrawl，把 API URL 改成你的自托管地址；如果自托管服务不需要 hosted key，可以按你的服务鉴权方式留空或填写对应 token。</p>
+                                <a class="firecrawl-guide-link" href="https://www.firecrawl.dev/app" target="_blank" rel="noopener noreferrer">打开 Firecrawl 登录页</a>
+                            </section>
+                            <section class="firecrawl-guide-slide">
+                                <p class="settings-kicker">Step 3 / 5</p>
+                                <h4>推荐最小配置</h4>
+                                <p>开启 Firecrawl，确认 API URL，填入 API Key。库存监控必须保持 <span class="font-mono">maxAge=0</span>，避免拿到缓存库存。</p>
+                                <p>默认建议 <span class="font-mono">storeInCache=false</span>、<span class="font-mono">zeroDataRetention=true</span>。实时监控默认不要启用 Firecrawl，除非你明确接受外部服务成本和隐私边界。</p>
+                            </section>
+                            <section class="firecrawl-guide-slide">
+                                <p class="settings-kicker">Step 4 / 5</p>
+                                <h4>优先用于商品入库</h4>
+                                <p>Firecrawl 更适合人工触发的商品入库：到“商品入库”页选择 Firecrawl Map 或 Firecrawl Scrape，先发现候选商品页，再生成监控任务。</p>
+                                <p>实时监控场景优先使用本地 static/browser；只有明确需要时，再把任务策略改成 Firecrawl 或 fallback 策略。</p>
+                            </section>
+                            <section class="firecrawl-guide-slide">
+                                <p class="settings-kicker">Step 5 / 5</p>
+                                <h4>Cloudflare 边界</h4>
+                                <p>本项目不内置 CAPTCHA、Turnstile 或 Cloudflare 绕过。Firecrawl 返回正常内容就解析；如果仍返回 challenge，会进入受保护站点冷却。</p>
+                                <p>这种页面更稳定的兜底是 Webhook、手动录入，或者换一个公开可访问的商品页面。</p>
+                            </section>
+                        </div>
                     </div>
                 </div>
                 <div class="firecrawl-guide-footer">
-                    <button id="firecrawl-guide-done" type="button" class="primary-button">看完了，关闭</button>
+                    <div id="firecrawl-guide-dots" class="firecrawl-guide-dots" aria-label="Firecrawl 教程进度">
+                        <button type="button" data-firecrawl-step="0" aria-label="第 1 步"></button>
+                        <button type="button" data-firecrawl-step="1" aria-label="第 2 步"></button>
+                        <button type="button" data-firecrawl-step="2" aria-label="第 3 步"></button>
+                        <button type="button" data-firecrawl-step="3" aria-label="第 4 步"></button>
+                        <button type="button" data-firecrawl-step="4" aria-label="第 5 步"></button>
+                    </div>
+                    <div class="firecrawl-guide-actions">
+                        <button id="firecrawl-guide-prev" type="button" class="ghost-button">上一步</button>
+                        <button id="firecrawl-guide-next" type="button" class="primary-button">下一步</button>
+                    </div>
                 </div>
             </div>
         </div>

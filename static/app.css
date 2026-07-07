@@ -536,8 +536,8 @@ button:disabled,
 }
 
 .firecrawl-guide-panel {
-    width: min(92vw, 62rem);
-    max-height: min(86vh, 46rem);
+    width: min(92vw, 46rem);
+    max-height: min(86vh, 40rem);
     overflow: hidden;
     border: 1px solid var(--color-line);
     border-radius: var(--radius);
@@ -560,65 +560,127 @@ button:disabled,
 
 .firecrawl-guide-footer {
     border-top: 1px solid var(--color-line);
-    justify-content: flex-end;
 }
 
 .firecrawl-guide-body {
-    display: grid;
-    max-height: calc(min(86vh, 46rem) - 9rem);
-    grid-template-columns: minmax(12rem, 0.7fr) minmax(0, 1.3fr);
-    gap: 1rem;
-    overflow-y: auto;
+    overflow: hidden;
     padding: 1.25rem;
 }
 
-.firecrawl-guide-steps {
-    display: grid;
-    align-content: start;
-    gap: 0.75rem;
+.firecrawl-guide-viewport {
+    overflow: hidden;
+    border-radius: var(--radius);
 }
 
-.firecrawl-guide-steps span {
+.firecrawl-guide-track {
+    display: flex;
+    transform: translateX(0);
+    transition: transform 240ms ease;
+    will-change: transform;
+}
+
+.firecrawl-guide-slide {
+    display: flex;
+    flex: 0 0 100%;
+    min-height: 19rem;
+    max-height: calc(min(86vh, 40rem) - 9.75rem);
+    flex-direction: column;
+    justify-content: center;
+    overflow-y: auto;
     border: 1px solid var(--color-line);
     border-radius: var(--radius);
-    background: rgba(6, 10, 17, 0.62);
-    padding: 0.75rem 0.85rem;
-    color: #cbd5e1;
+    background: rgba(6, 10, 17, 0.52);
+    padding: 1.35rem;
+}
+
+.firecrawl-guide-slide h4 {
+    margin-top: 0.4rem;
+    color: #f8fafc;
+    font-size: 1.3rem;
+    font-weight: 850;
+    letter-spacing: 0;
+}
+
+.firecrawl-guide-slide p {
+    margin-top: 0.8rem;
+    color: var(--color-muted);
+    font-size: 0.95rem;
+    line-height: 1.7;
+}
+
+.firecrawl-guide-link {
+    display: inline-flex;
+    width: fit-content;
+    min-height: 2.5rem;
+    align-items: center;
+    justify-content: center;
+    margin-top: 1rem;
+    border: 1px solid rgba(34, 197, 94, 0.35);
+    border-radius: var(--radius);
+    background: rgba(34, 197, 94, 0.12);
+    padding: 0.65rem 0.85rem;
+    color: #bbf7d0;
     font-size: 0.86rem;
     font-weight: 800;
 }
 
-.firecrawl-guide-copy {
-    display: grid;
-    gap: 0.85rem;
+.firecrawl-guide-dots,
+.firecrawl-guide-actions {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.55rem;
 }
 
-.firecrawl-guide-copy section {
-    border: 1px solid var(--color-line);
-    border-radius: var(--radius);
-    background: rgba(6, 10, 17, 0.48);
-    padding: 0.95rem;
+.firecrawl-guide-dots button {
+    width: 0.7rem;
+    height: 0.7rem;
+    border: 1px solid rgba(148, 163, 184, 0.35);
+    border-radius: 999px;
+    background: rgba(148, 163, 184, 0.18);
 }
 
-.firecrawl-guide-copy h4 {
-    color: #f8fafc;
-    font-weight: 850;
+.firecrawl-guide-dots button.is-active {
+    width: 1.8rem;
+    border-color: rgba(34, 197, 94, 0.65);
+    background: #22c55e;
 }
 
-.firecrawl-guide-copy p {
-    margin-top: 0.45rem;
-    color: var(--color-muted);
-    font-size: 0.9rem;
-    line-height: 1.65;
+.firecrawl-guide-actions .ghost-button:disabled {
+    cursor: not-allowed;
+    opacity: 0.45;
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .firecrawl-guide-track {
+        transition: none;
+    }
 }
 
 @media (max-width: 767px) {
     .settings-entry-list,
     .settings-grid,
     .settings-grid-three,
-    .settings-firecrawl-grid,
-    .firecrawl-guide-body {
+    .settings-firecrawl-grid {
         grid-template-columns: 1fr;
+    }
+
+    .firecrawl-guide-panel {
+        width: calc(100vw - 1rem);
+    }
+
+    .firecrawl-guide-header,
+    .firecrawl-guide-footer {
+        align-items: stretch;
+        flex-direction: column;
+    }
+
+    .firecrawl-guide-footer {
+        gap: 0.9rem;
+    }
+
+    .firecrawl-guide-actions {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
     }
 
     .settings-entry {
