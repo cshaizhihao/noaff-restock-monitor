@@ -870,6 +870,7 @@ class InstallScriptTestCase(unittest.TestCase):
         self.assertIn("商品预览", portal_html)
         self.assertIn("错误恢复建议", portal_html)
         self.assertIn("catalog_browser_port_busy", portal_html)
+        self.assertIn("firecrawl_zdr_not_enabled", portal_html)
         self.assertIn("firecrawl_credit_required", portal_html)
         self.assertIn("cloudflare_challenge", portal_html)
 

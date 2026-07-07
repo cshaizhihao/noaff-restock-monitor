@@ -334,7 +334,7 @@ curl -X POST 'https://your-panel.example.com/api/webhooks/restock/123' \
 | `FIRECRAWL_PROXY_MODE` | `basic` / `enhanced` / `auto` | `basic` |
 | `FIRECRAWL_ALLOW_AUTO_PROXY` | 是否允许 auto proxy | `false` |
 | `FIRECRAWL_ALLOW_ENHANCED_PROXY` | 是否允许 enhanced proxy | `false` |
-| `FIRECRAWL_ZERO_DATA_RETENTION` | 请求 Firecrawl 零数据保留 | `true` |
+| `FIRECRAWL_ZERO_DATA_RETENTION` | 请求 Firecrawl 零数据保留；hosted 账号需开通 ZDR | `false` |
 | `FIRECRAWL_USE_FOR_MONITOR` | 是否允许监控任务默认使用 Firecrawl | `false` |
 | `FIRECRAWL_USE_FOR_CATALOG` | 是否允许商品入库使用 Firecrawl | `true` |
 | `FIRECRAWL_CATALOG_LIMIT` | Firecrawl Map 单次候选 URL 上限 | `50` |

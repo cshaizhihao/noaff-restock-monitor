@@ -123,7 +123,7 @@ DEFAULT_FIRECRAWL_STORE_IN_CACHE = env_bool("FIRECRAWL_STORE_IN_CACHE", False)
 DEFAULT_FIRECRAWL_PROXY_MODE = os.getenv("FIRECRAWL_PROXY_MODE", "basic").strip().lower() or "basic"
 DEFAULT_FIRECRAWL_ALLOW_AUTO_PROXY = env_bool("FIRECRAWL_ALLOW_AUTO_PROXY", False)
 DEFAULT_FIRECRAWL_ALLOW_ENHANCED_PROXY = env_bool("FIRECRAWL_ALLOW_ENHANCED_PROXY", False)
-DEFAULT_FIRECRAWL_ZERO_DATA_RETENTION = env_bool("FIRECRAWL_ZERO_DATA_RETENTION", True)
+DEFAULT_FIRECRAWL_ZERO_DATA_RETENTION = env_bool("FIRECRAWL_ZERO_DATA_RETENTION", False)
 DEFAULT_FIRECRAWL_USE_FOR_MONITOR = env_bool("FIRECRAWL_USE_FOR_MONITOR", False)
 DEFAULT_FIRECRAWL_USE_FOR_CATALOG = env_bool("FIRECRAWL_USE_FOR_CATALOG", True)
 DEFAULT_FIRECRAWL_CATALOG_LIMIT = int(os.getenv("FIRECRAWL_CATALOG_LIMIT", "50"))
@@ -2647,6 +2647,64 @@ def sanitize_firecrawl_detail(value: str, api_key: str = "") -> str:
     return text[:500]
 
 
+def firecrawl_response_error(response: Response, api_key: str = "") -> str:
+    try:
+        payload = response.json()
+    except ValueError:
+        payload = None
+    if isinstance(payload, dict):
+        for key in ("error", "message", "detail"):
+            value = payload.get(key)
+            if value:
+                return sanitize_firecrawl_detail(str(value), api_key)
+    return sanitize_firecrawl_detail(getattr(response, "text", "") or "", api_key)
+
+
+def firecrawl_http_error_result(response: Response, url: str, api_key: str, operation: str) -> FetchResult | None:
+    status_code = int(getattr(response, "status_code", 0) or 0)
+    error_text = firecrawl_response_error(response, api_key)
+    error_lower = error_text.lower()
+    if status_code == 401:
+        return FetchResult(
+            html="",
+            final_url=url,
+            status_code=status_code,
+            error_kind="firecrawl_auth_error",
+            detail="Firecrawl 认证失败，请检查 API Key。",
+        )
+    if status_code == 403:
+        if "zero data retention" in error_lower or "zdr" in error_lower:
+            return FetchResult(
+                html="",
+                final_url=url,
+                status_code=status_code,
+                error_kind="firecrawl_zdr_not_enabled",
+                detail="当前 Firecrawl 账号未开通 zeroDataRetention。请在系统设置关闭 zeroDataRetention 后重试，或联系 Firecrawl 开通 ZDR。",
+            )
+        return FetchResult(
+            html="",
+            final_url=url,
+            status_code=status_code,
+            error_kind="firecrawl_permission_error",
+            detail=f"Firecrawl 拒绝了 {operation} 请求：{error_text or '权限不足或当前账号不允许该操作。'}",
+        )
+    if status_code == 402:
+        return FetchResult(html="", final_url=url, status_code=status_code, error_kind="firecrawl_credit_required", detail="Firecrawl 额度不足或需要付费额度。")
+    if status_code == 429:
+        return FetchResult(html="", final_url=url, status_code=status_code, error_kind="firecrawl_rate_limited", detail="Firecrawl 请求频率受限，请降低并发或稍后重试。")
+    if status_code == 400:
+        return FetchResult(
+            html="",
+            final_url=url,
+            status_code=status_code,
+            error_kind="firecrawl_bad_request",
+            detail=f"Firecrawl {operation} 参数不被接受：{error_text or '请求参数错误。'}",
+        )
+    if status_code >= 500:
+        return FetchResult(html="", final_url=url, status_code=status_code, error_kind="firecrawl_upstream_error", detail=f"Firecrawl 上游服务异常（HTTP {status_code}）。")
+    return None
+
+
 class FirecrawlClient:
     def __init__(self, settings_payload: dict[str, Any], session: requests.Session | None = None) -> None:
         self.settings = settings_payload
@@ -2669,7 +2727,7 @@ class FirecrawlClient:
             "formats": ["rawHtml", "html", "markdown", "links"],
             "maxAge": int(self.settings.get("firecrawl_max_age_ms", 0) or 0),
             "storeInCache": bool(self.settings.get("firecrawl_store_in_cache", False)),
-            "zeroDataRetention": bool(self.settings.get("firecrawl_zero_data_retention", True)),
+            "zeroDataRetention": bool(self.settings.get("firecrawl_zero_data_retention", False)),
             "proxy": str(self.settings.get("firecrawl_proxy_mode") or "basic"),
         }
 
@@ -2707,14 +2765,9 @@ class FirecrawlClient:
                 detail=f"Firecrawl map 请求失败：{sanitize_firecrawl_detail(str(exc), self.api_key)}",
             )
 
-        if response.status_code in {401, 403}:
-            return FetchResult(html="", final_url=url, status_code=response.status_code, error_kind="firecrawl_auth_error", detail="Firecrawl 认证失败，请检查 API key。")
-        if response.status_code == 402:
-            return FetchResult(html="", final_url=url, status_code=response.status_code, error_kind="firecrawl_credit_required", detail="Firecrawl 额度不足或需要付费额度。")
-        if response.status_code == 429:
-            return FetchResult(html="", final_url=url, status_code=response.status_code, error_kind="firecrawl_rate_limited", detail="Firecrawl 请求频率受限，请降低并发或稍后重试。")
-        if response.status_code >= 500:
-            return FetchResult(html="", final_url=url, status_code=response.status_code, error_kind="firecrawl_upstream_error", detail=f"Firecrawl 上游服务异常（HTTP {response.status_code}）。")
+        http_error = firecrawl_http_error_result(response, url, self.api_key, "map")
+        if http_error:
+            return http_error
 
         try:
             payload = response.json()
@@ -2779,14 +2832,9 @@ class FirecrawlClient:
                 detail=f"Firecrawl scrape 请求失败：{sanitize_firecrawl_detail(str(exc), self.api_key)}",
             )
 
-        if response.status_code in {401, 403}:
-            return FetchResult(html="", final_url=url, status_code=response.status_code, error_kind="firecrawl_auth_error", detail="Firecrawl 认证失败，请检查 API key。")
-        if response.status_code == 402:
-            return FetchResult(html="", final_url=url, status_code=response.status_code, error_kind="firecrawl_credit_required", detail="Firecrawl 额度不足或需要付费额度。")
-        if response.status_code == 429:
-            return FetchResult(html="", final_url=url, status_code=response.status_code, error_kind="firecrawl_rate_limited", detail="Firecrawl 请求频率受限，请降低并发或稍后重试。")
-        if response.status_code >= 500:
-            return FetchResult(html="", final_url=url, status_code=response.status_code, error_kind="firecrawl_upstream_error", detail=f"Firecrawl 上游服务异常（HTTP {response.status_code}）。")
+        http_error = firecrawl_http_error_result(response, url, self.api_key, "scrape")
+        if http_error:
+            return http_error
 
         try:
             payload = response.json()

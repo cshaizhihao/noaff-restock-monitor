@@ -2206,7 +2206,7 @@ class PortalAppTestCase(unittest.TestCase):
             "firecrawl_max_age_ms": 0,
             "firecrawl_store_in_cache": False,
             "firecrawl_proxy_mode": "basic",
-            "firecrawl_zero_data_retention": True,
+            "firecrawl_zero_data_retention": False,
         }
         settings.update(overrides)
         return settings
@@ -2252,7 +2252,7 @@ class PortalAppTestCase(unittest.TestCase):
         self.assertEqual(sent_payload["formats"], ["rawHtml", "html", "markdown", "links"])
         self.assertEqual(sent_payload["maxAge"], 0)
         self.assertFalse(sent_payload["storeInCache"])
-        self.assertTrue(sent_payload["zeroDataRetention"])
+        self.assertFalse(sent_payload["zeroDataRetention"])
         self.assertEqual(sent_payload["proxy"], "basic")
 
     def test_firecrawl_map_returns_links_with_search_and_limit(self) -> None:
@@ -2418,7 +2418,7 @@ class PortalAppTestCase(unittest.TestCase):
 
         cases = {
             401: "firecrawl_auth_error",
-            403: "firecrawl_auth_error",
+            403: "firecrawl_permission_error",
             402: "firecrawl_credit_required",
             429: "firecrawl_rate_limited",
             503: "firecrawl_upstream_error",
@@ -2429,6 +2429,20 @@ class PortalAppTestCase(unittest.TestCase):
                 result = app_module.FirecrawlFetcher(self.firecrawl_settings(), client).fetch("https://example.com", 25)
                 self.assertEqual(result.error_kind, expected_kind)
                 self.assertEqual(result.status_code, status_code)
+
+        class ZdrResponse:
+            status_code = 403
+
+            def json(self):
+                return {"success": False, "error": "Zero Data Retention (ZDR) is not enabled for your team."}
+
+        class ZdrSession:
+            def post(self, url, headers=None, json=None, timeout=None):
+                return ZdrResponse()
+
+        zdr_result = app_module.FirecrawlClient(self.firecrawl_settings(firecrawl_zero_data_retention=True), ZdrSession()).scrape("https://example.com")
+        self.assertEqual(zdr_result.error_kind, "firecrawl_zdr_not_enabled")
+        self.assertIn("关闭 zeroDataRetention", zdr_result.detail)
 
     def test_firecrawl_fetcher_classifies_timeout_and_cloudflare(self) -> None:
         class TimeoutSession:

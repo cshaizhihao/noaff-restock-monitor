@@ -219,6 +219,8 @@
         const text = String(value || "").toLowerCase();
         if (!text) return "";
         if (text.includes("catalog_browser_port_busy")) return "修改商品入库浏览器端口后重试。";
+        if (text.includes("firecrawl_zdr_not_enabled") || text.includes("zero data retention") || text.includes("zdr")) return "关闭 Firecrawl zeroDataRetention 后重试，或联系 Firecrawl 开通 ZDR。";
+        if (text.includes("firecrawl_permission_error")) return "检查 Firecrawl 账号权限、proxy 模式或 zeroDataRetention 配置。";
         if (text.includes("firecrawl_auth_error") || text.includes("认证失败")) return "检查 Firecrawl API Key。";
         if (text.includes("firecrawl_credit_required") || text.includes("额度")) return "检查 Firecrawl 额度。";
         if (text.includes("firecrawl_rate_limited") || text.includes("频率")) return "降低频率或稍后重试。";
@@ -315,6 +317,12 @@
         switch (kind) {
             case "cloudflare_challenge":
                 return "受保护页面 / Cloudflare 验证";
+            case "firecrawl_zdr_not_enabled":
+                return "Firecrawl ZDR 未开通";
+            case "firecrawl_permission_error":
+                return "Firecrawl 权限不足";
+            case "firecrawl_bad_request":
+                return "Firecrawl 参数错误";
             case "timeout":
                 return "请求超时";
             case "browser_connection":
@@ -1020,7 +1028,7 @@
         syncInputValue(els.settingsFirecrawlProxyMode, settings.firecrawl_proxy_mode || "basic");
         syncCheckboxValue(els.settingsFirecrawlAllowAutoProxy, Boolean(settings.firecrawl_allow_auto_proxy));
         syncCheckboxValue(els.settingsFirecrawlAllowEnhancedProxy, Boolean(settings.firecrawl_allow_enhanced_proxy));
-        syncCheckboxValue(els.settingsFirecrawlZeroDataRetention, settings.firecrawl_zero_data_retention !== false);
+        syncCheckboxValue(els.settingsFirecrawlZeroDataRetention, Boolean(settings.firecrawl_zero_data_retention));
         syncCheckboxValue(els.settingsFirecrawlUseForMonitor, Boolean(settings.firecrawl_use_for_monitor));
         syncCheckboxValue(els.settingsFirecrawlUseForCatalog, settings.firecrawl_use_for_catalog !== false);
         syncInputValue(els.settingsFirecrawlCatalogLimit, settings.firecrawl_catalog_limit || 50);

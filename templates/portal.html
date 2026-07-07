@@ -406,6 +406,7 @@
                                 <div class="mt-4 space-y-3 text-sm leading-6 text-slate-400">
                                     <p class="rounded-lg border border-slate-800 bg-slate-950/50 px-3 py-2"><span class="font-mono text-amber-200">catalog_browser_port_busy</span><br>修改商品入库浏览器端口后重试。</p>
                                     <p class="rounded-lg border border-slate-800 bg-slate-950/50 px-3 py-2"><span class="font-mono text-amber-200">firecrawl_auth_error</span><br>检查 Firecrawl API Key。</p>
+                                    <p class="rounded-lg border border-slate-800 bg-slate-950/50 px-3 py-2"><span class="font-mono text-amber-200">firecrawl_zdr_not_enabled</span><br>关闭 zeroDataRetention 后重试，或联系 Firecrawl 开通 ZDR。</p>
                                     <p class="rounded-lg border border-slate-800 bg-slate-950/50 px-3 py-2"><span class="font-mono text-amber-200">firecrawl_credit_required</span><br>检查 Firecrawl 额度。</p>
                                     <p class="rounded-lg border border-slate-800 bg-slate-950/50 px-3 py-2"><span class="font-mono text-amber-200">firecrawl_rate_limited</span><br>降低频率或稍后重试。</p>
                                     <p class="rounded-lg border border-slate-800 bg-slate-950/50 px-3 py-2"><span class="font-mono text-amber-200">cloudflare_challenge</span><br>改用 Webhook、手动录入或替代公开页面。</p>
@@ -586,7 +587,7 @@
                                                     </label>
                                                     <label class="settings-check">
                                                         <input id="settings-firecrawl-zero-data-retention" type="checkbox" class="h-4 w-4 rounded border-slate-700 bg-slate-950 text-indigo-500">
-                                                        zeroDataRetention
+                                                        zeroDataRetention（需 Firecrawl 开通 ZDR）
                                                     </label>
                                                     <label class="settings-check">
                                                         <input id="settings-firecrawl-use-for-monitor" type="checkbox" class="h-4 w-4 rounded border-slate-700 bg-slate-950 text-indigo-500">
@@ -605,7 +606,7 @@
                                                         显式允许 auto proxy
                                                     </label>
                                                 </div>
-                                                <p class="settings-field-wide text-sm leading-6 text-amber-200/90">enhanced / auto 属于外部 hosted provider 能力，可能产生额外费用；页面内容会发送给 Firecrawl，这不是本项目内置的 Cloudflare 绕过。</p>
+                                                <p class="settings-field-wide text-sm leading-6 text-amber-200/90">enhanced / auto 属于外部 hosted provider 能力，可能产生额外费用；页面内容会发送给 Firecrawl，这不是本项目内置的 Cloudflare 绕过。zeroDataRetention 需要 Firecrawl 账号开通 ZDR，未开通时请保持关闭。</p>
                                             </div>
                                         </section>
                                     </form>
@@ -767,7 +768,7 @@
                                 <p class="settings-kicker">Step 3 / 5</p>
                                 <h4>推荐最小配置</h4>
                                 <p>开启 Firecrawl，确认 API URL，填入 API Key。库存监控必须保持 <span class="font-mono">maxAge=0</span>，避免拿到缓存库存。</p>
-                                <p>默认建议 <span class="font-mono">storeInCache=false</span>、<span class="font-mono">zeroDataRetention=true</span>。实时监控默认不要启用 Firecrawl，除非你明确接受外部服务成本和隐私边界。</p>
+                                <p>默认建议 <span class="font-mono">storeInCache=false</span>。<span class="font-mono">zeroDataRetention</span> 需要 Firecrawl 开通 ZDR；普通 hosted key 没开通时保持关闭。</p>
                             </section>
                             <section class="firecrawl-guide-slide">
                                 <p class="settings-kicker">Step 4 / 5</p>
