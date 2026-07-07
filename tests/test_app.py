@@ -570,6 +570,122 @@ class PortalAppTestCase(unittest.TestCase):
         self.assertEqual(payload["merchant"]["metrics"]["total_items"], 2)
         self.assertEqual(payload["merchant"]["metrics"]["linked_tasks"], 2)
 
+    def test_merchant_import_port_busy_returns_user_readable_error_kind(self) -> None:
+        _, headers = self.login()
+        engine = self.app.extensions["monitor_engine"]
+
+        class FakeCatalogBrowser:
+            def __init__(self) -> None:
+                self.rebuild_calls: list[str] = []
+
+            def fetch_html(self, url: str, timeout_seconds: int) -> str:
+                raise app_module.CatalogBrowserPortBusyError(
+                    "商品入库浏览器端口 9445 已被其他进程占用（PID 4242, python）。"
+                    "请在系统设置中修改 CATALOG_DEBUG_PORT / 商品入库浏览器端口后重试。"
+                )
+
+            def rebuild(self, reason: str) -> None:
+                self.rebuild_calls.append(reason)
+                raise AssertionError("端口占用不应触发浏览器重建")
+
+        original_browser = engine.catalog_browser
+        fake_browser = FakeCatalogBrowser()
+        engine.catalog_browser = fake_browser
+        try:
+            response = self.client.post(
+                f"{app_module.PORTAL_PATH}/api/merchant/import",
+                headers=headers,
+                base_url=BASE_URL,
+                json={"source_url": "https://merchant.example.com/products"},
+            )
+        finally:
+            engine.catalog_browser = original_browser
+
+        self.assertEqual(response.status_code, 400)
+        payload = response.get_json()
+        self.assertEqual(payload["error_kind"], "catalog_browser_port_busy")
+        self.assertIn("CATALOG_DEBUG_PORT", payload["message"])
+        self.assertEqual(fake_browser.rebuild_calls, [])
+
+    def test_merchant_import_cloudflare_keeps_catalog_browser_stable(self) -> None:
+        _, headers = self.login()
+        engine = self.app.extensions["monitor_engine"]
+
+        class FakeCatalogBrowser:
+            def __init__(self) -> None:
+                self.rebuild_calls: list[str] = []
+
+            def fetch_html(self, url: str, timeout_seconds: int) -> str:
+                raise app_module.ProtectedSourceError("catalog 浏览器被 Cloudflare 验证页拦截：https://merchant.example.com/products")
+
+            def rebuild(self, reason: str) -> None:
+                self.rebuild_calls.append(reason)
+                raise AssertionError("Cloudflare challenge 不应触发浏览器重建")
+
+        original_browser = engine.catalog_browser
+        fake_browser = FakeCatalogBrowser()
+        engine.catalog_browser = fake_browser
+        try:
+            response = self.client.post(
+                f"{app_module.PORTAL_PATH}/api/merchant/import",
+                headers=headers,
+                base_url=BASE_URL,
+                json={"source_url": "https://merchant.example.com/products"},
+            )
+        finally:
+            engine.catalog_browser = original_browser
+
+        self.assertEqual(response.status_code, 400)
+        payload = response.get_json()
+        self.assertEqual(payload["error_kind"], "cloudflare_challenge")
+        self.assertIn("受保护来源", payload["message"])
+        self.assertEqual(fake_browser.rebuild_calls, [])
+
+    def test_merchant_import_connection_failure_rebuilds_once_and_sanitizes_message(self) -> None:
+        engine = self.app.extensions["monitor_engine"]
+        raw_error = (
+            "The browser connection fails. Address: 127.0.0.1:9445\n"
+            "Tip: 1, the user folder does not conflict with the open browser 2, "
+            "if no interface system, please add '--headless=new' startup parameter 3, "
+            "if the system is Linux, try adding '--no-sandbox' boot parameter "
+            "The port and user folder paths can be set using ChromiumOptions. Version: 4.1.1.4"
+        )
+
+        class FakeCatalogBrowser:
+            def __init__(self) -> None:
+                self.fetch_calls = 0
+                self.rebuild_calls: list[str] = []
+
+            def fetch_html(self, url: str, timeout_seconds: int) -> str:
+                self.fetch_calls += 1
+                raise RuntimeError(raw_error)
+
+            def rebuild(self, reason: str) -> None:
+                self.rebuild_calls.append(reason)
+
+        original_browser = engine.catalog_browser
+        fake_browser = FakeCatalogBrowser()
+        engine.catalog_browser = fake_browser
+        try:
+            with self.assertRaises(app_module.CatalogBrowserConnectionError) as ctx:
+                engine.import_merchant_source(
+                    "https://merchant.example.com/products",
+                    "",
+                    "默认分组",
+                    engine.get_runtime_settings(),
+                    auto_promote=False,
+                )
+        finally:
+            engine.catalog_browser = original_browser
+
+        self.assertEqual(fake_browser.fetch_calls, 2)
+        self.assertEqual(len(fake_browser.rebuild_calls), 1)
+        self.assertIn("商品入库浏览器连接失败（端口 9445）", str(ctx.exception))
+        self.assertNotIn("ChromiumOptions", str(ctx.exception))
+        self.assertNotIn("The browser connection fails", str(ctx.exception))
+        self.assertNotIn("ChromiumOptions", fake_browser.rebuild_calls[0])
+        self.assertNotIn("The browser connection fails", fake_browser.rebuild_calls[0])
+
     def test_task_group_rename_updates_tasks_and_merchant_sources(self) -> None:
         _, headers = self.login()
         timestamp = app_module.now_iso()
@@ -2014,6 +2130,42 @@ class PortalAppTestCase(unittest.TestCase):
                 self.assertFalse((harness.profile_dir / filename).exists())
         finally:
             harness.shutdown()
+
+    def test_browser_harness_roles_use_isolated_profiles_and_ports(self) -> None:
+        monitor = app_module.BrowserHarness("monitor", 9441, True, "")
+        test = app_module.BrowserHarness("test", 9442, True, "")
+        catalog = app_module.BrowserHarness("catalog", 9445, True, "")
+        try:
+            self.assertEqual(monitor.port, 9441)
+            self.assertEqual(test.port, 9442)
+            self.assertEqual(catalog.port, 9445)
+            self.assertNotEqual(monitor.profile_dir, test.profile_dir)
+            self.assertNotEqual(monitor.profile_dir, catalog.profile_dir)
+            self.assertNotEqual(test.profile_dir, catalog.profile_dir)
+            self.assertTrue(str(catalog.profile_dir).endswith("browser-catalog"))
+        finally:
+            monitor.shutdown()
+            test.shutdown()
+            catalog.shutdown()
+
+    def test_catalog_browser_port_busy_reports_configuration_error(self) -> None:
+        harness = app_module.BrowserHarness("catalog", 9445, True, "")
+
+        class FakeProcess:
+            pid = 4242
+
+            def name(self) -> str:
+                return "python"
+
+        try:
+            harness._foreign_port_listeners = lambda: [FakeProcess()]
+            with self.assertRaises(app_module.CatalogBrowserPortBusyError) as ctx:
+                harness._assert_port_available_for_role()
+        finally:
+            harness.shutdown()
+
+        self.assertIn("商品入库浏览器端口 9445 已被其他进程占用", str(ctx.exception))
+        self.assertIn("CATALOG_DEBUG_PORT", str(ctx.exception))
 
     def test_scrape_task_auto_heals_browser_connection_failure(self) -> None:
         timestamp = app_module.now_iso()

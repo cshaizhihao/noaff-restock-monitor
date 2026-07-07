@@ -1676,6 +1676,18 @@ class ProtectedSourceError(RuntimeError):
     error_kind = "cloudflare_challenge"
 
 
+class CatalogBrowserError(RuntimeError):
+    error_kind = "catalog_browser_connection_failed"
+
+
+class CatalogBrowserPortBusyError(CatalogBrowserError):
+    error_kind = "catalog_browser_port_busy"
+
+
+class CatalogBrowserConnectionError(CatalogBrowserError):
+    error_kind = "catalog_browser_connection_failed"
+
+
 @dataclass
 class MerchantCatalogItem:
     source_item_key: str
@@ -1838,6 +1850,91 @@ class BrowserHarness:
         self.lock = threading.Lock()
         self.page = None
 
+    def profile_marker(self) -> str:
+        return str(self.profile_dir).lower()
+
+    def _process_owns_harness(self, process: psutil.Process) -> bool:
+        try:
+            info = getattr(process, "info", {}) or {}
+            name = (info.get("name") or process.name() or "").lower()
+            cmdline_parts = info.get("cmdline") or process.cmdline()
+            cmdline = " ".join(cmdline_parts or []).lower()
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            return False
+        if process.pid == os.getpid():
+            return False
+        if not any(token in name for token in ("chrome", "chromium", "edge")):
+            return False
+        owns_profile = self.profile_marker() in cmdline
+        return owns_profile
+
+    def _owned_browser_processes(self) -> list[psutil.Process]:
+        victims: list[psutil.Process] = []
+        for process in psutil.process_iter(["pid", "name", "cmdline"]):
+            try:
+                if self._process_owns_harness(process):
+                    victims.append(process)
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                continue
+        return victims
+
+    def _listening_processes_on_port(self) -> list[psutil.Process]:
+        listeners: list[psutil.Process] = []
+        try:
+            connections = psutil.net_connections(kind="tcp")
+        except (psutil.AccessDenied, OSError):
+            return listeners
+        for connection in connections:
+            local_address = connection.laddr
+            if not local_address or getattr(local_address, "port", None) != self.port:
+                continue
+            status = getattr(connection, "status", "")
+            if status and status != psutil.CONN_LISTEN:
+                continue
+            if not connection.pid or connection.pid == os.getpid():
+                continue
+            try:
+                listeners.append(psutil.Process(connection.pid))
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                continue
+        return listeners
+
+    def _foreign_port_listeners(self) -> list[psutil.Process]:
+        foreign: list[psutil.Process] = []
+        for process in self._listening_processes_on_port():
+            try:
+                process_info = process.as_dict(attrs=["pid", "name", "cmdline"])
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                continue
+            if not self._process_info_owns_profile(process_info, process.pid):
+                foreign.append(process)
+        return foreign
+
+    def _process_info_owns_profile(self, process_info: dict[str, Any], pid: int) -> bool:
+        if pid == os.getpid():
+            return False
+        name = str(process_info.get("name") or "").lower()
+        cmdline = " ".join(process_info.get("cmdline") or []).lower()
+        if not any(token in name for token in ("chrome", "chromium", "edge")):
+            return False
+        return self.profile_marker() in cmdline
+
+    def _assert_port_available_for_role(self) -> None:
+        foreign = self._foreign_port_listeners()
+        if not foreign:
+            return
+        first = foreign[0]
+        try:
+            process_name = first.name()
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            process_name = "unknown"
+        if self.role == "catalog":
+            raise CatalogBrowserPortBusyError(
+                f"商品入库浏览器端口 {self.port} 已被其他进程占用（PID {first.pid}, {process_name}）。"
+                "请在系统设置中修改 CATALOG_DEBUG_PORT / 商品入库浏览器端口后重试。"
+            )
+        raise RuntimeError(f"{self.role} 浏览器调试端口 {self.port} 已被其他进程占用。")
+
     def update(self, port: int, headless: bool, browser_path: str | None) -> None:
         browser_path = browser_path or ""
         if int(port) == self.port and headless == self.headless and browser_path == self.browser_path:
@@ -1850,6 +1947,10 @@ class BrowserHarness:
     def build_page(self):
         if ChromiumOptions is None or ChromiumPage is None:
             raise RuntimeError("DrissionPage 未安装，无法启动浏览器引擎。")
+
+        self._kill_zombies()
+        self._clear_profile_locks()
+        self._assert_port_available_for_role()
 
         options = ChromiumOptions()
         options.set_local_port(self.port)
@@ -1956,24 +2057,7 @@ class BrowserHarness:
             self.page = None
 
     def _kill_zombies(self) -> None:
-        marker = str(self.profile_dir).lower()
-        port_flag = f"--remote-debugging-port={self.port}"
-        port_value = str(self.port)
-        victims: list[psutil.Process] = []
-        for process in psutil.process_iter(["pid", "name", "cmdline"]):
-            try:
-                name = (process.info["name"] or "").lower()
-                cmdline = " ".join(process.info["cmdline"] or []).lower()
-                if process.pid == os.getpid():
-                    continue
-                if not any(token in name for token in ("chrome", "chromium", "edge")):
-                    continue
-                owns_debug_port = port_flag in cmdline or f"remote-debugging-port {port_value}" in cmdline
-                owns_profile = marker in cmdline
-                if owns_debug_port or owns_profile:
-                    victims.append(process)
-            except (psutil.NoSuchProcess, psutil.AccessDenied):
-                continue
+        victims = self._owned_browser_processes()
         for process in victims:
             try:
                 process.terminate()
@@ -2194,14 +2278,15 @@ class MonitoringEngine:
                 )
                 synced_count += 1
             except Exception as exc:
-                error_message = str(exc)[:1000]
+                error_kind = catalog_browser_error_kind(exc)
+                error_message = catalog_browser_error_message(exc, settings_payload["catalog_debug_port"])
                 with open_connection() as connection:
                     connection.execute(
                         "UPDATE merchant_sources SET last_error = ?, updated_at = ? WHERE id = ?",
                         (error_message, now_iso(), source["id"]),
                     )
                     connection.commit()
-                log_activity("warning", "catalog", f"同步商家来源 #{source['id']} 失败：{exc}")
+                log_activity("warning", "catalog", f"同步商家来源 #{source['id']} 失败（{error_kind}）：{error_message}")
 
         return synced_count
 
@@ -2331,17 +2416,25 @@ class MonitoringEngine:
 
         last_error = ""
         html_text = ""
-        for attempt in range(3):
+        for attempt in range(2):
             try:
                 html_text = self.catalog_browser.fetch_html(source_url, settings_payload["request_timeout_seconds"])
                 break
+            except CatalogBrowserPortBusyError:
+                raise
+            except ProtectedSourceError:
+                raise
             except Exception as exc:
                 last_error = str(exc)
-                if should_auto_heal(exc) and attempt < 2:
-                    self.catalog_browser.rebuild(last_error)
+                if should_auto_heal(exc) and attempt < 1:
+                    self.catalog_browser.rebuild(catalog_browser_error_message(exc, settings_payload["catalog_debug_port"]))
                     time.sleep(0.6)
                     continue
-                raise RuntimeError(last_error or "商家页面抓取失败。") from exc
+                raise CatalogBrowserConnectionError(
+                    catalog_browser_error_message(exc, settings_payload["catalog_debug_port"])
+                ) from exc
+        if not html_text:
+            raise CatalogBrowserConnectionError(last_error or "商家页面抓取失败。")
 
         discovered_items = discover_catalog_items(html_text, source_url)
         source_title = normalize_candidate_title(source_name) or extract_page_title(html_text)
@@ -2814,12 +2907,44 @@ def message_template_values(task: sqlite3.Row, stock: int | None) -> dict[str, s
 
 
 def should_auto_heal(exc: Exception) -> bool:
-    if isinstance(exc, ProtectedSourceError):
+    if isinstance(exc, (ProtectedSourceError, CatalogBrowserPortBusyError)):
         return False
     message = str(exc).lower()
     if classify_browser_error(message) == "cloudflare_challenge":
         return False
     return any(token.lower() in message for token in BROWSER_RECOVERY_MARKERS)
+
+
+def catalog_browser_error_kind(exc: Exception) -> str:
+    if isinstance(exc, ProtectedSourceError):
+        return exc.error_kind
+    if isinstance(exc, CatalogBrowserError):
+        return exc.error_kind
+    classified = classify_browser_error(str(exc))
+    if classified == "cloudflare_challenge":
+        return classified
+    if classified == "timeout":
+        return classified
+    if classified == "browser_connection" or should_auto_heal(exc):
+        return "catalog_browser_connection_failed"
+    return classified or "catalog_import_failed"
+
+
+def catalog_browser_error_message(exc: Exception, port: int) -> str:
+    kind = catalog_browser_error_kind(exc)
+    if kind == "catalog_browser_port_busy":
+        return str(exc)
+    if kind == "cloudflare_challenge":
+        return "商家页面受到 Cloudflare / Turnstile 验证保护，已按受保护来源处理。建议改用 webhook/manual 或替代公开页面。"
+    if kind == "timeout":
+        return f"商品入库浏览器打开页面超时。请稍后重试，或在系统设置中提高请求超时时间。"
+    if kind == "catalog_browser_connection_failed":
+        return (
+            f"商品入库浏览器连接失败（端口 {port}）。系统已尝试清理本角色浏览器残留并重建一次；"
+            "如果仍失败，请修改 CATALOG_DEBUG_PORT / 商品入库浏览器端口，或重启服务后重试。"
+        )
+    raw = str(exc).strip()
+    return raw[:300] if raw else "商家页面导入失败。"
 
 
 def looks_like_cloudflare_challenge(html_text: str, title: str = "", url: str = "") -> bool:
@@ -4457,7 +4582,10 @@ def make_app() -> Flask:
                 auto_promote=auto_promote,
             )
         except Exception as exc:
-            return jsonify({"ok": False, "message": str(exc)}), 400
+            error_kind = catalog_browser_error_kind(exc)
+            message = catalog_browser_error_message(exc, app.extensions["monitor_engine"].get_runtime_settings()["catalog_debug_port"])
+            log_activity("warning", "catalog", f"导入商家来源失败（{error_kind}）：{message}")
+            return jsonify({"ok": False, "message": message, "error_kind": error_kind}), 400
 
         log_activity(
             "info",
@@ -4501,13 +4629,16 @@ def make_app() -> Flask:
                 auto_promote=auto_promote,
             )
         except Exception as exc:
+            error_kind = catalog_browser_error_kind(exc)
+            message = catalog_browser_error_message(exc, app.extensions["monitor_engine"].get_runtime_settings()["catalog_debug_port"])
             with open_connection() as connection:
                 connection.execute(
                     "UPDATE merchant_sources SET last_error = ?, updated_at = ? WHERE id = ?",
-                    (str(exc)[:1000], now_iso(), source_id),
+                    (message[:1000], now_iso(), source_id),
                 )
                 connection.commit()
-            return jsonify({"ok": False, "message": str(exc)}), 400
+            log_activity("warning", "catalog", f"同步商家来源 #{source_id} 失败（{error_kind}）：{message}")
+            return jsonify({"ok": False, "message": message, "error_kind": error_kind}), 400
 
         log_activity("info", "catalog", f"已同步商家来源 #{source_id}，发现 {result.scanned_count} 个候选商品。")
         return jsonify(
