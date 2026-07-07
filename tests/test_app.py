@@ -1812,6 +1812,65 @@ class PortalAppTestCase(unittest.TestCase):
         self.assertIn("chat not found", message)
         self.assertIn(token, fake_session.url)
 
+    def test_template_test_push_uses_edited_template_and_target_chat(self) -> None:
+        _, headers = self.login()
+        with app_module.open_connection() as connection:
+            app_module.save_settings(
+                connection,
+                {
+                    "telegram_bot_token": "bot-token",
+                    "telegram_chat_ids": "default-chat",
+                },
+            )
+
+        class FakeTelegram:
+            def __init__(self) -> None:
+                self.sent: list[dict[str, object]] = []
+
+            def send_message(self, token, chat_id, text, buttons=None) -> int:
+                self.sent.append({"token": token, "chat_id": chat_id, "text": text, "buttons": buttons})
+                return 8123
+
+            def edit_message(self, token, chat_id, message_id, text, buttons=None) -> None:
+                raise AssertionError("template test push must send a standalone message")
+
+        engine = self.app.extensions["monitor_engine"]
+        original_telegram = engine.telegram
+        fake_telegram = FakeTelegram()
+        try:
+            engine.telegram = fake_telegram
+            response = self.client.post(
+                f"{app_module.PORTAL_PATH}/api/template-test-push",
+                headers=headers,
+                base_url=BASE_URL,
+                json={
+                    "name": "HK & JP <VM>",
+                    "monitor_url": "https://example.com/cart?gid=1&pid=9",
+                    "target_keyword": "HK & JP",
+                    "template_kind": "soldout",
+                    "test_chat_ids": "custom-chat",
+                    "restock_template": "restock {name}",
+                    "soldout_template": "售罄 {name} {status} stock={stock} {keyword} {url}",
+                    "button_1_text": "Open",
+                    "button_1_url": "https://example.com/order",
+                },
+            )
+        finally:
+            engine.telegram = original_telegram
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.get_json()
+        self.assertTrue(payload["ok"])
+        self.assertEqual(payload["result"]["template_kind"], "soldout")
+        self.assertEqual(payload["result"]["chat_count"], 1)
+        self.assertEqual(fake_telegram.sent[0]["token"], "bot-token")
+        self.assertEqual(fake_telegram.sent[0]["chat_id"], "custom-chat")
+        self.assertIn("【模板测试】", fake_telegram.sent[0]["text"])
+        self.assertIn("HK &amp; JP &lt;VM&gt;", fake_telegram.sent[0]["text"])
+        self.assertIn("sold_out", fake_telegram.sent[0]["text"])
+        self.assertIn("stock=0", fake_telegram.sent[0]["text"])
+        self.assertEqual(fake_telegram.sent[0]["buttons"], [{"text": "Open", "url": "https://example.com/order"}])
+
     def test_message_template_values_escape_dynamic_html_for_telegram(self) -> None:
         values = app_module.message_template_values(
             {

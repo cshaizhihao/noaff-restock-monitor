@@ -70,6 +70,7 @@ If Firecrawl returns normal page content, NOAFF can parse it. If Firecrawl retur
 - Added manual stock update API and dashboard controls.
 - Added webhook ingest API with one-time plaintext token generation.
 - Webhook tokens are stored as HMAC hashes; snapshots/logs do not expose plaintext tokens.
+- Improved Telegram templates with clearer default copy, variable help, and send-test support for the current edited template.
 - Split product intake settings out of system settings.
 - Updated README, `.env.example`, release notes, and handoff documentation.
 
@@ -200,7 +201,7 @@ bash -n install.sh
 
 Current baseline:
 
-- 133 tests passing
+- 135 tests passing
 - Python compile check passing
 - `static/app.js` syntax check passing
 - `install.sh` bash syntax check passing

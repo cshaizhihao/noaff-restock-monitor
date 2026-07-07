@@ -637,12 +637,30 @@ class InstallScriptTestCase(unittest.TestCase):
         self.assertIn("/webhook-token", app_js)
         self.assertIn("copyText(token)", app_js)
 
+    def test_dashboard_template_editor_controls_are_wired(self) -> None:
+        app_js = (ROOT_DIR / "static" / "app.js").read_text(encoding="utf-8")
+        portal_html = (ROOT_DIR / "templates" / "portal.html").read_text(encoding="utf-8")
+        self.assertIn("【补货提醒】", app_js)
+        self.assertIn("【售罄提醒】", app_js)
+        self.assertIn('id="task-template-help-button"', portal_html)
+        self.assertIn('id="template-help-modal"', portal_html)
+        self.assertIn('id="task-template-test-kind"', portal_html)
+        self.assertIn('id="task-template-test-chat-ids"', portal_html)
+        self.assertIn('id="task-template-test-button"', portal_html)
+        self.assertIn("{source_name}", portal_html)
+        self.assertIn("{source_url}", portal_html)
+        self.assertIn("function collectTemplateTestPayload", app_js)
+        self.assertIn("function sendTemplateTestPush", app_js)
+        self.assertIn("/api/template-test-push", app_js)
+        self.assertIn("openTemplateHelpModal", app_js)
+        self.assertIn("closeTemplateHelpModal", app_js)
+
     def test_release_notes_capture_protected_source_boundary(self) -> None:
         release_notes = (ROOT_DIR / "docs" / "RELEASE_NOTES.md").read_text(encoding="utf-8")
         self.assertIn("does not bypass Cloudflare / Turnstile / CAPTCHA", release_notes)
         self.assertIn("Cloudflare / Turnstile / CAPTCHA challenge pages are treated as protected sources", release_notes)
         self.assertIn("Webhook tokens are stored as HMAC hashes", release_notes)
-        self.assertIn("133 tests passing", release_notes)
+        self.assertIn("135 tests passing", release_notes)
         self.assertIn("FIRECRAWL_MAX_AGE_MS=0", release_notes)
         self.assertIn("catalog_discovery_strategy: firecrawl_map", release_notes)
 

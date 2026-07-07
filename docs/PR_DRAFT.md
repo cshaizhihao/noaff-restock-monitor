@@ -62,6 +62,7 @@ It adds strategy-based fetching, optional Firecrawl scrape/map support, IDC/WHMC
 - Added manual stock update API and dashboard controls.
 - Added webhook ingest API with one-time plaintext token reset.
 - Store webhook tokens as HMAC hashes; expose only token hints in snapshots.
+- Added Telegram template variable help and send-test support for the currently edited template.
 - Added dashboard display for fetch strategy, protected-source notices, manual actions, and webhook metadata.
 - Updated README, `.env.example`, handoff notes, release notes, and PR draft.
 
@@ -109,7 +110,7 @@ bash -n install.sh
 
 Current result:
 
-- 133 tests passing
+- 135 tests passing
 - Python compile check passing
 - `static/app.js` syntax check passing
 - `install.sh` syntax check passing

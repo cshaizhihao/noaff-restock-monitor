@@ -264,8 +264,8 @@ SETTINGS_DEFAULTS = {
     "catalog_timeout_seconds": str(DEFAULT_TIMEOUT_SECONDS),
 }
 
-DEFAULT_RESTOCK_TEMPLATE = "<b>{name}</b>\n库存：{stock}\n链接：{url}\n检测时间：{checked_at}"
-DEFAULT_SOLDOUT_TEMPLATE = "<b>{name}</b>\n已售罄\n最后库存：{stock}\n检测时间：{checked_at}"
+DEFAULT_RESTOCK_TEMPLATE = "【补货提醒】\n<b>{name}</b>\n状态：有货\n库存：{stock}\n关键词：{keyword}\n链接：{url}\n时间：{checked_at}"
+DEFAULT_SOLDOUT_TEMPLATE = "【售罄提醒】\n<b>{name}</b>\n状态：已售罄\n最后库存：{stock}\n关键词：{keyword}\n链接：{url}\n时间：{checked_at}"
 
 FETCH_STRATEGY_BROWSER = "browser"
 FETCH_STRATEGY_STATIC_HTTP = "static_http"
@@ -3836,6 +3836,65 @@ class MonitoringEngine:
             "test_port": settings_payload["test_debug_port"],
         }
 
+    def run_template_test_push(self, payload: dict[str, Any]) -> dict[str, Any]:
+        settings_payload = self.get_runtime_settings()
+        chat_ids = normalize_telegram_chat_ids(
+            payload.get("test_chat_ids") or payload.get("telegram_chat_ids") or payload.get("telegram_chat_id") or ""
+        ) or self.resolve_chat_ids(settings_payload)
+        if not settings_payload["telegram_bot_token"] or not chat_ids:
+            raise RuntimeError("请先配置 Telegram Bot Token 和至少一个 Chat ID。")
+
+        template_kind = str(payload.get("template_kind") or "restock").strip().lower()
+        if template_kind not in {"restock", "soldout"}:
+            template_kind = "restock"
+        sample_stock = 0 if template_kind == "soldout" else 3
+        try:
+            if payload.get("stock") not in (None, ""):
+                sample_stock = max(0, int(payload.get("stock")))
+        except (TypeError, ValueError):
+            sample_stock = 0 if template_kind == "soldout" else 3
+
+        task_payload = {
+            "name": str(payload.get("name") or "NOAFF 模板测试商品").strip()[:160],
+            "monitor_url": str(payload.get("monitor_url") or "https://example.com/product").strip(),
+            "target_keyword": str(payload.get("target_keyword") or "NOAFF").strip(),
+            "source_source_name": str(payload.get("source_source_name") or "").strip(),
+            "source_source_url": str(payload.get("source_source_url") or "").strip(),
+            "button_1_text": str(payload.get("button_1_text") or "").strip(),
+            "button_1_url": str(payload.get("button_1_url") or "").strip(),
+            "button_2_text": str(payload.get("button_2_text") or "").strip(),
+            "button_2_url": str(payload.get("button_2_url") or "").strip(),
+        }
+        template = str(
+            payload.get("soldout_template") if template_kind == "soldout" else payload.get("restock_template")
+        ).strip()
+        if not template:
+            template = DEFAULT_SOLDOUT_TEMPLATE if template_kind == "soldout" else DEFAULT_RESTOCK_TEMPLATE
+
+        values = message_template_values(task_payload, sample_stock)
+        values["status"] = telegram_html_value("sold_out" if template_kind == "soldout" else "in_stock")
+        message_text = f"【模板测试】\n{safe_format(template, values)}"
+        sent_map, send_errors = self.send_messages_to_chats(
+            settings_payload["telegram_bot_token"],
+            chat_ids,
+            message_text,
+            build_buttons(task_payload),
+        )
+        if send_errors and not sent_map:
+            raise RuntimeError("; ".join(send_errors)[:1000])
+        if send_errors and sent_map:
+            log_activity("warning", "telegram:template-test", "; ".join(send_errors)[:1000])
+        first_chat_id = chat_ids[0]
+        message_id = sent_map.get(first_chat_id)
+        log_activity("info", "telegram:template-test", f"已发送 TG 模板测试消息（message_id={message_id}）。")
+        return {
+            "message_id": message_id,
+            "message_ids": sent_map,
+            "template_kind": template_kind,
+            "stock": sample_stock,
+            "chat_count": len(sent_map),
+        }
+
 def build_buttons(task: sqlite3.Row | dict[str, Any]) -> list[dict[str, str]]:
     buttons: list[dict[str, str]] = []
     for index in (1, 2):
@@ -5538,6 +5597,17 @@ def make_app() -> Flask:
         except Exception as exc:
             return jsonify({"ok": False, "message": str(exc)}), 400
         return jsonify({"ok": True, "message": "测试消息已发送。", "result": result})
+
+    @app.route("/api/template-test-push", methods=["POST"])
+    @login_required
+    @limiter.limit("8 per minute")
+    def template_test_push():
+        payload = read_json()
+        try:
+            result = app.extensions["monitor_engine"].run_template_test_push(payload)
+        except Exception as exc:
+            return jsonify({"ok": False, "message": str(exc)}), 400
+        return jsonify({"ok": True, "message": "模板测试消息已发送。", "result": result})
 
     @app.route("/api/tasks/<int:task_id>/manual-stock", methods=["POST"])
     @login_required

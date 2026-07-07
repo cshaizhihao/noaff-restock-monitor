@@ -737,13 +737,38 @@
                             </select>
                         </div>
                     </div>
-                    <div>
-                        <label for="task-restock" class="form-label">TG 推送文案</label>
-                        <textarea id="task-restock" rows="4" class="input-dark min-h-28 resize-y leading-6" required></textarea>
-                    </div>
-                    <div>
-                        <label for="task-soldout" class="form-label">售罄文案</label>
-                        <textarea id="task-soldout" rows="4" class="input-dark min-h-28 resize-y leading-6" required></textarea>
+                    <div class="rounded-lg border border-slate-800 bg-slate-950/45 p-4">
+                        <div class="mb-4 flex flex-wrap items-start justify-between gap-3">
+                            <div>
+                                <p class="form-label">TG 推送文案</p>
+                                <p class="text-sm leading-6 text-slate-500">支持 Telegram HTML 和变量占位符。</p>
+                            </div>
+                            <button id="task-template-help-button" type="button" class="ghost-button !min-h-9 !rounded-lg !px-3 !py-2 text-[12px]">变量说明</button>
+                        </div>
+                        <div class="grid gap-4 lg:grid-cols-2">
+                            <div>
+                                <label for="task-restock" class="form-label">补货模板</label>
+                                <textarea id="task-restock" rows="5" class="input-dark min-h-32 resize-y leading-6" required></textarea>
+                            </div>
+                            <div>
+                                <label for="task-soldout" class="form-label">售罄模板</label>
+                                <textarea id="task-soldout" rows="5" class="input-dark min-h-32 resize-y leading-6" required></textarea>
+                            </div>
+                        </div>
+                        <div class="mt-4 grid gap-3 lg:grid-cols-[10rem_minmax(0,1fr)_auto] lg:items-end">
+                            <div>
+                                <label for="task-template-test-kind" class="form-label">测试类型</label>
+                                <select id="task-template-test-kind" class="input-dark">
+                                    <option value="restock">补货文案</option>
+                                    <option value="soldout">售罄文案</option>
+                                </select>
+                            </div>
+                            <div>
+                                <label for="task-template-test-chat-ids" class="form-label">测试 Chat ID</label>
+                                <input id="task-template-test-chat-ids" type="text" class="input-dark" placeholder="留空使用系统设置；多个可用逗号分隔">
+                            </div>
+                            <button id="task-template-test-button" type="button" class="ghost-button !min-h-12 !rounded-lg !px-4 !py-3 text-[13px]">发送模板测试</button>
+                        </div>
                     </div>
                     <div class="grid gap-4 lg:grid-cols-2">
                         <div>
@@ -772,6 +797,42 @@
                         <button id="task-submit-button" type="submit" class="primary-button">保存任务</button>
                     </div>
                 </form>
+            </div>
+        </div>
+
+        <div id="template-help-modal" class="modal-shell hidden">
+            <div class="modal-panel max-w-2xl">
+                <div class="mb-6 flex items-start justify-between gap-4">
+                    <div>
+                        <h3 class="text-2xl font-extrabold tracking-tight text-white">TG 文案变量</h3>
+                        <p class="mt-1 text-sm leading-6 text-slate-500">变量会自动 HTML 转义；模板可使用 Telegram 支持的 <code class="font-mono text-slate-300">&lt;b&gt;</code>、<code class="font-mono text-slate-300">&lt;i&gt;</code>、<code class="font-mono text-slate-300">&lt;code&gt;</code> 等标签。</p>
+                    </div>
+                    <button id="template-help-close" type="button" class="icon-button" aria-label="关闭">
+                        <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+                        </svg>
+                    </button>
+                </div>
+                <div class="grid gap-3 text-sm leading-6 text-slate-400 sm:grid-cols-2">
+                    <p><code class="font-mono text-indigo-200">{name}</code><br>商品名称</p>
+                    <p><code class="font-mono text-indigo-200">{stock}</code><br>当前库存；未知时为空</p>
+                    <p><code class="font-mono text-indigo-200">{url}</code><br>监控链接</p>
+                    <p><code class="font-mono text-indigo-200">{keyword}</code><br>目标关键词</p>
+                    <p><code class="font-mono text-indigo-200">{checked_at}</code><br>发送或检测时间</p>
+                    <p><code class="font-mono text-indigo-200">{status}</code><br><code>in_stock</code> / <code>sold_out</code></p>
+                    <p><code class="font-mono text-indigo-200">{source_name}</code><br>商品入库来源名称</p>
+                    <p><code class="font-mono text-indigo-200">{source_url}</code><br>商品入库来源 URL</p>
+                </div>
+                <div class="mt-6 rounded-lg border border-slate-800 bg-slate-950/70 p-4">
+                    <p class="mb-2 text-xs font-bold uppercase tracking-widest text-slate-500">示例</p>
+                    <pre class="whitespace-pre-wrap font-mono text-xs leading-6 text-slate-300">【补货提醒】
+&lt;b&gt;{name}&lt;/b&gt;
+状态：有货
+库存：{stock}
+关键词：{keyword}
+链接：{url}
+时间：{checked_at}</pre>
+                </div>
             </div>
         </div>
 

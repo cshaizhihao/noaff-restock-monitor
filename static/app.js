@@ -131,6 +131,10 @@
         taskFetchStrategy: document.getElementById("task-fetch-strategy"),
         taskRestock: document.getElementById("task-restock"),
         taskSoldout: document.getElementById("task-soldout"),
+        taskTemplateHelpButton: document.getElementById("task-template-help-button"),
+        taskTemplateTestKind: document.getElementById("task-template-test-kind"),
+        taskTemplateTestChatIds: document.getElementById("task-template-test-chat-ids"),
+        taskTemplateTestButton: document.getElementById("task-template-test-button"),
         taskButton1Text: document.getElementById("task-button-1-text"),
         taskButton1Url: document.getElementById("task-button-1-url"),
         taskButton2Text: document.getElementById("task-button-2-text"),
@@ -138,6 +142,8 @@
         taskEnabled: document.getElementById("task-enabled"),
         taskCancelButton: document.getElementById("task-cancel-button"),
         taskSubmitButton: document.getElementById("task-submit-button"),
+        templateHelpModal: document.getElementById("template-help-modal"),
+        templateHelpClose: document.getElementById("template-help-close"),
         groupRenameModal: document.getElementById("group-rename-modal"),
         groupRenameTitle: document.getElementById("group-rename-title"),
         groupRenameClose: document.getElementById("group-rename-close"),
@@ -148,8 +154,8 @@
     };
 
     const defaultTemplates = {
-        restock: "<b>{name}</b>\n库存：{stock}\n链接：{url}\n检测时间：{checked_at}",
-        soldout: "<b>{name}</b>\n已售罄\n最后库存：{stock}\n检测时间：{checked_at}"
+        restock: "【补货提醒】\n<b>{name}</b>\n状态：有货\n库存：{stock}\n关键词：{keyword}\n链接：{url}\n时间：{checked_at}",
+        soldout: "【售罄提醒】\n<b>{name}</b>\n状态：已售罄\n最后库存：{stock}\n关键词：{keyword}\n链接：{url}\n时间：{checked_at}"
     };
 
     function normalizeFetchStrategy(value) {
@@ -855,7 +861,20 @@
 
     function closeTaskModal() {
         els.taskModal.classList.add("hidden");
+        els.templateHelpModal?.classList.add("hidden");
         document.body.style.overflow = "";
+    }
+
+    function openTemplateHelpModal() {
+        els.templateHelpModal?.classList.remove("hidden");
+        document.body.style.overflow = "hidden";
+    }
+
+    function closeTemplateHelpModal() {
+        els.templateHelpModal?.classList.add("hidden");
+        if (els.taskModal?.classList.contains("hidden")) {
+            document.body.style.overflow = "";
+        }
     }
 
     function resetTaskForm() {
@@ -869,6 +888,12 @@
         }
         els.taskRestock.value = defaultTemplates.restock;
         els.taskSoldout.value = defaultTemplates.soldout;
+        if (els.taskTemplateTestKind) {
+            els.taskTemplateTestKind.value = "restock";
+        }
+        if (els.taskTemplateTestChatIds) {
+            els.taskTemplateTestChatIds.value = "";
+        }
         els.taskFetchStrategy.value = "browser";
         els.taskEnabled.checked = true;
         updateGroupVisibility(els.taskGroup, els.taskGroupCustomWrap, els.taskGroupCustom);
@@ -1514,6 +1539,40 @@
         };
     }
 
+    function collectTemplateTestPayload() {
+        return {
+            name: els.taskName.value.trim() || "NOAFF 模板测试商品",
+            monitor_url: els.taskUrl.value.trim() || "https://example.com/product",
+            target_keyword: els.taskKeyword.value.trim() || "NOAFF",
+            template_kind: els.taskTemplateTestKind?.value || "restock",
+            test_chat_ids: els.taskTemplateTestChatIds?.value.trim() || "",
+            restock_template: els.taskRestock.value.trim(),
+            soldout_template: els.taskSoldout.value.trim(),
+            button_1_text: els.taskButton1Text.value.trim(),
+            button_1_url: els.taskButton1Url.value.trim(),
+            button_2_text: els.taskButton2Text.value.trim(),
+            button_2_url: els.taskButton2Url.value.trim()
+        };
+    }
+
+    async function sendTemplateTestPush() {
+        const submit = els.taskTemplateTestButton;
+        if (!submit) return;
+        submit.disabled = true;
+        try {
+            const data = await apiFetch("/api/template-test-push", {
+                method: "POST",
+                body: JSON.stringify(collectTemplateTestPayload())
+            });
+            const count = data.result?.chat_count ?? 0;
+            showToast(count ? `模板测试消息已发送到 ${count} 个对话。` : "模板测试消息已发送。");
+        } catch (error) {
+            showToast(error.message, "error");
+        } finally {
+            submit.disabled = false;
+        }
+    }
+
     function collectMerchantPayload() {
         const groupName = readMerchantGroupValue();
         if (!groupName) {
@@ -1909,9 +1968,17 @@
     els.taskResetButton?.addEventListener("click", () => openTaskModal());
     els.taskCancelButton?.addEventListener("click", closeTaskModal);
     els.taskModalClose?.addEventListener("click", closeTaskModal);
+    els.taskTemplateHelpButton?.addEventListener("click", openTemplateHelpModal);
+    els.templateHelpClose?.addEventListener("click", closeTemplateHelpModal);
+    els.taskTemplateTestButton?.addEventListener("click", sendTemplateTestPush);
     els.taskModal?.addEventListener("click", (event) => {
         if (event.target === els.taskModal) {
             closeTaskModal();
+        }
+    });
+    els.templateHelpModal?.addEventListener("click", (event) => {
+        if (event.target === els.templateHelpModal) {
+            closeTemplateHelpModal();
         }
     });
     els.taskGroup?.addEventListener("change", () => {
@@ -2112,7 +2179,9 @@
     });
 
     window.addEventListener("keydown", (event) => {
-        if (event.key === "Escape" && !els.taskModal.classList.contains("hidden")) {
+        if (event.key === "Escape" && !els.templateHelpModal?.classList.contains("hidden")) {
+            closeTemplateHelpModal();
+        } else if (event.key === "Escape" && !els.taskModal.classList.contains("hidden")) {
             closeTaskModal();
         } else if (event.key === "Escape" && !els.groupRenameModal.classList.contains("hidden")) {
             closeTaskGroupRenameModal();

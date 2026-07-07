@@ -299,6 +299,7 @@ curl -X POST 'https://your-panel.example.com/api/webhooks/restock/123' \
 - Manual 快捷标记。
 - Webhook endpoint、token hint 和 token 重置。
 - 商家页面导入、来源同步、来源启停、商品生成任务。
+- TG 文案变量说明和当前编辑模板测试推送。
 - Telegram Bot Token 和 Chat ID 配置。
 - 数据备份 / 恢复。
 - 系统升级入口。

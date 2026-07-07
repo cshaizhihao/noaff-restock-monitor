@@ -81,6 +81,7 @@ Key Files:
   - protected source notice
   - manual quick actions
   - webhook endpoint/token hint display
+  - Telegram template help modal and edited-template test push
   - product intake workbench rendering
   - Firecrawl option lock/unlock in intake UI
   - bulk product promotion action
@@ -107,7 +108,7 @@ bash -n install.sh
 ```
 
 Current Passing Baseline:
-- 133 tests pass.
+- 135 tests pass.
 - `py_compile` passes.
 - `node --check static/app.js` passes.
 - `bash -n install.sh` passes.
