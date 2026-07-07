@@ -824,6 +824,108 @@ class PortalAppTestCase(unittest.TestCase):
         payload = snapshot.get_json()
         self.assertEqual(payload["merchant"]["metrics"]["linked_tasks"], 1)
 
+    def test_merchant_bulk_promote_deduplicates_items_and_preserves_catalog_strategy(self) -> None:
+        _, headers = self.login()
+        engine = self.app.extensions["monitor_engine"]
+
+        class FakeCatalogBrowser:
+            def fetch_html(self, url: str, timeout_seconds: int) -> str:
+                return """
+                <html>
+                  <head><title>Acme Catalog</title></head>
+                  <body>
+                    <section class="product-card">
+                      <h3>HK-CMI Starter</h3>
+                      <p>库存 3</p>
+                      <a href="cart.php?a=add&pid=31">Order Now</a>
+                    </section>
+                    <section class="product-card">
+                      <h3>HK-CMI Pro</h3>
+                      <p>库存 8</p>
+                      <a href="cart.php?a=add&pid=32">Order Now</a>
+                    </section>
+                  </body>
+                </html>
+                """
+
+            def rebuild(self, reason: str) -> None:
+                raise AssertionError(reason)
+
+        original_browser = engine.catalog_browser
+        engine.catalog_browser = FakeCatalogBrowser()
+        try:
+            result = engine.import_merchant_source(
+                "https://merchant.example.com/products",
+                "",
+                "香港节点",
+                engine.get_runtime_settings(),
+                auto_promote=False,
+                catalog_options={
+                    "default_fetch_strategy": "generic_pricing_table",
+                    "default_extractor": "whmcs",
+                    "target_keyword": "HK-CMI",
+                    "target_keyword_mode": "contains",
+                    "dedupe_policy": "by_pid",
+                },
+            )
+        finally:
+            engine.catalog_browser = original_browser
+
+        self.assertEqual(result.scanned_count, 2)
+        self.assertEqual(result.promoted_count, 0)
+
+        with app_module.open_connection() as connection:
+            item_ids = [
+                row["id"]
+                for row in connection.execute("SELECT id FROM merchant_items ORDER BY title").fetchall()
+            ]
+        self.assertEqual(len(item_ids), 2)
+
+        response = self.client.post(
+            f"{app_module.PORTAL_PATH}/api/merchant/items/bulk-promote",
+            headers=headers,
+            base_url=BASE_URL,
+            json={"item_ids": [item_ids[0], item_ids[0], item_ids[1]]},
+        )
+        self.assertEqual(response.status_code, 200)
+        payload = response.get_json()
+        self.assertTrue(payload["ok"])
+        self.assertEqual(payload["result"]["created_count"], 2)
+        self.assertEqual(payload["result"]["linked_count"], 0)
+
+        repeat_response = self.client.post(
+            f"{app_module.PORTAL_PATH}/api/merchant/items/bulk-promote",
+            headers=headers,
+            base_url=BASE_URL,
+            json={"item_ids": item_ids},
+        )
+        self.assertEqual(repeat_response.status_code, 200)
+        repeat_payload = repeat_response.get_json()
+        self.assertEqual(repeat_payload["result"]["created_count"], 0)
+        self.assertEqual(repeat_payload["result"]["linked_count"], 2)
+
+        with app_module.open_connection() as connection:
+            task_rows = connection.execute(
+                "SELECT fetch_strategy, source_config FROM tasks ORDER BY name"
+            ).fetchall()
+            task_count = connection.execute("SELECT COUNT(*) FROM tasks").fetchone()[0]
+
+        self.assertEqual(task_count, 2)
+        self.assertEqual([row["fetch_strategy"] for row in task_rows], ["generic_pricing_table", "generic_pricing_table"])
+        configs = [json.loads(row["source_config"]) for row in task_rows]
+        self.assertEqual([config["extractor"] for config in configs], ["whmcs", "whmcs"])
+        self.assertEqual([config["catalog_backend"] for config in configs], ["browser", "browser"])
+
+        snapshot = self.client.get(
+            f"{app_module.PORTAL_PATH}/api/snapshot",
+            headers=headers,
+            base_url=BASE_URL,
+        )
+        merchant_items = snapshot.get_json()["merchant"]["items"]
+        self.assertEqual({item["backend_used"] for item in merchant_items}, {"browser"})
+        self.assertEqual({item["extractor"] for item in merchant_items}, {"whmcs"})
+        self.assertEqual({item["fetch_strategy"] for item in merchant_items}, {"generic_pricing_table"})
+
     def test_merchant_source_toggle_updates_activity_and_snapshot(self) -> None:
         _, headers = self.login()
         with app_module.open_connection() as connection:

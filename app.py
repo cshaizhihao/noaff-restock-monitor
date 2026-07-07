@@ -733,6 +733,14 @@ def normalize_source_config_text(value: Any) -> str:
     return json.dumps(scrub_source_config(parsed), ensure_ascii=False, sort_keys=True)
 
 
+def catalog_item_metadata(raw_payload: Any) -> dict[str, Any]:
+    try:
+        data = json.loads(str(raw_payload or "{}"))
+    except json.JSONDecodeError:
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
 def task_blocked_count(task: Any) -> int:
     try:
         return max(0, int(mapping_value(task, "blocked_count", 0) or 0))
@@ -1765,15 +1773,11 @@ def to_merchant_item_payload(
     task_row: sqlite3.Row | None = None,
 ) -> dict[str, Any]:
     raw_payload = row["raw_payload"] or ""
-    backend_used = ""
-    discovery_source = ""
-    try:
-        raw_data = json.loads(raw_payload)
-        if isinstance(raw_data, dict):
-            backend_used = str(raw_data.get("catalog_backend") or "")
-            discovery_source = str(raw_data.get("catalog_discovery_source") or "")
-    except json.JSONDecodeError:
-        pass
+    raw_data = catalog_item_metadata(raw_payload)
+    backend_used = str(raw_data.get("catalog_backend") or "")
+    discovery_source = str(raw_data.get("catalog_discovery_source") or "")
+    extractor = str(raw_data.get("extractor") or "")
+    fetch_strategy = normalize_fetch_strategy(raw_data.get("fetch_strategy") or "")
     return {
         "id": row["id"],
         "source_id": row["source_id"],
@@ -1789,6 +1793,8 @@ def to_merchant_item_payload(
         "restock_hint": row["restock_hint"] or "",
         "backend_used": backend_used,
         "discovery_source": discovery_source,
+        "extractor": extractor,
+        "fetch_strategy": fetch_strategy,
         "item_state": row["item_state"],
         "last_seen_at": row["last_seen_at"] or "",
         "created_at": row["created_at"],
@@ -1984,6 +1990,68 @@ def sync_task_source_fields(
             task_id,
         ),
     )
+
+
+def merchant_item_to_catalog_payload(item: sqlite3.Row) -> dict[str, Any]:
+    metadata = catalog_item_metadata(item["raw_payload"] or "")
+    source_config = metadata.get("source_config") if isinstance(metadata.get("source_config"), dict) else {}
+    return {
+        "source_item_key": item["item_key"],
+        "title": item["title"],
+        "keyword": item["keyword"],
+        "monitor_url": item["monitor_url"],
+        "item_url": item["item_url"] or item["monitor_url"],
+        "price_hint": item["price_hint"] or "",
+        "stock_hint": item["stock_hint"] or "",
+        "restock_hint": item["restock_hint"] or "",
+        "raw_snippet": item["raw_snippet"] or "",
+        "raw_payload": item["raw_payload"] or "",
+        "item_state": item["item_state"],
+        "fetch_strategy": normalize_fetch_strategy(metadata.get("fetch_strategy") or FETCH_STRATEGY_BROWSER),
+        "source_config": source_config,
+    }
+
+
+def promote_merchant_item_row(connection: sqlite3.Connection, item: sqlite3.Row) -> dict[str, Any]:
+    item_id = int(item["id"])
+    item_payload = merchant_item_to_catalog_payload(item)
+    existing_task = connection.execute(
+        "SELECT * FROM tasks WHERE source_item_id = ? LIMIT 1",
+        (item_id,),
+    ).fetchone()
+
+    if existing_task:
+        sync_task_source_fields(
+            connection,
+            int(existing_task["id"]),
+            item["source_url"],
+            item["source_name"],
+            item_payload,
+        )
+        connection.commit()
+        return {
+            "item_id": item_id,
+            "task_id": int(existing_task["id"]),
+            "task_name": str(existing_task["name"]),
+            "already_linked": True,
+        }
+
+    task_id = create_task_from_catalog_item(
+        connection,
+        source_id=int(item["source_id"]),
+        source_title=str(item["source_name"] or item["source_url"]),
+        group_name=str(item["group_name"] or DEFAULT_TASK_GROUP),
+        source_url=str(item["source_url"]),
+        item_id=item_id,
+        item=item_payload,
+    )
+    connection.commit()
+    return {
+        "item_id": item_id,
+        "task_id": task_id,
+        "task_name": str(item["title"]),
+        "already_linked": False,
+    }
 
 
 @dataclass
@@ -4708,6 +4776,9 @@ def prepare_catalog_item(item: dict[str, Any], source_url: str, page_url: str, d
         "catalog_backend": backend_used,
         "catalog_discovery_source": discovery_source,
         "catalog_page_url": page_url,
+        "fetch_strategy": prepared["fetch_strategy"],
+        "extractor": options.get("default_extractor") or CATALOG_EXTRACTOR_GENERIC,
+        "source_config": prepared["source_config"],
         "raw_payload": prepared.get("raw_payload", ""),
     }
     prepared["raw_payload"] = json.dumps(payload, ensure_ascii=False)[:4000]
@@ -5725,70 +5796,68 @@ def make_app() -> Flask:
             ).fetchone()
             if not item:
                 return jsonify({"ok": False, "message": "商家商品不存在。"}), 404
-            existing_task = connection.execute(
-                "SELECT * FROM tasks WHERE source_item_id = ? LIMIT 1",
-                (item_id,),
-            ).fetchone()
+            result = promote_merchant_item_row(connection, item)
 
-            if existing_task:
-                sync_task_source_fields(
-                    connection,
-                    int(existing_task["id"]),
-                    item["source_url"],
-                    item["source_name"],
-                    {
-                        "item_url": item["item_url"] or item["monitor_url"],
-                        "source_item_key": item["item_key"],
-                        "title": item["title"],
-                        "keyword": item["keyword"],
-                        "monitor_url": item["monitor_url"],
-                        "price_hint": item["price_hint"] or "",
-                        "stock_hint": item["stock_hint"] or "",
-                        "restock_hint": item["restock_hint"] or "",
-                        "raw_snippet": item["raw_snippet"] or "",
-                        "raw_payload": item["raw_payload"] or "",
-                        "item_state": item["item_state"],
-                    },
-                )
-                connection.commit()
-                task_id = int(existing_task["id"])
-                task_name = str(existing_task["name"])
-            else:
-                item_payload = {
-                    "source_item_key": item["item_key"],
-                    "title": item["title"],
-                    "keyword": item["keyword"],
-                    "monitor_url": item["monitor_url"],
-                    "item_url": item["item_url"] or item["monitor_url"],
-                    "price_hint": item["price_hint"] or "",
-                    "stock_hint": item["stock_hint"] or "",
-                    "restock_hint": item["restock_hint"] or "",
-                    "raw_snippet": item["raw_snippet"] or "",
-                    "raw_payload": item["raw_payload"] or "",
-                    "item_state": item["item_state"],
-                }
-                task_id = create_task_from_catalog_item(
-                    connection,
-                    source_id=int(item["source_id"]),
-                    source_title=str(item["source_name"] or item["source_url"]),
-                    group_name=str(item["group_name"] or DEFAULT_TASK_GROUP),
-                    source_url=str(item["source_url"]),
-                    item_id=int(item["id"]),
-                    item=item_payload,
-                )
-                task_name = str(item["title"])
-                connection.commit()
-
-        log_activity("info", "catalog", f"已将商家商品 #{item_id} 生成/关联为任务 #{task_id}。")
+        log_activity("info", "catalog", f"已将商家商品 #{item_id} 生成/关联为任务 #{result['task_id']}。")
         return jsonify(
             {
                 "ok": True,
                 "message": "商家商品已生成任务。",
+                "result": result,
+            }
+        )
+
+    @app.route("/api/merchant/items/bulk-promote", methods=["POST"])
+    @login_required
+    @limiter.limit(GENERAL_MUTATION_LIMIT)
+    def bulk_promote_merchant_items():
+        payload = read_json()
+        raw_item_ids = payload.get("item_ids", [])
+        if not isinstance(raw_item_ids, list):
+            return jsonify({"ok": False, "message": "item_ids 必须是数组。"}), 400
+        item_ids: list[int] = []
+        for raw_id in raw_item_ids[:250]:
+            try:
+                item_id = int(raw_id)
+            except (TypeError, ValueError):
+                continue
+            if item_id > 0 and item_id not in item_ids:
+                item_ids.append(item_id)
+        if not item_ids:
+            return jsonify({"ok": False, "message": "请选择要创建任务的商品。"}), 400
+
+        placeholders = ",".join("?" for _ in item_ids)
+        with open_connection() as connection:
+            rows = connection.execute(
+                f"""
+                SELECT mi.*, ms.source_url, ms.source_name, ms.group_name
+                FROM merchant_items mi
+                JOIN merchant_sources ms ON ms.id = mi.source_id
+                WHERE mi.id IN ({placeholders})
+                """,
+                tuple(item_ids),
+            ).fetchall()
+            rows_by_id = {int(row["id"]): row for row in rows}
+            results: list[dict[str, Any]] = []
+            for item_id in item_ids:
+                item = rows_by_id.get(item_id)
+                if item is None:
+                    continue
+                results.append(promote_merchant_item_row(connection, item))
+
+        if not results:
+            return jsonify({"ok": False, "message": "没有找到可创建任务的商品。"}), 404
+        created_count = sum(1 for item in results if not item["already_linked"])
+        linked_count = len(results) - created_count
+        log_activity("info", "catalog", f"批量创建商家商品任务：新增 {created_count} 个，同步 {linked_count} 个。")
+        return jsonify(
+            {
+                "ok": True,
+                "message": f"批量创建完成：新增 {created_count} 个任务，同步 {linked_count} 个已关联任务。",
                 "result": {
-                    "item_id": item_id,
-                    "task_id": task_id,
-                    "task_name": task_name,
-                    "already_linked": bool(existing_task),
+                    "created_count": created_count,
+                    "linked_count": linked_count,
+                    "items": results,
                 },
             }
         )

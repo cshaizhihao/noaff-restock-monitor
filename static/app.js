@@ -4,6 +4,7 @@
     let snapshotTimer = null;
     let currentTasks = new Map();
     let currentMerchant = { sources: [], items: [], metrics: {} };
+    let currentSettings = {};
     let currentSystem = null;
     let currentView = "tasks";
     let tasksRendered = false;
@@ -81,11 +82,19 @@
         merchantDefaultFetchStrategy: document.getElementById("merchant-default-fetch-strategy"),
         merchantDefaultExtractor: document.getElementById("merchant-default-extractor"),
         merchantSearchKeyword: document.getElementById("merchant-search-keyword"),
+        merchantTargetKeyword: document.getElementById("merchant-target-keyword"),
+        merchantTargetKeywordMode: document.getElementById("merchant-target-keyword-mode"),
+        merchantDedupePolicy: document.getElementById("merchant-dedupe-policy"),
+        merchantMaxDiscoveredUrls: document.getElementById("merchant-max-discovered-urls"),
         merchantMaxImportItems: document.getElementById("merchant-max-import-items"),
+        merchantTimeoutSeconds: document.getElementById("merchant-timeout-seconds"),
         merchantIncludeSoldOut: document.getElementById("merchant-include-sold-out"),
         merchantAutoPromote: document.getElementById("merchant-auto-promote"),
+        merchantFirecrawlState: document.getElementById("merchant-firecrawl-state"),
         merchantImportButton: document.getElementById("merchant-import-button"),
         merchantImportButtonLabel: document.getElementById("merchant-import-button-label"),
+        merchantBulkPromoteButton: document.getElementById("merchant-bulk-promote-button"),
+        merchantBulkPromoteCount: document.getElementById("merchant-bulk-promote-count"),
         merchantMetricSources: document.getElementById("merchant-metric-sources"),
         merchantMetricItems: document.getElementById("merchant-metric-items"),
         merchantMetricLinked: document.getElementById("merchant-metric-linked"),
@@ -172,6 +181,109 @@
                 return "Webhook";
             default:
                 return "浏览器渲染";
+        }
+    }
+
+    function extractorLabel(value) {
+        const extractor = String(value || "").trim().toLowerCase();
+        switch (extractor) {
+            case "whmcs":
+                return "WHMCS";
+            case "firecrawl_product_hint":
+                return "Firecrawl Product";
+            case "fallback_keyword_parser":
+                return "关键词 fallback";
+            case "generic_pricing_table":
+                return "通用价格页";
+            default:
+                return extractor || "-";
+        }
+    }
+
+    function catalogErrorAdvice(value) {
+        const text = String(value || "").toLowerCase();
+        if (!text) return "";
+        if (text.includes("catalog_browser_port_busy")) return "修改商品入库浏览器端口后重试。";
+        if (text.includes("firecrawl_auth_error") || text.includes("认证失败")) return "检查 Firecrawl API Key。";
+        if (text.includes("firecrawl_credit_required") || text.includes("额度")) return "检查 Firecrawl 额度。";
+        if (text.includes("firecrawl_rate_limited") || text.includes("频率")) return "降低频率或稍后重试。";
+        if (text.includes("cloudflare") || text.includes("turnstile") || text.includes("验证页")) return "受保护站点，建议 Webhook、手动录入或替代公开页面。";
+        if (text.includes("parse_unknown") || text.includes("无法判断")) return "设置目标关键词或更换解析器。";
+        return "检查来源 URL、抓取策略和解析器后重试。";
+    }
+
+    function merchantStockStatusMeta(item) {
+        const text = String(`${item.stock_hint || ""} ${item.restock_hint || ""}`).toLowerCase();
+        if (text.includes("out of stock") || text.includes("sold out") || text.includes("售罄") || text.includes("缺货") || text.trim() === "0") {
+            return ["border-slate-700 bg-slate-900/70 text-slate-400", "售罄"];
+        }
+        if (text.includes("order") || text.includes("available") || text.includes("库存") || /^[1-9]\d*$/.test(String(item.stock_hint || "").trim())) {
+            return ["border-emerald-500/20 bg-emerald-500/10 text-emerald-200", "可入库"];
+        }
+        return ["border-amber-500/20 bg-amber-500/10 text-amber-200", "无法判断"];
+    }
+
+    function catalogDiscoveryLabel(value) {
+        switch (String(value || "").trim().toLowerCase()) {
+            case "local_sitemap":
+                return "sitemap";
+            case "local_page_links":
+                return "page_links";
+            case "firecrawl_map":
+                return "firecrawl_map";
+            case "entry_page":
+                return "入口页面";
+            default:
+                return value || "-";
+        }
+    }
+
+    function merchantSourceStatusMeta(source) {
+        const lastError = String(source.last_error || "");
+        if (lastError) {
+            if (catalogErrorAdvice(lastError).includes("受保护站点")) {
+                return ["border-amber-500/20 bg-amber-500/10 text-amber-200", "受保护"];
+            }
+            return ["border-rose-500/20 bg-rose-500/10 text-rose-200", "异常"];
+        }
+        if (source.last_sync_at) {
+            return ["border-sky-500/20 bg-sky-500/10 text-sky-200", "已抓取"];
+        }
+        return ["border-slate-700 bg-slate-900/70 text-slate-400", "待抓取"];
+    }
+
+    function setOptionAvailability(select, values, enabled) {
+        if (!select) return;
+        const controlledValues = new Set(values);
+        Array.from(select.options || []).forEach((option) => {
+            if (controlledValues.has(option.value)) {
+                option.disabled = !enabled;
+            }
+        });
+    }
+
+    function resetSelectIfDisabled(select, fallbackValue) {
+        if (!select) return;
+        const selected = Array.from(select.options || []).find((option) => option.value === select.value);
+        if (selected?.disabled) {
+            select.value = fallbackValue;
+        }
+    }
+
+    function updateMerchantFirecrawlOptions() {
+        const enabled = Boolean(currentSettings.firecrawl_enabled) && currentSettings.firecrawl_use_for_catalog !== false;
+        setOptionAvailability(els.merchantDiscoveryStrategy, ["firecrawl_map", "hybrid"], enabled);
+        setOptionAvailability(els.merchantScrapeStrategy, ["firecrawl"], enabled);
+        setOptionAvailability(els.merchantDefaultFetchStrategy, ["firecrawl"], enabled);
+        setOptionAvailability(els.merchantDefaultExtractor, ["firecrawl_product_hint"], enabled);
+        resetSelectIfDisabled(els.merchantDiscoveryStrategy, "local");
+        resetSelectIfDisabled(els.merchantScrapeStrategy, "browser");
+        resetSelectIfDisabled(els.merchantDefaultFetchStrategy, "browser");
+        resetSelectIfDisabled(els.merchantDefaultExtractor, "generic_pricing_table");
+        if (els.merchantFirecrawlState) {
+            els.merchantFirecrawlState.textContent = enabled
+                ? "Firecrawl 已启用，可用于 Map、Scrape 和商品提示解析。"
+                : "Firecrawl 未启用，相关选项已锁定；可在系统设置 > Firecrawl 集成中开启。";
         }
     }
 
@@ -778,6 +890,7 @@
     }
 
     function renderSettings(settings) {
+        currentSettings = settings || {};
         els.settingsBotTokenMask.textContent = settings.telegram_bot_token_masked
             ? `当前 Token：${settings.telegram_bot_token_masked}`
             : "当前未配置 Bot Token";
@@ -814,6 +927,7 @@
         syncCheckboxValue(els.settingsFirecrawlUseForMonitor, Boolean(settings.firecrawl_use_for_monitor));
         syncCheckboxValue(els.settingsFirecrawlUseForCatalog, settings.firecrawl_use_for_catalog !== false);
         syncInputValue(els.settingsFirecrawlCatalogLimit, settings.firecrawl_catalog_limit || 50);
+        updateMerchantFirecrawlOptions();
     }
 
     function renderSystem(system) {
@@ -954,7 +1068,12 @@
                 item.title || "",
                 item.keyword || "",
                 item.monitor_url || "",
-                item.item_url || ""
+                item.item_url || "",
+                item.stock_hint || "",
+                item.backend_used || "",
+                item.discovery_source || "",
+                item.extractor || "",
+                item.fetch_strategy || ""
             ].join(":")).join("|"),
             [
                 metrics.total_sources ?? 0,
@@ -979,10 +1098,17 @@
                 els.merchantSourceList.innerHTML = '<p class="text-sm text-slate-500">暂无导入来源，先填一个商家商品页试试。</p>';
             } else {
                 els.merchantSourceList.innerHTML = sources.map((source) => {
-                    const statusClass = source.active ? "text-emerald-300" : "text-slate-500";
-                    const statusText = source.active ? "ACTIVE" : "PAUSED";
+                    const [sourceStatusClass, sourceStatusText] = merchantSourceStatusMeta(source);
+                    const activeClass = source.active ? "text-emerald-300" : "text-slate-500";
+                    const activeText = source.active ? "ACTIVE" : "PAUSED";
                     const lastSync = source.last_sync_at ? formatTime(source.last_sync_at) : "尚未同步";
-                    const lastError = source.last_error ? `<p class="mt-2 truncate-two text-sm text-rose-300">${escapeHtml(source.last_error)}</p>` : "";
+                    const errorAdvice = source.last_error ? catalogErrorAdvice(source.last_error) : "";
+                    const lastError = source.last_error ? `
+                        <div class="mt-3 rounded-lg border border-rose-500/20 bg-rose-500/10 px-3 py-2">
+                            <p class="truncate-two text-sm text-rose-200">${escapeHtml(source.last_error)}</p>
+                            <p class="mt-1 text-xs text-rose-100/80">${escapeHtml(errorAdvice)}</p>
+                        </div>
+                    ` : "";
                     return `
                         <article class="merchant-card rounded-xl border border-slate-800/80 bg-slate-950/50 p-4">
                             <div class="flex flex-wrap items-start justify-between gap-3">
@@ -990,7 +1116,10 @@
                                     <h4 class="truncate text-sm font-bold text-white">${escapeHtml(source.source_name || source.source_url)}</h4>
                                     <p class="mt-1 truncate font-mono text-[11px] text-slate-500">${escapeHtml(source.source_url)}</p>
                                 </div>
-                                <span class="font-mono text-[11px] ${statusClass}">${statusText}</span>
+                                <div class="flex flex-wrap justify-end gap-2">
+                                    <span class="rounded-full border px-2.5 py-1 font-mono text-[11px] ${sourceStatusClass}">${sourceStatusText}</span>
+                                    <span class="font-mono text-[11px] ${activeClass}">${activeText}</span>
+                                </div>
                             </div>
                             <div class="mt-3 flex flex-wrap gap-2 text-[11px] font-mono text-slate-400">
                                 <span class="rounded-full border border-indigo-900/60 bg-indigo-500/10 px-2.5 py-1">分组 ${escapeHtml(source.group_name || defaultTaskGroup)}</span>
@@ -1021,12 +1150,15 @@
             } else {
                 els.merchantItemList.innerHTML = filteredItems.map((item) => {
                     const [badgeClass, badgeText] = merchantStateMeta(item.item_state);
+                    const [stockClass, stockText] = merchantStockStatusMeta(item);
                     const linkedTask = item.task_id && currentTasks.get(String(item.task_id));
                     const sourceLabel = item.source_name || item.source_url || "未知来源";
                     const actionLabel = linkedTask ? "编辑任务" : "生成任务";
                     const actionName = linkedTask ? "open-task" : "promote-item";
                     const backendLabel = item.backend_used ? fetchStrategyLabel(item.backend_used) : "-";
-                    const discoveryLabel = item.discovery_source || "-";
+                    const discoveryLabel = catalogDiscoveryLabel(item.discovery_source);
+                    const extractor = extractorLabel(item.extractor);
+                    const fetchStrategy = fetchStrategyLabel(item.fetch_strategy);
                     return `
                         <article class="merchant-card rounded-xl border border-slate-800/80 bg-slate-950/50 p-4">
                             <div class="flex flex-wrap items-start justify-between gap-3">
@@ -1034,7 +1166,10 @@
                                     <h4 class="truncate text-sm font-bold text-white">${escapeHtml(item.title)}</h4>
                                     <p class="mt-1 truncate font-mono text-[11px] text-slate-500">${escapeHtml(sourceLabel)}</p>
                                 </div>
-                                <span class="rounded-full border px-2.5 py-1 font-mono text-[11px] ${badgeClass}">${badgeText}</span>
+                                <div class="flex flex-wrap justify-end gap-2">
+                                    <span class="rounded-full border px-2.5 py-1 font-mono text-[11px] ${stockClass}">${stockText}</span>
+                                    <span class="rounded-full border px-2.5 py-1 font-mono text-[11px] ${badgeClass}">${badgeText}</span>
+                                </div>
                             </div>
                             <div class="mt-3 grid gap-2 text-[11px] font-mono text-slate-400 sm:grid-cols-2">
                                 <span class="truncate rounded-lg border border-slate-800 bg-slate-900/70 px-2.5 py-1">关键词：${escapeHtml(item.keyword)}</span>
@@ -1043,6 +1178,8 @@
                                 <span class="truncate rounded-lg border border-slate-800 bg-slate-900/70 px-2.5 py-1">补货：${escapeHtml(item.restock_hint || "-")}</span>
                                 <span class="truncate rounded-lg border border-slate-800 bg-slate-900/70 px-2.5 py-1">后端：${escapeHtml(backendLabel)}</span>
                                 <span class="truncate rounded-lg border border-slate-800 bg-slate-900/70 px-2.5 py-1">发现：${escapeHtml(discoveryLabel)}</span>
+                                <span class="truncate rounded-lg border border-slate-800 bg-slate-900/70 px-2.5 py-1">解析器：${escapeHtml(extractor)}</span>
+                                <span class="truncate rounded-lg border border-slate-800 bg-slate-900/70 px-2.5 py-1">任务采集：${escapeHtml(fetchStrategy)}</span>
                             </div>
                             <div class="mt-3 flex flex-wrap items-center justify-between gap-3">
                                 <p class="truncate font-mono text-[11px] text-slate-500">${escapeHtml(item.item_url || item.monitor_url || "")}</p>
@@ -1053,6 +1190,14 @@
                         </article>
                     `;
                 }).join("");
+            }
+        }
+        if (els.merchantBulkPromoteButton) {
+            const promotableItems = filteredItems.filter((item) => !item.task_id && item.item_state !== "archived");
+            els.merchantBulkPromoteButton.disabled = promotableItems.length === 0;
+            els.merchantBulkPromoteButton.dataset.itemIds = promotableItems.map((item) => item.id).join(",");
+            if (els.merchantBulkPromoteCount) {
+                els.merchantBulkPromoteCount.textContent = `${promotableItems.length} 可创建`;
             }
         }
     }
@@ -1383,7 +1528,12 @@
             default_fetch_strategy: els.merchantDefaultFetchStrategy?.value || "browser",
             default_extractor: els.merchantDefaultExtractor?.value || "generic_pricing_table",
             search_keyword: els.merchantSearchKeyword?.value.trim() || "",
+            target_keyword: els.merchantTargetKeyword?.value.trim() || "",
+            target_keyword_mode: els.merchantTargetKeywordMode?.value || "contains",
+            dedupe_policy: els.merchantDedupePolicy?.value || "by_url",
+            max_discovered_urls: Number(els.merchantMaxDiscoveredUrls?.value || 50),
             max_import_items: Number(els.merchantMaxImportItems?.value || 50),
+            timeout_seconds: Number(els.merchantTimeoutSeconds?.value || 25),
             include_sold_out: Boolean(els.merchantIncludeSoldOut?.checked),
             auto_promote: Boolean(els.merchantAutoPromote?.checked)
         };
@@ -1419,6 +1569,30 @@
                 showToast(error.message, "error");
             } finally {
                 button.disabled = false;
+            }
+            return;
+        }
+        if (action === "bulk-promote") {
+            const itemIds = String(button.dataset.itemIds || "")
+                .split(",")
+                .map((value) => Number(value))
+                .filter((value) => Number.isInteger(value) && value > 0);
+            if (!itemIds.length) {
+                showToast("当前筛选条件下没有可创建任务的商品。", "error");
+                return;
+            }
+            button.disabled = true;
+            try {
+                const data = await apiFetch("/api/merchant/items/bulk-promote", {
+                    method: "POST",
+                    body: JSON.stringify({ item_ids: itemIds })
+                });
+                showToast(data.message || `批量创建完成：${itemIds.length} 个商品已处理。`);
+                await loadSnapshot(false);
+            } catch (error) {
+                showToast(error.message, "error");
+            } finally {
+                button.disabled = !String(button.dataset.itemIds || "").trim();
             }
             return;
         }
@@ -1798,6 +1972,10 @@
         renderMerchant(currentMerchant);
     });
 
+    els.merchantBulkPromoteButton?.addEventListener("click", () => {
+        handleMerchantAction(els.merchantBulkPromoteButton);
+    });
+
     els.groupRenameForm?.addEventListener("submit", submitTaskGroupRename);
     els.groupRenameCancel?.addEventListener("click", closeTaskGroupRenameModal);
     els.groupRenameClose?.addEventListener("click", closeTaskGroupRenameModal);
@@ -1946,6 +2124,19 @@
     wireDirtyTracking(els.merchantGroup);
     wireDirtyTracking(els.merchantGroupCustom);
     [
+        els.merchantDiscoveryStrategy,
+        els.merchantScrapeStrategy,
+        els.merchantDefaultFetchStrategy,
+        els.merchantDefaultExtractor,
+        els.merchantSearchKeyword,
+        els.merchantTargetKeyword,
+        els.merchantTargetKeywordMode,
+        els.merchantDedupePolicy,
+        els.merchantMaxDiscoveredUrls,
+        els.merchantMaxImportItems,
+        els.merchantTimeoutSeconds,
+        els.merchantIncludeSoldOut,
+        els.merchantAutoPromote,
         els.settingsChatIds,
         els.settingsMonitorPort,
         els.settingsTestPort,

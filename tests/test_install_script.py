@@ -761,6 +761,46 @@ class InstallScriptTestCase(unittest.TestCase):
         self.assertNotIn("masonry", combined_ui.lower())
         self.assertNotIn("waterfall", combined_ui.lower())
 
+    def test_product_intake_workbench_exposes_round7_controls(self) -> None:
+        app_js = (ROOT_DIR / "static" / "app.js").read_text(encoding="utf-8")
+        portal_html = (ROOT_DIR / "templates" / "portal.html").read_text(encoding="utf-8")
+
+        for element_id in (
+            "merchant-source-url",
+            "merchant-discovery-strategy",
+            "merchant-scrape-strategy",
+            "merchant-default-extractor",
+            "merchant-search-keyword",
+            "merchant-target-keyword",
+            "merchant-target-keyword-mode",
+            "merchant-dedupe-policy",
+            "merchant-max-discovered-urls",
+            "merchant-max-import-items",
+            "merchant-timeout-seconds",
+            "merchant-bulk-promote-button",
+            "merchant-firecrawl-state",
+        ):
+            self.assertIn(f'id="{element_id}"', portal_html)
+
+        self.assertIn("发现结果", portal_html)
+        self.assertIn("商品预览", portal_html)
+        self.assertIn("错误恢复建议", portal_html)
+        self.assertIn("catalog_browser_port_busy", portal_html)
+        self.assertIn("firecrawl_credit_required", portal_html)
+        self.assertIn("cloudflare_challenge", portal_html)
+
+        self.assertIn("function updateMerchantFirecrawlOptions", app_js)
+        self.assertIn('setOptionAvailability(els.merchantDiscoveryStrategy, ["firecrawl_map", "hybrid"], enabled)', app_js)
+        self.assertIn('setOptionAvailability(els.merchantScrapeStrategy, ["firecrawl"], enabled)', app_js)
+        self.assertIn('setOptionAvailability(els.merchantDefaultExtractor, ["firecrawl_product_hint"], enabled)', app_js)
+        self.assertIn("function catalogErrorAdvice", app_js)
+        self.assertIn("function merchantStockStatusMeta", app_js)
+        self.assertIn("function extractorLabel", app_js)
+        self.assertIn("function catalogDiscoveryLabel", app_js)
+        self.assertIn("/api/merchant/items/bulk-promote", app_js)
+        self.assertIn("backend_used", app_js)
+        self.assertIn("任务采集", app_js)
+
     def test_docker_publish_port_conflict_is_reported_cleanly(self) -> None:
         result = self.run_bash(
             textwrap.dedent(
