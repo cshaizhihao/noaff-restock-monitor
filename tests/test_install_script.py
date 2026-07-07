@@ -681,7 +681,7 @@ class InstallScriptTestCase(unittest.TestCase):
         app_js = (ROOT_DIR / "static" / "app.js").read_text(encoding="utf-8")
         self.assertIn("let tasksRendered = false", app_js)
         self.assertIn("const animateCards = initial || !tasksRendered || taskIdsSignature !== nextTaskIdsSignature", app_js)
-        self.assertIn('const cardClass = animateCards ? "task-card reveal" : "task-card"', app_js)
+        self.assertIn('const rowClass = animateCards ? "task-row reveal" : "task-row"', app_js)
         self.assertIn("renderSnapshot(data, initial)", app_js)
 
     def test_dashboard_polling_skips_unchanged_logs_and_merchant_sections(self) -> None:
@@ -783,6 +783,12 @@ class InstallScriptTestCase(unittest.TestCase):
         self.assertIn("firecrawl_api_key", app_js)
         self.assertIn(".settings-layout", app_css)
         self.assertIn(".settings-nav-item", app_css)
+        self.assertIn('id="settings-home"', portal_html)
+        self.assertIn('id="settings-pages"', portal_html)
+        self.assertIn('data-settings-target="settings-runtime"', portal_html)
+        self.assertIn("data-settings-back", portal_html)
+        self.assertIn("function openSettingsHome", app_js)
+        self.assertIn("function openSettingsPage", app_js)
 
         settings_block = portal_html.split('id="settings-view"', 1)[1].split('id="task-modal"', 1)[0]
         self.assertNotIn('id="merchant-form"', settings_block)
@@ -802,7 +808,13 @@ class InstallScriptTestCase(unittest.TestCase):
 
         self.assertIn("task-list-stack", app_js)
         self.assertIn(".task-list-stack", app_css)
+        self.assertIn("task-table-shell", app_js)
+        self.assertIn(".task-row", app_css)
         self.assertIn("intake-results-stack", portal_html)
+        self.assertNotIn("task-card", app_js)
+        self.assertNotIn(".task-card", app_css)
+        self.assertNotIn("add-card", app_js)
+        self.assertNotIn(".add-card", app_css)
         self.assertNotIn("md:grid-cols-2 xl:grid-cols-3", app_js)
         self.assertNotIn("md:grid-cols-2 xl:grid-cols-3", portal_html)
         self.assertNotIn("xl:grid-cols-[minmax(0,0.8fr)_minmax(0,1.2fr)]", portal_html)

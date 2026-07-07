@@ -42,6 +42,8 @@
         tasksView: document.getElementById("tasks-view"),
         merchantView: document.getElementById("merchant-view"),
         settingsView: document.getElementById("settings-view"),
+        settingsHome: document.getElementById("settings-home"),
+        settingsPages: document.getElementById("settings-pages"),
         tasksGrid: document.getElementById("tasks-grid"),
         toastStack: document.getElementById("toast-stack"),
         logStream: document.getElementById("log-stream"),
@@ -677,7 +679,7 @@
         const log = card.querySelector("[data-task-log]");
         if (log) {
             log.textContent = logLine;
-            log.className = `truncate-two font-mono text-sm leading-relaxed ${task.last_error ? errorKindTone(task.last_error_kind) : "animate-pulse-soft text-emerald-400"}`;
+            log.className = `task-log-text truncate-two font-mono ${task.last_error ? errorKindTone(task.last_error_kind) : "animate-pulse-soft text-emerald-400"}`;
         }
         const protectedNoticeEl = card.querySelector("[data-task-protected-notice]");
         if (protectedNoticeEl) {
@@ -814,6 +816,28 @@
         }
     }
 
+    function openSettingsHome() {
+        els.settingsHome?.classList.remove("hidden");
+        els.settingsPages?.classList.add("hidden");
+        els.settingsView?.querySelectorAll?.("[data-settings-panel]")?.forEach((panel) => {
+            panel.classList.add("hidden");
+        });
+    }
+
+    function openSettingsPage(panelId) {
+        const panel = panelId ? document.getElementById(panelId) : null;
+        if (!panel) {
+            openSettingsHome();
+            return;
+        }
+        els.settingsHome?.classList.add("hidden");
+        els.settingsPages?.classList.remove("hidden");
+        els.settingsView?.querySelectorAll?.("[data-settings-panel]")?.forEach((section) => {
+            section.classList.toggle("hidden", section !== panel);
+        });
+        panel.scrollIntoView({ block: "start" });
+    }
+
     function setNav(view) {
         currentView = view;
         const tasks = view === "tasks";
@@ -829,6 +853,9 @@
         els.mobileNavMerchant?.classList.toggle("nav-item-active", merchant);
         els.mobileNavSettings?.classList.toggle("nav-item-active", settings);
         els.viewTitle.textContent = tasks ? "监控任务" : merchant ? "商品入库" : "系统设置";
+        if (settings) {
+            openSettingsHome();
+        }
     }
 
     function openTaskModal(task = null) {
@@ -1295,45 +1322,44 @@
             const webhookMeta = webhookMetaText(task);
             const normalizedStrategy = normalizeFetchStrategy(task.fetch_strategy);
             const attemptMeta = fetchAttemptMeta(task);
-            const cardClass = animateCards ? "task-card reveal" : "task-card";
+            const rowClass = animateCards ? "task-row reveal" : "task-row";
             return `
-                <article class="${cardClass}" data-task-id="${task.id}">
-                    <div class="absolute right-6 top-6">
+                <article class="${rowClass}" data-task-id="${task.id}">
+                    <div class="task-row-product">
                         <span class="status-badge ${statusClass}" data-task-status>${statusText}</span>
-                    </div>
-
-                    <div class="mb-5 pr-28">
-                        <h3 class="mb-2 truncate text-xl font-bold text-white" title="${escapeHtml(task.name)}" data-task-name>${escapeHtml(task.name)}</h3>
-                        <p class="truncate font-mono text-[13px] text-slate-500" title="${escapeHtml(task.monitor_url)}" data-task-url>${escapeHtml(task.monitor_url)}</p>
-                        ${task.source_source_name ? `<p class="mt-2 truncate font-mono text-[11px] text-slate-600" data-task-source>来源：${escapeHtml(task.source_source_name)}${task.source_item_url ? ` · ${escapeHtml(task.source_item_url)}` : ""}</p>` : '<p class="mt-2 hidden truncate font-mono text-[11px] text-slate-600" data-task-source></p>'}
-                    </div>
-
-                    <div class="keyword-chip mb-4" data-task-keyword>
-                        <svg class="mr-1.5 h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/>
-                        </svg>
-                        <span data-task-keyword-text>关键词: ${escapeHtml(task.target_keyword)}</span>
-                        <span class="ml-2 rounded border border-slate-700/70 bg-slate-950/70 px-2 py-0.5 text-[10px] text-slate-400" data-task-fetch-strategy>${escapeHtml(fetchStrategyLabel(task.fetch_strategy))}</span>
-                    </div>
-
-                    <div class="terminal-box mb-5 flex flex-1 flex-col justify-center p-4 ${task.last_error ? "" : "opacity-95"}" data-task-terminal>
-                        <div class="mb-3 flex items-center justify-between border-b border-slate-800/80 pb-2">
-                            <span class="text-[10px] font-bold uppercase tracking-widest text-slate-500">任务记录</span>
-                            <span class="rounded border border-slate-700 bg-slate-800/80 px-2 py-0.5 font-mono text-[10px] text-slate-400">
-                                库存: <span class="${task.last_stock > 0 ? "text-emerald-400" : "text-slate-300"} font-bold" data-task-stock>${escapeHtml(stockText)}</span>
-                            </span>
+                        <div class="min-w-0">
+                            <h3 class="task-row-title" title="${escapeHtml(task.name)}" data-task-name>${escapeHtml(task.name)}</h3>
+                            <p class="task-row-url font-mono" title="${escapeHtml(task.monitor_url)}" data-task-url>${escapeHtml(task.monitor_url)}</p>
+                            ${task.source_source_name ? `<p class="task-row-source font-mono" data-task-source>来源：${escapeHtml(task.source_source_name)}${task.source_item_url ? ` · ${escapeHtml(task.source_item_url)}` : ""}</p>` : '<p class="task-row-source hidden font-mono" data-task-source></p>'}
                         </div>
-            <p class="truncate-two font-mono text-sm leading-relaxed ${task.last_error ? errorKindTone(task.last_error_kind) : "animate-pulse-soft text-emerald-400"}" data-task-log>${logMessage}</p>
-                        <p class="mt-3 rounded border border-amber-500/20 bg-amber-500/10 px-3 py-2 text-xs leading-5 text-amber-200 ${protectedNotice ? "" : "hidden"}" data-task-protected-notice>${escapeHtml(protectedNotice)}</p>
-                        <p class="mt-3 rounded border border-cyan-500/20 bg-cyan-500/10 px-3 py-2 font-mono text-[11px] leading-5 text-cyan-200 ${webhookMeta ? "" : "hidden"}" data-task-webhook-meta>${escapeHtml(webhookMeta)}</p>
-                        <div class="mt-3 font-mono text-[11px] text-slate-600" data-task-meta>
+                    </div>
+
+                    <div class="task-row-signal">
+                        <div class="keyword-chip" data-task-keyword>
+                            <svg class="mr-1.5 h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/>
+                            </svg>
+                            <span data-task-keyword-text>关键词: ${escapeHtml(task.target_keyword)}</span>
+                            <span class="ml-2 rounded border border-slate-700/70 bg-slate-950/70 px-2 py-0.5 text-[10px] text-slate-400" data-task-fetch-strategy>${escapeHtml(fetchStrategyLabel(task.fetch_strategy))}</span>
+                        </div>
+                        <div class="task-row-stock font-mono">
+                            <span>库存</span>
+                            <strong class="${task.last_stock > 0 ? "text-emerald-400" : "text-slate-300"} font-bold" data-task-stock>${escapeHtml(stockText)}</strong>
+                        </div>
+                    </div>
+
+                    <div class="task-row-log terminal-box ${task.last_error ? "" : "opacity-95"}" data-task-terminal>
+                        <p class="task-log-text truncate-two font-mono ${task.last_error ? errorKindTone(task.last_error_kind) : "animate-pulse-soft text-emerald-400"}" data-task-log>${logMessage}</p>
+                        <p class="mt-2 rounded border border-amber-500/20 bg-amber-500/10 px-2.5 py-1.5 text-xs leading-5 text-amber-200 ${protectedNotice ? "" : "hidden"}" data-task-protected-notice>${escapeHtml(protectedNotice)}</p>
+                        <p class="mt-2 rounded border border-cyan-500/20 bg-cyan-500/10 px-2.5 py-1.5 font-mono text-[11px] leading-5 text-cyan-200 ${webhookMeta ? "" : "hidden"}" data-task-webhook-meta>${escapeHtml(webhookMeta)}</p>
+                        <div class="task-row-checked font-mono" data-task-meta>
                             message_id: ${task.message_id ?? "-"} · checked: ${lastChecked}${escapeHtml(attemptMeta)}
                         </div>
                     </div>
 
-                    <div class="task-actions mt-auto flex flex-col gap-3 border-t border-slate-700/60 pt-4">
+                    <div class="task-actions flex flex-col gap-2">
                         <div class="flex flex-wrap items-center gap-2">
-                            <button type="button" class="ghost-button !min-h-[2.4rem] !rounded-lg !px-4 !py-2 text-[13px] font-bold text-indigo-300 ${["manual", "webhook"].includes(normalizedStrategy) ? "hidden" : ""}" data-action="test" data-task-test-action>
+                            <button type="button" class="ghost-button !min-h-9 !rounded-lg !px-3 !py-2 text-[12px] font-bold text-indigo-300 ${["manual", "webhook"].includes(normalizedStrategy) ? "hidden" : ""}" data-action="test" data-task-test-action>
                                 <svg class="mr-1.5 h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8"/>
                                 </svg>
@@ -1369,16 +1395,18 @@
     }
 
     function renderAddTaskCard(animateCards) {
-        const addCardClass = animateCards ? "add-card reveal" : "add-card";
+        const addRowClass = animateCards ? "add-row reveal" : "add-row";
         return `
-            <button type="button" id="tasks-add-card" class="${addCardClass}">
-                <div class="mb-4 flex h-16 w-16 items-center justify-center rounded-full bg-slate-800/80 transition-transform group-hover:scale-110">
-                    <svg class="h-8 w-8 text-slate-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <button type="button" id="tasks-add-row" class="${addRowClass}">
+                <div class="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-slate-800/80">
+                    <svg class="h-5 w-5 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/>
                     </svg>
                 </div>
-                <p class="mb-1 font-bold text-slate-300">新增任务</p>
-                <p class="px-4 text-center text-[13px] text-slate-500">填写商品链接、关键词与采集方式。</p>
+                <div class="min-w-0 text-left">
+                    <p class="font-bold text-slate-200">新增任务</p>
+                    <p class="text-[13px] text-slate-500">填写商品链接、关键词与采集方式。</p>
+                </div>
             </button>
         `;
     }
@@ -1442,7 +1470,16 @@
             const summaryBadge = `
                 <span class="rounded-full border border-slate-700 bg-slate-900/80 px-2.5 py-1 font-mono text-[11px] text-slate-400" data-task-group-count>${group.tasks.length} 个任务</span>
                 <span class="rounded-full border border-rose-900/70 bg-rose-500/10 px-2.5 py-1 font-mono text-[11px] text-rose-300${errorCount ? "" : " hidden"}" data-task-group-error>${errorCount} 错误</span>`;
-            const groupCards = collapsed ? "" : `<div class="task-list-stack mt-5">${renderTaskCards(group.tasks, animateCards)}</div>`;
+            const groupCards = collapsed ? "" : `
+                <div class="task-table-shell mt-4">
+                    <div class="task-table-head" aria-hidden="true">
+                        <span>商品</span>
+                        <span>关键词 / 库存</span>
+                        <span>最近记录</span>
+                        <span>操作</span>
+                    </div>
+                    <div class="task-list-stack">${renderTaskCards(group.tasks, animateCards)}</div>
+                </div>`;
             const groupClass = animateCards ? "reveal" : "";
 
             return `
@@ -1478,8 +1515,8 @@
             `;
         }).join("");
 
-        const addCard = `<div class="task-list-stack">${renderAddTaskCard(animateCards)}</div>`;
-        els.tasksGrid.innerHTML = tasks.length ? `${groupSections}${addCard}` : addCard;
+        const addRow = `<div class="task-add-stack">${renderAddTaskCard(animateCards)}</div>`;
+        els.tasksGrid.innerHTML = tasks.length ? `${groupSections}${addRow}` : addRow;
     }
 
     function renderSnapshot(data, initial = false) {
@@ -1964,6 +2001,17 @@
     els.mobileNavTasks?.addEventListener("click", () => setNav("tasks"));
     els.mobileNavMerchant?.addEventListener("click", () => setNav("merchant"));
     els.mobileNavSettings?.addEventListener("click", () => setNav("settings"));
+    els.settingsView?.addEventListener("click", (event) => {
+        const entry = event.target.closest("[data-settings-target]");
+        if (entry) {
+            openSettingsPage(entry.dataset.settingsTarget);
+            return;
+        }
+        const back = event.target.closest("[data-settings-back]");
+        if (back) {
+            openSettingsHome();
+        }
+    });
 
     els.taskResetButton?.addEventListener("click", () => openTaskModal());
     els.taskCancelButton?.addEventListener("click", closeTaskModal);
@@ -2010,8 +2058,8 @@
             renderTasks(Array.from(currentTasks.values()), false, true);
             return;
         }
-        const addCard = event.target.closest("#tasks-add-card");
-        if (addCard) {
+        const addRow = event.target.closest("#tasks-add-row");
+        if (addRow) {
             openTaskModal();
             return;
         }

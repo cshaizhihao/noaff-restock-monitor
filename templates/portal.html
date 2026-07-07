@@ -415,28 +415,79 @@
                         </section>
 
                         <section id="settings-view" class="hidden">
-                            <div class="settings-layout grid gap-6 lg:grid-cols-[15rem_minmax(0,1fr)]">
-                                <aside class="settings-sidebar control-panel reveal p-3 lg:sticky lg:top-6 lg:self-start">
-                                    <nav class="grid gap-1 text-sm" aria-label="系统设置分组">
-                                        <a href="#settings-runtime" class="settings-nav-item">运行时与推送</a>
-                                        <a href="#settings-browser-runtime" class="settings-nav-item">浏览器运行时</a>
-                                        <a href="#settings-firecrawl" class="settings-nav-item">Firecrawl 集成</a>
-                                        <a href="#settings-account" class="settings-nav-item">账户与安全</a>
-                                        <a href="#settings-upgrade" class="settings-nav-item">升级与维护</a>
-                                        <a href="#settings-backup" class="settings-nav-item">备份与恢复</a>
-                                        <a href="#settings-logs" class="settings-nav-item">运行日志</a>
-                                    </nav>
-                                </aside>
+                            <div class="settings-layout space-y-4">
+                                <section id="settings-home" class="settings-home control-panel reveal p-5">
+                                    <div class="settings-home-heading">
+                                        <div>
+                                            <p class="settings-kicker">Settings</p>
+                                            <h3 class="panel-heading">系统设置</h3>
+                                        </div>
+                                    </div>
+                                    <div class="settings-entry-list" role="list">
+                                        <button type="button" class="settings-nav-item settings-entry" data-settings-target="settings-runtime">
+                                            <span class="settings-entry-icon">RT</span>
+                                            <span class="settings-entry-copy">
+                                                <strong>运行时与推送</strong>
+                                                <small>Telegram 与轮询</small>
+                                            </span>
+                                        </button>
+                                        <button type="button" class="settings-nav-item settings-entry" data-settings-target="settings-browser-runtime">
+                                            <span class="settings-entry-icon">BR</span>
+                                            <span class="settings-entry-copy">
+                                                <strong>浏览器运行时</strong>
+                                                <small>Chromium 端口</small>
+                                            </span>
+                                        </button>
+                                        <button type="button" class="settings-nav-item settings-entry" data-settings-target="settings-firecrawl">
+                                            <span class="settings-entry-icon">FC</span>
+                                            <span class="settings-entry-copy">
+                                                <strong>Firecrawl 集成</strong>
+                                                <small>外部采集后端</small>
+                                            </span>
+                                        </button>
+                                        <button type="button" class="settings-nav-item settings-entry" data-settings-target="settings-account">
+                                            <span class="settings-entry-icon">AC</span>
+                                            <span class="settings-entry-copy">
+                                                <strong>账户与安全</strong>
+                                                <small>管理员凭据</small>
+                                            </span>
+                                        </button>
+                                        <button type="button" class="settings-nav-item settings-entry" data-settings-target="settings-upgrade">
+                                            <span class="settings-entry-icon">UP</span>
+                                            <span class="settings-entry-copy">
+                                                <strong>升级与维护</strong>
+                                                <small>版本与服务</small>
+                                            </span>
+                                        </button>
+                                        <button type="button" class="settings-nav-item settings-entry" data-settings-target="settings-backup">
+                                            <span class="settings-entry-icon">BK</span>
+                                            <span class="settings-entry-copy">
+                                                <strong>备份与恢复</strong>
+                                                <small>数据迁移</small>
+                                            </span>
+                                        </button>
+                                        <button type="button" class="settings-nav-item settings-entry" data-settings-target="settings-logs">
+                                            <span class="settings-entry-icon">LG</span>
+                                            <span class="settings-entry-copy">
+                                                <strong>运行日志</strong>
+                                                <small>活动记录</small>
+                                            </span>
+                                        </button>
+                                    </div>
+                                </section>
 
-                                <div class="control-panel reveal overflow-hidden">
+                                <div id="settings-pages" class="settings-pages control-panel reveal overflow-hidden hidden">
                                     <form id="settings-form">
-                                        <section id="settings-runtime" class="settings-section">
+                                        <section id="settings-runtime" class="settings-section settings-page hidden" data-settings-panel>
                                             <div class="settings-section-heading">
                                                 <div>
                                                     <p class="settings-kicker">Runtime</p>
                                                     <h3 class="panel-heading">运行时与推送</h3>
                                                 </div>
-                                                <button type="submit" class="primary-button">保存运行时</button>
+                                                <div class="settings-section-actions">
+                                                    <button type="button" class="ghost-button settings-back-button" data-settings-back>返回</button>
+                                                    <button type="submit" class="primary-button">保存运行时</button>
+                                                </div>
                                             </div>
                                             <div class="settings-grid">
                                                 <div class="settings-field settings-field-wide">
@@ -463,13 +514,16 @@
                                             </div>
                                         </section>
 
-                                        <section id="settings-browser-runtime" class="settings-section">
+                                        <section id="settings-browser-runtime" class="settings-section settings-page hidden" data-settings-panel>
                                             <div class="settings-section-heading">
                                                 <div>
                                                     <p class="settings-kicker">Browser</p>
                                                     <h3 class="panel-heading">浏览器运行时</h3>
                                                 </div>
-                                                <button type="submit" class="primary-button">保存浏览器</button>
+                                                <div class="settings-section-actions">
+                                                    <button type="button" class="ghost-button settings-back-button" data-settings-back>返回</button>
+                                                    <button type="submit" class="primary-button">保存浏览器</button>
+                                                </div>
                                             </div>
                                             <div class="settings-grid">
                                                 <div class="settings-field">
@@ -487,13 +541,16 @@
                                             </div>
                                         </section>
 
-                                        <section id="settings-firecrawl" class="settings-section">
+                                        <section id="settings-firecrawl" class="settings-section settings-page hidden" data-settings-panel>
                                             <div class="settings-section-heading">
                                                 <div>
                                                     <p class="settings-kicker">Integration</p>
                                                     <h3 class="panel-heading">Firecrawl 集成</h3>
                                                 </div>
-                                                <button type="submit" class="primary-button">保存 Firecrawl</button>
+                                                <div class="settings-section-actions">
+                                                    <button type="button" class="ghost-button settings-back-button" data-settings-back>返回</button>
+                                                    <button type="submit" class="primary-button">保存 Firecrawl</button>
+                                                </div>
                                             </div>
                                             <div class="settings-grid">
                                                 <label class="settings-check settings-field-wide">
@@ -560,12 +617,13 @@
                                         </section>
                                     </form>
 
-                                    <section id="settings-account" class="settings-section">
+                                    <section id="settings-account" class="settings-section settings-page hidden" data-settings-panel>
                                         <div class="settings-section-heading">
                                             <div>
                                                 <p class="settings-kicker">Security</p>
                                                 <h3 class="panel-heading">账户与安全</h3>
                                             </div>
+                                            <button type="button" class="ghost-button settings-back-button" data-settings-back>返回</button>
                                         </div>
                                         <form id="profile-form" class="settings-grid">
                                             <div class="settings-field">
@@ -590,12 +648,13 @@
                                         </form>
                                     </section>
 
-                                    <section id="settings-upgrade" class="settings-section">
+                                    <section id="settings-upgrade" class="settings-section settings-page hidden" data-settings-panel>
                                         <div class="settings-section-heading">
                                             <div>
                                                 <p class="settings-kicker">Maintenance</p>
                                                 <h3 class="panel-heading">升级与维护</h3>
                                             </div>
+                                            <button type="button" class="ghost-button settings-back-button" data-settings-back>返回</button>
                                         </div>
                                         <div class="grid gap-4">
                                             <div class="grid gap-4 border-b border-slate-800/80 pb-4 sm:grid-cols-3">
@@ -625,12 +684,13 @@
                                         </div>
                                     </section>
 
-                                    <section id="settings-backup" class="settings-section">
+                                    <section id="settings-backup" class="settings-section settings-page hidden" data-settings-panel>
                                         <div class="settings-section-heading">
                                             <div>
                                                 <p class="settings-kicker">Backup</p>
                                                 <h3 class="panel-heading">备份与恢复</h3>
                                             </div>
+                                            <button type="button" class="ghost-button settings-back-button" data-settings-back>返回</button>
                                         </div>
                                         <div class="grid gap-4">
                                             <p class="text-sm leading-6 text-slate-500">导出当前数据库为 JSON 备份，适合迁移、交接和故障恢复。恢复会覆盖管理员、设置、任务和商家数据。</p>
@@ -658,13 +718,16 @@
                                         </div>
                                     </section>
 
-                                    <section id="settings-logs" class="settings-section">
+                                    <section id="settings-logs" class="settings-section settings-page hidden" data-settings-panel>
                                         <div class="settings-section-heading">
                                             <div>
                                                 <p class="settings-kicker">Logs</p>
                                                 <h3 class="panel-heading">运行日志</h3>
                                             </div>
-                                            <p id="admin-identity" class="font-mono text-xs text-slate-500">管理员</p>
+                                            <div class="settings-section-actions">
+                                                <button type="button" class="ghost-button settings-back-button" data-settings-back>返回</button>
+                                                <p id="admin-identity" class="font-mono text-xs text-slate-500">管理员</p>
+                                            </div>
                                         </div>
                                         <div class="terminal-box max-h-[520px] overflow-y-auto p-4">
                                             <div id="log-stream" class="space-y-4"></div>
