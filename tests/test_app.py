@@ -148,7 +148,119 @@ class PortalAppTestCase(unittest.TestCase):
             self.assertIn("cooldown_until", columns)
             self.assertIn("ingest_token_hash", columns)
             self.assertIn("ingest_token_hint", columns)
-            self.assertEqual(row[0], "'browser'")
+            self.assertEqual(row[0], "'scrapling_adaptive'")
+        finally:
+            app_module.DB_PATH = original_db_path
+
+    def test_initialize_database_migrates_legacy_fetch_strategies_to_scrapling(self) -> None:
+        original_db_path = app_module.DB_PATH
+        legacy_db_path = self.data_dir / "legacy-strategy-monitor.db"
+        timestamp = app_module.now_iso()
+        try:
+            app_module.DB_PATH = legacy_db_path
+            connection = sqlite3.connect(legacy_db_path)
+            connection.row_factory = sqlite3.Row
+            try:
+                connection.execute(
+                    """
+                    CREATE TABLE settings (
+                        key TEXT PRIMARY KEY,
+                        value TEXT NOT NULL,
+                        updated_at TEXT NOT NULL
+                    )
+                    """
+                )
+                connection.execute(
+                    """
+                    CREATE TABLE tasks (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        name TEXT NOT NULL,
+                        monitor_url TEXT NOT NULL,
+                        target_keyword TEXT NOT NULL,
+                        fetch_strategy TEXT NOT NULL DEFAULT 'browser',
+                        source_config TEXT NOT NULL DEFAULT '{}',
+                        restock_template TEXT NOT NULL,
+                        soldout_template TEXT NOT NULL,
+                        created_at TEXT NOT NULL,
+                        updated_at TEXT NOT NULL
+                    )
+                    """
+                )
+                rows = [
+                    ("browser task", "browser", {}),
+                    ("static task", "static_http", {}),
+                    ("generic task", "generic_pricing_table", {}),
+                    ("whmcs task", "whmcs", {}),
+                    ("firecrawl task", "firecrawl", {}),
+                    ("manual task", "manual", {}),
+                    ("webhook task", "webhook", {}),
+                ]
+                for name, strategy, source_config in rows:
+                    connection.execute(
+                        """
+                        INSERT INTO tasks (
+                            name, monitor_url, target_keyword, fetch_strategy, source_config,
+                            restock_template, soldout_template, created_at, updated_at
+                        )
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        (
+                            name,
+                            "https://example.com/item",
+                            name,
+                            strategy,
+                            json.dumps(source_config),
+                            app_module.DEFAULT_RESTOCK_TEMPLATE,
+                            app_module.DEFAULT_SOLDOUT_TEMPLATE,
+                            timestamp,
+                            timestamp,
+                        ),
+                    )
+                connection.commit()
+            finally:
+                connection.close()
+
+            app_module.initialize_database()
+            with app_module.open_connection() as connection:
+                tasks = {
+                    row["name"]: row
+                    for row in connection.execute(
+                        "SELECT name, fetch_strategy, source_config FROM tasks"
+                    ).fetchall()
+                }
+                marker = connection.execute(
+                    "SELECT value FROM settings WHERE key = ?",
+                    (app_module.SCRAPLING_FETCH_STRATEGY_MIGRATION_KEY,),
+                ).fetchone()
+
+            self.assertIsNotNone(marker)
+            self.assertEqual(tasks["browser task"]["fetch_strategy"], "scrapling_dynamic")
+            self.assertEqual(tasks["static task"]["fetch_strategy"], "scrapling_standard")
+            self.assertEqual(tasks["generic task"]["fetch_strategy"], "scrapling_adaptive")
+            self.assertEqual(tasks["whmcs task"]["fetch_strategy"], "scrapling_adaptive")
+            self.assertEqual(tasks["firecrawl task"]["fetch_strategy"], "scrapling_stealth")
+            self.assertEqual(tasks["manual task"]["fetch_strategy"], "manual")
+            self.assertEqual(tasks["webhook task"]["fetch_strategy"], "webhook")
+            generic_config = json.loads(tasks["generic task"]["source_config"])
+            whmcs_config = json.loads(tasks["whmcs task"]["source_config"])
+            self.assertEqual(generic_config["extractor"], "generic_pricing_table")
+            self.assertEqual(generic_config["legacy_fetch_strategy"], "generic_pricing_table")
+            self.assertEqual(whmcs_config["extractor"], "whmcs")
+            self.assertEqual(whmcs_config["legacy_fetch_strategy"], "whmcs")
+
+            with app_module.open_connection() as connection:
+                connection.execute(
+                    "UPDATE tasks SET fetch_strategy = ? WHERE name = ?",
+                    ("browser", "manual task"),
+                )
+                connection.commit()
+            app_module.initialize_database()
+            with app_module.open_connection() as connection:
+                strategy = connection.execute(
+                    "SELECT fetch_strategy FROM tasks WHERE name = ?",
+                    ("manual task",),
+                ).fetchone()["fetch_strategy"]
+            self.assertEqual(strategy, "browser")
         finally:
             app_module.DB_PATH = original_db_path
 
@@ -4968,14 +5080,15 @@ class PortalAppTestCase(unittest.TestCase):
             cursor = connection.execute(
                 """
                 INSERT INTO tasks (
-                    name, monitor_url, target_keyword, restock_template, soldout_template,
+                    name, monitor_url, target_keyword, fetch_strategy, restock_template, soldout_template,
                     enabled, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     "Kawasaki",
                     "https://example.com/cart.php?gid=12",
                     "Kawasaki",
+                    "browser",
                     "{name} {stock}",
                     "{name} sold out",
                     1,
@@ -5031,14 +5144,15 @@ class PortalAppTestCase(unittest.TestCase):
             cursor = connection.execute(
                 """
                 INSERT INTO tasks (
-                    name, monitor_url, target_keyword, restock_template, soldout_template,
+                    name, monitor_url, target_keyword, fetch_strategy, restock_template, soldout_template,
                     enabled, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     "Protected",
                     "https://example.com/products",
                     "Protected",
+                    "browser",
                     "{name} {stock}",
                     "{name} sold out",
                     1,

@@ -357,6 +357,17 @@ SCRAPLING_FETCH_STRATEGIES = {
     FETCH_STRATEGY_SCRAPLING_STEALTH,
     FETCH_STRATEGY_SCRAPLING_ADAPTIVE,
 }
+LEGACY_FETCH_STRATEGY_MIGRATIONS = {
+    FETCH_STRATEGY_BROWSER: FETCH_STRATEGY_SCRAPLING_DYNAMIC,
+    FETCH_STRATEGY_STATIC_HTTP: FETCH_STRATEGY_SCRAPLING_STANDARD,
+    FETCH_STRATEGY_GENERIC_PRICING_TABLE: FETCH_STRATEGY_SCRAPLING_ADAPTIVE,
+    FETCH_STRATEGY_WHMCS: FETCH_STRATEGY_SCRAPLING_ADAPTIVE,
+    FETCH_STRATEGY_ADAPTIVE: FETCH_STRATEGY_SCRAPLING_ADAPTIVE,
+    FETCH_STRATEGY_FIRECRAWL: FETCH_STRATEGY_SCRAPLING_STEALTH,
+    FETCH_STRATEGY_FIRECRAWL_THEN_STATIC: FETCH_STRATEGY_SCRAPLING_STEALTH,
+    FETCH_STRATEGY_STATIC_THEN_FIRECRAWL: FETCH_STRATEGY_SCRAPLING_STANDARD,
+    FETCH_STRATEGY_FIRECRAWL_THEN_BROWSER: FETCH_STRATEGY_SCRAPLING_STEALTH,
+}
 EXTERNAL_INPUT_FETCH_STRATEGIES = {FETCH_STRATEGY_MANUAL, FETCH_STRATEGY_WEBHOOK}
 EXTERNAL_INPUT_PENDING_ERROR_KINDS = {"manual_pending", "webhook_pending"}
 CATALOG_DISCOVERY_LOCAL = "local"
@@ -425,6 +436,7 @@ CATALOG_URL_DROP_MARKERS = (
 )
 FIRECRAWL_PROXY_MODES = {"basic", "enhanced", "auto"}
 SENSITIVE_SETTINGS_KEYS = {"firecrawl_api_key"}
+SCRAPLING_FETCH_STRATEGY_MIGRATION_KEY = "scrapling_fetch_strategy_migration_v1"
 STATIC_HTTP_USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
     "Chrome/137.0 Safari/537.36"
@@ -726,7 +738,12 @@ def normalize_fetch_strategy(value: Any) -> str:
     strategy = str(value or "").strip().lower().replace("-", "_")
     if strategy in SUPPORTED_FETCH_STRATEGIES:
         return strategy
-    return FETCH_STRATEGY_BROWSER
+    return DEFAULT_TASK_FETCH_STRATEGY
+
+
+def migrate_legacy_fetch_strategy(value: Any) -> str:
+    strategy = normalize_fetch_strategy(value)
+    return LEGACY_FETCH_STRATEGY_MIGRATIONS.get(strategy, strategy)
 
 
 def is_supported_fetch_strategy(value: Any) -> bool:
@@ -735,7 +752,7 @@ def is_supported_fetch_strategy(value: Any) -> bool:
 
 
 def task_fetch_strategy(task: Any) -> str:
-    return normalize_fetch_strategy(mapping_value(task, "fetch_strategy", FETCH_STRATEGY_BROWSER))
+    return normalize_fetch_strategy(mapping_value(task, "fetch_strategy", DEFAULT_TASK_FETCH_STRATEGY))
 
 
 def normalize_catalog_choice(value: Any, allowed: set[str], default: str) -> str:
@@ -903,6 +920,16 @@ def normalize_source_config_text(value: Any) -> str:
     if not isinstance(parsed, dict):
         return "{}"
     return json.dumps(scrub_source_config(parsed), ensure_ascii=False, sort_keys=True)
+
+
+def parse_source_config(value: Any) -> dict[str, Any]:
+    if isinstance(value, dict):
+        return scrub_source_config(value)
+    try:
+        parsed = json.loads(str(value or "{}"))
+    except json.JSONDecodeError:
+        return {}
+    return scrub_source_config(parsed) if isinstance(parsed, dict) else {}
 
 
 def catalog_item_metadata(raw_payload: Any) -> dict[str, Any]:
@@ -1814,6 +1841,75 @@ def save_settings(connection: sqlite3.Connection, updates: dict[str, str]) -> No
     connection.commit()
 
 
+def migrate_task_fetch_strategies_to_scrapling(connection: sqlite3.Connection) -> int:
+    marker = connection.execute(
+        "SELECT value FROM settings WHERE key = ?",
+        (SCRAPLING_FETCH_STRATEGY_MIGRATION_KEY,),
+    ).fetchone()
+    if marker:
+        return 0
+
+    migrated_count = 0
+    timestamp = now_iso()
+    extractor_legacy_strategies = {
+        FETCH_STRATEGY_GENERIC_PRICING_TABLE,
+        FETCH_STRATEGY_WHMCS,
+    }
+    for legacy_strategy in extractor_legacy_strategies:
+        target_strategy = LEGACY_FETCH_STRATEGY_MIGRATIONS[legacy_strategy]
+        for row in connection.execute(
+            """
+            SELECT id, source_config
+            FROM tasks
+            WHERE fetch_strategy = ?
+            """,
+            (legacy_strategy,),
+        ).fetchall():
+            config = parse_source_config(row["source_config"])
+            config.setdefault("extractor", legacy_strategy)
+            config.setdefault("legacy_fetch_strategy", legacy_strategy)
+            connection.execute(
+                """
+                UPDATE tasks
+                SET fetch_strategy = ?, source_config = ?, updated_at = ?
+                WHERE id = ?
+                """,
+                (target_strategy, normalize_source_config_text(config), timestamp, row["id"]),
+            )
+            migrated_count += 1
+    for legacy_strategy, target_strategy in LEGACY_FETCH_STRATEGY_MIGRATIONS.items():
+        if legacy_strategy in extractor_legacy_strategies:
+            continue
+        cursor = connection.execute(
+            """
+            UPDATE tasks
+            SET fetch_strategy = ?, updated_at = ?
+            WHERE fetch_strategy = ?
+            """,
+            (target_strategy, timestamp, legacy_strategy),
+        )
+        migrated_count += cursor.rowcount if cursor.rowcount is not None else 0
+    cursor = connection.execute(
+        """
+        UPDATE tasks
+        SET fetch_strategy = ?, updated_at = ?
+        WHERE fetch_strategy IS NULL OR TRIM(fetch_strategy) = ''
+        """,
+        (DEFAULT_TASK_FETCH_STRATEGY, timestamp),
+    )
+    migrated_count += cursor.rowcount if cursor.rowcount is not None else 0
+    connection.execute(
+        """
+        INSERT INTO settings (key, value, updated_at)
+        VALUES (?, ?, ?)
+        ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at
+        """,
+        (SCRAPLING_FETCH_STRATEGY_MIGRATION_KEY, timestamp, timestamp),
+    )
+    connection.commit()
+    return migrated_count
+
+
 def initialize_database() -> None:
     with open_connection() as connection:
         connection.executescript(
@@ -1841,7 +1937,7 @@ def initialize_database() -> None:
                 sort_order INTEGER NOT NULL DEFAULT 0,
                 monitor_url TEXT NOT NULL,
                 target_keyword TEXT NOT NULL,
-                fetch_strategy TEXT NOT NULL DEFAULT 'browser',
+                fetch_strategy TEXT NOT NULL DEFAULT 'scrapling_adaptive',
                 source_config TEXT NOT NULL DEFAULT '{}',
                 restock_template TEXT NOT NULL,
                 soldout_template TEXT NOT NULL,
@@ -1950,7 +2046,7 @@ def initialize_database() -> None:
         ensure_column(connection, "tasks", "source_snapshot", "TEXT DEFAULT ''")
         ensure_column(connection, "tasks", "source_last_sync_at", "TEXT")
         ensure_column(connection, "tasks", "message_ids", "TEXT DEFAULT ''")
-        ensure_column(connection, "tasks", "fetch_strategy", "TEXT NOT NULL DEFAULT 'browser'")
+        ensure_column(connection, "tasks", "fetch_strategy", "TEXT NOT NULL DEFAULT 'scrapling_adaptive'")
         ensure_column(connection, "tasks", "source_config", "TEXT NOT NULL DEFAULT '{}'")
         ensure_column(connection, "tasks", "last_fetch_backend", "TEXT DEFAULT ''")
         ensure_column(connection, "tasks", "last_fetch_attempts", "TEXT DEFAULT ''")
@@ -1966,6 +2062,7 @@ def initialize_database() -> None:
         ensure_column(connection, "tasks", "ingest_token_hint", "TEXT DEFAULT ''")
         ensure_column(connection, "merchant_sources", "group_name", "TEXT NOT NULL DEFAULT '默认分组'")
         ensure_column(connection, "task_group_nodes", "sort_order", "INTEGER NOT NULL DEFAULT 0")
+        migrate_task_fetch_strategies_to_scrapling(connection)
 
         existing_admin = connection.execute("SELECT id FROM admins LIMIT 1").fetchone()
         if not existing_admin:
@@ -6432,7 +6529,10 @@ def extract_stock_for_strategy(
     rule_result = extract_stock_by_rule(html_text, target_keyword, task, fetch_result)
     if rule_result is not None:
         return rule_result
-    extractor = EXTRACTOR_REGISTRY.get(normalize_fetch_strategy(strategy), default_stock_extractor)
+    source_config = parse_source_config(mapping_value(task, "source_config", "{}"))
+    configured_extractor = normalize_fetch_strategy(source_config.get("extractor"))
+    extractor_key = configured_extractor if configured_extractor in EXTRACTOR_REGISTRY else normalize_fetch_strategy(strategy)
+    extractor = EXTRACTOR_REGISTRY.get(extractor_key, default_stock_extractor)
     return extractor(html_text, target_keyword, task, fetch_result)
 
 

@@ -22,6 +22,14 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir --upgrade pip setuptools wheel \
     && pip install --no-cache-dir -r requirements.txt
+RUN python - <<'PY'
+import importlib
+
+for module_name in ("scrapling", "scrapling.fetchers", "curl_cffi", "playwright", "patchright"):
+    importlib.import_module(module_name)
+
+print("Scrapling runtime check passed.")
+PY
 
 COPY . .
 RUN mkdir -p /app/data

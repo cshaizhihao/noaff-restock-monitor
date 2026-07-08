@@ -1251,6 +1251,29 @@ setup_python_env() {
   .venv/bin/pip install -r requirements.txt
 }
 
+verify_scrapling_runtime() {
+  cd "$APP_DIR"
+  .venv/bin/python - <<'PY'
+import importlib
+import sys
+
+required = ["scrapling", "scrapling.fetchers", "curl_cffi", "playwright", "patchright"]
+missing = []
+for module_name in required:
+    try:
+        importlib.import_module(module_name)
+    except Exception as exc:
+        missing.append(f"{module_name} ({exc.__class__.__name__})")
+
+if missing:
+    print("Scrapling 采集引擎依赖检测失败：", ", ".join(missing), file=sys.stderr)
+    print("请重新运行安装/升级，或手动执行 .venv/bin/pip install -r requirements.txt。", file=sys.stderr)
+    raise SystemExit(1)
+
+print("Scrapling 采集引擎依赖检测通过。")
+PY
+}
+
 deploy_docker_stack() {
   cd "$APP_DIR"
   ensure_docker_publish_port_available
@@ -2229,6 +2252,25 @@ git checkout "$REPO_REF"
 git pull --ff-only origin "$REPO_REF"
 ${APP_DIR}/.venv/bin/python -m pip install --upgrade pip setuptools wheel
 ${APP_DIR}/.venv/bin/pip install -r requirements.txt
+${APP_DIR}/.venv/bin/python - <<'PY'
+import importlib
+import sys
+
+required = ["scrapling", "scrapling.fetchers", "curl_cffi", "playwright", "patchright"]
+missing = []
+for module_name in required:
+    try:
+        importlib.import_module(module_name)
+    except Exception as exc:
+        missing.append(f"{module_name} ({exc.__class__.__name__})")
+
+if missing:
+    print("Scrapling 采集引擎依赖检测失败：", ", ".join(missing), file=sys.stderr)
+    print("请重新运行安装/升级，或手动执行 .venv/bin/pip install -r requirements.txt。", file=sys.stderr)
+    raise SystemExit(1)
+
+print("Scrapling 采集引擎依赖检测通过。")
+PY
 chown -R "$SERVICE_USER:$SERVICE_USER" "$APP_DIR"
 systemctl restart "$APP_NAME"
 echo "[\$(date '+%Y-%m-%d %H:%M:%S')] 升级完成"
@@ -2618,7 +2660,7 @@ final_summary() {
 }
 
 set_total_steps() {
-  TOTAL_STEPS=10
+  TOTAL_STEPS=11
   bool_is_true "$ENABLE_TLS" && TOTAL_STEPS=$((TOTAL_STEPS + 2))
   [[ "$CERT_MODE" == "dns" ]] && TOTAL_STEPS=$((TOTAL_STEPS + 1))
   bool_is_true "$ORIGIN_LOCKDOWN_TO_CLOUDFLARE" && TOTAL_STEPS=$((TOTAL_STEPS + 1))
@@ -2687,6 +2729,7 @@ main() {
   run_step "安装 noaff 快捷管理命令" write_management_cli
 
   run_step "安装 Python 虚拟环境依赖" setup_python_env
+  run_step "验证 Scrapling 采集引擎" verify_scrapling_runtime
 
   if bool_is_true "$ENABLE_TLS"; then
     run_step "安装 Certbot 证书运行环境" setup_certbot_env

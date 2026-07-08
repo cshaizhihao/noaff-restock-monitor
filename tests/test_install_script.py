@@ -560,7 +560,7 @@ class InstallScriptTestCase(unittest.TestCase):
                 """
             )
         )
-        self.assertIn("steps=10 nginx=false tls=false", output)
+        self.assertIn("steps=11 nginx=false tls=false", output)
 
     def test_native_install_releases_only_noaff_owned_port_before_start(self) -> None:
         script = (ROOT_DIR / "install.sh").read_text(encoding="utf-8")
@@ -761,6 +761,14 @@ class InstallScriptTestCase(unittest.TestCase):
         self.assertIn("SCRAPLING_SESSION_REUSE=true", env_example)
         self.assertIn("SCRAPLING_ADAPTIVE_SELECTOR=true", env_example)
         self.assertIn("scrapling[fetchers]>=0.4,<0.5", requirements)
+        script = (ROOT_DIR / "install.sh").read_text(encoding="utf-8")
+        dockerfile = (ROOT_DIR / "Dockerfile").read_text(encoding="utf-8")
+        self.assertIn("verify_scrapling_runtime", script)
+        self.assertIn('run_step "验证 Scrapling 采集引擎" verify_scrapling_runtime', script)
+        self.assertIn("Scrapling 采集引擎依赖检测通过。", script)
+        self.assertIn("Scrapling 采集引擎依赖检测失败", script)
+        self.assertIn("${APP_DIR}/.venv/bin/python - <<'PY'", script)
+        self.assertIn("Scrapling runtime check passed.", dockerfile)
         self.assertIn("CATALOG_DISCOVERY_STRATEGY=local", env_example)
         self.assertIn("CATALOG_SCRAPE_STRATEGY=scrapling_adaptive", env_example)
         self.assertIn("CATALOG_DEFAULT_FETCH_STRATEGY=scrapling_adaptive", env_example)
