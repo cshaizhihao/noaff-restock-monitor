@@ -513,7 +513,7 @@ bash -n install.sh
 - `manual` / `webhook` 能触发 Telegram send/edit/sold-out 行为。
 - 快照、日志和数据库不泄露 webhook 明文 token。
 - 不添加依赖实时公网商家页面的自动化测试。
-- 本地验证三条命令全部通过。
+- 本地验证命令全部通过：单元测试、Python 编译检查、`static/app.js` 语法检查、`install.sh` 语法检查。
 
 ## 贡献约定
 
