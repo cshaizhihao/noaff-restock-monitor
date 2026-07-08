@@ -500,6 +500,34 @@ class PortalAppTestCase(unittest.TestCase):
         self.assertEqual(invalid_strategy.status_code, 400)
         self.assertIn("采集方式", invalid_strategy.get_json()["message"])
 
+    def test_task_creation_without_fetch_strategy_defaults_to_scrapling_adaptive(self) -> None:
+        _, headers = self.login()
+
+        create = self.client.post(
+            f"{app_module.PORTAL_PATH}/api/tasks",
+            headers=headers,
+            base_url=BASE_URL,
+            json={
+                "name": "Default Strategy VM",
+                "group_name": "Default",
+                "monitor_url": "https://example.com/cart.php?gid=8",
+                "target_keyword": "Default Strategy VM",
+                "restock_template": "<b>{name}</b> {stock}",
+                "soldout_template": "<b>{name}</b> sold out",
+                "enabled": True,
+            },
+        )
+        self.assertEqual(create.status_code, 200)
+        self.assertTrue(create.get_json()["ok"])
+
+        snapshot = self.client.get(
+            f"{app_module.PORTAL_PATH}/api/snapshot",
+            headers=self.browser_headers(),
+            base_url=BASE_URL,
+        )
+        payload = snapshot.get_json()
+        self.assertEqual(payload["tasks"][0]["fetch_strategy"], "scrapling_adaptive")
+
     def test_merchant_import_discovers_products_and_promotes_tasks(self) -> None:
         _, headers = self.login()
         engine = self.app.extensions["monitor_engine"]
@@ -552,6 +580,10 @@ class PortalAppTestCase(unittest.TestCase):
                 "London BGP",
                 engine.get_runtime_settings(),
                 auto_promote=True,
+                catalog_options={
+                    "catalog_scrape_strategy": "browser",
+                    "default_fetch_strategy": "generic_pricing_table",
+                },
             )
         finally:
             engine.catalog_browser = original_browser
@@ -586,6 +618,61 @@ class PortalAppTestCase(unittest.TestCase):
         self.assertEqual(payload["merchant"]["metrics"]["total_items"], 2)
         self.assertEqual(payload["merchant"]["metrics"]["linked_tasks"], 2)
         self.assertTrue(all(item["confidence"] >= 45 for item in payload["merchant"]["items"]))
+
+    def test_catalog_defaults_are_scrapling_first(self) -> None:
+        engine = self.app.extensions["monitor_engine"]
+        options = app_module.normalize_catalog_options({}, engine.get_runtime_settings(), "Default", True)
+
+        self.assertEqual(options["catalog_scrape_strategy"], "scrapling_adaptive")
+        self.assertEqual(options["default_fetch_strategy"], "scrapling_adaptive")
+
+    def test_scrape_catalog_candidate_uses_scrapling_strategy(self) -> None:
+        class FakeScraplingResponse:
+            url = "https://merchant.example.com/products"
+            status = 200
+            html_content = """
+            <html>
+              <body>
+                <article class="product-card">
+                  <h3>Tokyo VPS</h3>
+                  <p>库存 6</p>
+                  <a>Order Now</a>
+                </article>
+              </body>
+            </html>
+            """
+
+        class FakeScraplingClient:
+            def __init__(self) -> None:
+                self.calls: list[tuple[str, str, int]] = []
+
+            def fetch(self, mode: str, url: str, timeout_seconds: int):
+                self.calls.append((mode, url, timeout_seconds))
+                return FakeScraplingResponse()
+
+        class NoBrowser:
+            def fetch_html(self, url: str, timeout_seconds: int) -> str:
+                raise AssertionError("catalog browser should not be used for scrapling catalog scrape")
+
+        client = FakeScraplingClient()
+        engine = self.app.extensions["monitor_engine"]
+        original_selector = engine.fetcher_selector
+        original_browser = engine.catalog_browser
+        try:
+            engine.fetcher_selector = app_module.FetcherSelector(scrapling_client=client)
+            engine.catalog_browser = NoBrowser()
+            result = engine.scrape_catalog_candidate(
+                "https://merchant.example.com/products",
+                {**engine.get_runtime_settings(), **self.scrapling_settings()},
+                {"catalog_scrape_strategy": "scrapling_adaptive", "timeout_seconds": 25},
+            )
+        finally:
+            engine.fetcher_selector = original_selector
+            engine.catalog_browser = original_browser
+
+        self.assertEqual(result.error_kind, "")
+        self.assertIn("Tokyo VPS", result.html)
+        self.assertEqual(client.calls, [("standard", "https://merchant.example.com/products", 25)])
 
     def test_catalog_discovery_scores_products_and_filters_locale_navigation_noise(self) -> None:
         html_text = """
@@ -1366,6 +1453,7 @@ class PortalAppTestCase(unittest.TestCase):
                 engine.get_runtime_settings(),
                 auto_promote=False,
                 catalog_options={
+                    "catalog_scrape_strategy": "browser",
                     "default_fetch_strategy": "generic_pricing_table",
                     "default_extractor": "whmcs",
                     "target_keyword": "HK-CMI",

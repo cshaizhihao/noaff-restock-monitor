@@ -294,7 +294,7 @@
     }
 
     function preferredTaskFetchStrategy() {
-        return "adaptive";
+        return "scrapling_adaptive";
     }
 
     function stockResultLabel(stock, state = "") {
@@ -2676,8 +2676,8 @@
             source_name: els.merchantSourceName.value.trim(),
             group_name: groupName,
             catalog_discovery_strategy: els.merchantDiscoveryStrategy?.value || "local",
-            catalog_scrape_strategy: els.merchantScrapeStrategy?.value || "browser",
-            default_fetch_strategy: els.merchantDefaultFetchStrategy?.value || "browser",
+            catalog_scrape_strategy: els.merchantScrapeStrategy?.value || "scrapling_adaptive",
+            default_fetch_strategy: els.merchantDefaultFetchStrategy?.value || "scrapling_adaptive",
             default_extractor: els.merchantDefaultExtractor?.value || "generic_pricing_table",
             search_keyword: els.merchantSearchKeyword?.value.trim() || "",
             target_keyword: els.merchantTargetKeyword?.value.trim() || "",

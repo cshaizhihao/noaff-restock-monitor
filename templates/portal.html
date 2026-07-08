@@ -354,21 +354,29 @@
                                                 <div>
                                                     <label for="merchant-scrape-strategy" class="form-label">抓取方式</label>
                                                     <select id="merchant-scrape-strategy" class="input-dark">
-                                                        <option value="firecrawl">Firecrawl Scrape</option>
+                                                        <option value="scrapling_adaptive">Scrapling 自适应</option>
+                                                        <option value="scrapling_standard">Scrapling 标准</option>
+                                                        <option value="scrapling_dynamic">Scrapling 增强</option>
+                                                        <option value="scrapling_stealth">Scrapling 高兼容</option>
                                                         <option value="adaptive">自适应 fallback</option>
                                                         <option value="browser">浏览器渲染</option>
                                                         <option value="static_http">静态 HTTP</option>
+                                                        <option value="firecrawl">Firecrawl 外部兜底</option>
                                                     </select>
                                                 </div>
                                                 <div>
                                                     <label for="merchant-default-fetch-strategy" class="form-label">生成任务采集方式</label>
                                                     <select id="merchant-default-fetch-strategy" class="input-dark">
-                                                        <option value="firecrawl">Firecrawl</option>
+                                                        <option value="scrapling_adaptive">Scrapling 自适应</option>
+                                                        <option value="scrapling_standard">Scrapling 标准</option>
+                                                        <option value="scrapling_dynamic">Scrapling 增强</option>
+                                                        <option value="scrapling_stealth">Scrapling 高兼容</option>
                                                         <option value="adaptive">自适应 fallback</option>
                                                         <option value="generic_pricing_table">通用价格表</option>
                                                         <option value="whmcs">WHMCS</option>
                                                         <option value="browser">浏览器渲染</option>
                                                         <option value="static_http">静态 HTTP</option>
+                                                        <option value="firecrawl">Firecrawl 外部兜底</option>
                                                     </select>
                                                 </div>
                                                 <div>
@@ -1103,11 +1111,11 @@
                         <div>
                             <label for="task-fetch-strategy" class="form-label">采集方式</label>
                             <select id="task-fetch-strategy" class="input-dark">
-                                <option value="adaptive">自适应低成本（推荐）</option>
+                                <option value="scrapling_adaptive">Scrapling 自适应（推荐）</option>
                                 <option value="scrapling_standard">Scrapling 标准</option>
                                 <option value="scrapling_dynamic">Scrapling 增强</option>
                                 <option value="scrapling_stealth">Scrapling 高兼容</option>
-                                <option value="scrapling_adaptive">Scrapling 自适应</option>
+                                <option value="adaptive">旧版自适应低成本</option>
                                 <option value="generic_pricing_table">通用价格页</option>
                                 <option value="whmcs">WHMCS</option>
                                 <option value="browser">浏览器渲染</option>
@@ -1124,7 +1132,7 @@
                     <div id="task-strategy-help" class="task-strategy-help" aria-live="polite">
                         <div>
                             <p class="task-strategy-title">建议采集方式</p>
-                            <p id="task-strategy-summary">默认使用低成本自适应采集。Firecrawl 属于外部付费兜底，默认不参与定时监控。</p>
+                            <p id="task-strategy-summary">默认使用 Scrapling 自适应采集。Firecrawl 属于外部付费兜底，默认不参与定时监控。</p>
                         </div>
                         <div id="task-webhook-hint" class="task-strategy-pill hidden">Webhook 模式才会显示 Token 操作</div>
                     </div>

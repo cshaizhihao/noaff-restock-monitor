@@ -145,8 +145,8 @@ DEFAULT_SCRAPLING_MAX_CONCURRENCY_STEALTH = int(os.getenv("SCRAPLING_MAX_CONCURR
 DEFAULT_SCRAPLING_SESSION_REUSE = env_bool("SCRAPLING_SESSION_REUSE", True)
 DEFAULT_SCRAPLING_ADAPTIVE_SELECTOR = env_bool("SCRAPLING_ADAPTIVE_SELECTOR", True)
 DEFAULT_CATALOG_DISCOVERY_STRATEGY = os.getenv("CATALOG_DISCOVERY_STRATEGY", "local").strip().lower() or "local"
-DEFAULT_CATALOG_SCRAPE_STRATEGY = os.getenv("CATALOG_SCRAPE_STRATEGY", "browser").strip().lower() or "browser"
-DEFAULT_CATALOG_FETCH_STRATEGY = os.getenv("CATALOG_DEFAULT_FETCH_STRATEGY", "browser").strip().lower() or "browser"
+DEFAULT_CATALOG_SCRAPE_STRATEGY = os.getenv("CATALOG_SCRAPE_STRATEGY", "scrapling_adaptive").strip().lower() or "scrapling_adaptive"
+DEFAULT_CATALOG_FETCH_STRATEGY = os.getenv("CATALOG_DEFAULT_FETCH_STRATEGY", "scrapling_adaptive").strip().lower() or "scrapling_adaptive"
 DEFAULT_CATALOG_EXTRACTOR = os.getenv("CATALOG_DEFAULT_EXTRACTOR", "generic_pricing_table").strip().lower() or "generic_pricing_table"
 ENABLE_PROXY_FIX = env_bool("ENABLE_PROXY_FIX", False)
 PROXY_FIX_X_FOR = int(os.getenv("PROXY_FIX_X_FOR", "1"))
@@ -315,6 +315,7 @@ FETCH_STRATEGY_SCRAPLING_STEALTH = "scrapling_stealth"
 FETCH_STRATEGY_SCRAPLING_ADAPTIVE = "scrapling_adaptive"
 FETCH_STRATEGY_MANUAL = "manual"
 FETCH_STRATEGY_WEBHOOK = "webhook"
+DEFAULT_TASK_FETCH_STRATEGY = FETCH_STRATEGY_SCRAPLING_ADAPTIVE
 SUPPORTED_FETCH_STRATEGIES = {
     FETCH_STRATEGY_BROWSER,
     FETCH_STRATEGY_STATIC_HTTP,
@@ -370,6 +371,10 @@ CATALOG_SCRAPE_STRATEGIES = {
     CATALOG_SCRAPE_BROWSER,
     CATALOG_SCRAPE_FIRECRAWL,
     CATALOG_SCRAPE_ADAPTIVE,
+    FETCH_STRATEGY_SCRAPLING_STANDARD,
+    FETCH_STRATEGY_SCRAPLING_DYNAMIC,
+    FETCH_STRATEGY_SCRAPLING_STEALTH,
+    FETCH_STRATEGY_SCRAPLING_ADAPTIVE,
 }
 CATALOG_EXTRACTOR_GENERIC = FETCH_STRATEGY_GENERIC_PRICING_TABLE
 CATALOG_EXTRACTOR_WHMCS = FETCH_STRATEGY_WHMCS
@@ -816,10 +821,10 @@ def normalize_catalog_options(
         "catalog_scrape_strategy": normalize_catalog_choice(
             payload.get("catalog_scrape_strategy") or payload.get("scrape_strategy") or settings_payload.get("catalog_scrape_strategy"),
             CATALOG_SCRAPE_STRATEGIES,
-            CATALOG_SCRAPE_BROWSER,
+            FETCH_STRATEGY_SCRAPLING_ADAPTIVE,
         ),
         "default_fetch_strategy": normalize_fetch_strategy(
-            payload.get("default_fetch_strategy") or settings_payload.get("catalog_default_fetch_strategy") or FETCH_STRATEGY_BROWSER
+            payload.get("default_fetch_strategy") or settings_payload.get("catalog_default_fetch_strategy") or DEFAULT_TASK_FETCH_STRATEGY
         ),
         "default_extractor": normalize_catalog_choice(
             payload.get("default_extractor") or settings_payload.get("catalog_default_extractor"),
@@ -2068,7 +2073,7 @@ def to_merchant_item_payload(
     backend_used = str(raw_data.get("catalog_backend") or "")
     discovery_source = str(raw_data.get("catalog_discovery_source") or "")
     extractor = str(raw_data.get("extractor") or "")
-    fetch_strategy = normalize_fetch_strategy(raw_data.get("fetch_strategy") or "")
+    fetch_strategy = normalize_fetch_strategy(raw_data.get("fetch_strategy") or DEFAULT_TASK_FETCH_STRATEGY)
     signals = raw_data.get("signals") if isinstance(raw_data.get("signals"), list) else []
     return {
         "id": row["id"],
@@ -2176,7 +2181,7 @@ def build_task_insert_values(payload: dict[str, Any], source_fields: dict[str, A
         int(payload.get("sort_order") or 0),
         str(payload["monitor_url"]).strip(),
         str(payload["target_keyword"]).strip(),
-        normalize_fetch_strategy(payload.get("fetch_strategy")),
+        normalize_fetch_strategy(payload.get("fetch_strategy") or DEFAULT_TASK_FETCH_STRATEGY),
         normalize_source_config_text(payload.get("source_config", {})),
         str(payload["restock_template"]).strip() or DEFAULT_RESTOCK_TEMPLATE,
         str(payload["soldout_template"]).strip() or DEFAULT_SOLDOUT_TEMPLATE,
@@ -2451,7 +2456,7 @@ def create_task_from_catalog_item(
         "target_keyword": item["keyword"],
         "restock_template": DEFAULT_RESTOCK_TEMPLATE,
         "soldout_template": DEFAULT_SOLDOUT_TEMPLATE,
-        "fetch_strategy": item.get("fetch_strategy", FETCH_STRATEGY_BROWSER),
+        "fetch_strategy": item.get("fetch_strategy", DEFAULT_TASK_FETCH_STRATEGY),
         "source_config": item.get("source_config", {}),
         "button_1_text": "",
         "button_1_url": "",
@@ -2512,7 +2517,7 @@ def merchant_item_to_catalog_payload(item: sqlite3.Row) -> dict[str, Any]:
         "raw_snippet": item["raw_snippet"] or "",
         "raw_payload": item["raw_payload"] or "",
         "item_state": item["item_state"],
-        "fetch_strategy": normalize_fetch_strategy(metadata.get("fetch_strategy") or FETCH_STRATEGY_BROWSER),
+        "fetch_strategy": normalize_fetch_strategy(metadata.get("fetch_strategy") or DEFAULT_TASK_FETCH_STRATEGY),
         "source_config": source_config,
     }
 
@@ -4093,12 +4098,26 @@ class MonitoringEngine:
         raise CatalogBrowserConnectionError(last_error or "商家页面抓取失败。")
 
     def scrape_catalog_candidate(self, candidate_url: str, settings_payload: dict[str, Any], options: dict[str, Any]) -> FetchResult:
-        strategy = options.get("catalog_scrape_strategy") or CATALOG_SCRAPE_BROWSER
+        strategy = options.get("catalog_scrape_strategy") or FETCH_STRATEGY_SCRAPLING_ADAPTIVE
         timeout_seconds = int(options.get("timeout_seconds") or settings_payload.get("request_timeout_seconds") or DEFAULT_TIMEOUT_SECONDS)
         if strategy == CATALOG_SCRAPE_STATIC_HTTP:
             return self.fetcher_selector.static_http_fetcher.fetch(candidate_url, timeout_seconds)
         if strategy == CATALOG_SCRAPE_FIRECRAWL:
             return FirecrawlCatalogProvider(settings_payload).scrape(candidate_url)
+        if strategy in SCRAPLING_FETCH_STRATEGIES:
+            pipeline_result = self.fetcher_selector.fetch_pipeline(
+                {"monitor_url": candidate_url, "fetch_strategy": strategy},
+                self.catalog_browser,
+                settings_payload,
+                context="catalog",
+            )
+            return FetchResult(
+                html=pipeline_result.html,
+                final_url=pipeline_result.final_url or candidate_url,
+                status_code=pipeline_result.status_code,
+                error_kind=pipeline_result.error_kind,
+                detail=pipeline_result.detail or fetch_attempts_summary(pipeline_result.attempts),
+            )
         if strategy == CATALOG_SCRAPE_ADAPTIVE:
             pipeline_result = self.fetcher_selector.fetch_pipeline(
                 {"monitor_url": candidate_url, "fetch_strategy": FETCH_STRATEGY_ADAPTIVE},
@@ -4308,7 +4327,7 @@ class MonitoringEngine:
                 candidate.update(candidate_status)
                 continue
 
-            backend_used = options.get("catalog_scrape_strategy") or CATALOG_SCRAPE_BROWSER
+            backend_used = options.get("catalog_scrape_strategy") or FETCH_STRATEGY_SCRAPLING_ADAPTIVE
             if fetch_result.error_kind:
                 candidate_status.update(
                     {
@@ -6371,7 +6390,7 @@ def prepare_catalog_item(item: dict[str, Any], source_url: str, page_url: str, d
     prepared = dict(item)
     prepared["monitor_url"] = normalize_candidate_url(page_url, prepared.get("monitor_url", "")) or page_url
     prepared["item_url"] = normalize_candidate_url(page_url, prepared.get("item_url", "")) or prepared["monitor_url"]
-    prepared["fetch_strategy"] = options.get("default_fetch_strategy") or FETCH_STRATEGY_BROWSER
+    prepared["fetch_strategy"] = options.get("default_fetch_strategy") or DEFAULT_TASK_FETCH_STRATEGY
     prepared["source_config"] = {
         "extractor": options.get("default_extractor") or CATALOG_EXTRACTOR_GENERIC,
         "catalog_backend": backend_used,
@@ -6407,7 +6426,7 @@ def catalog_item_response_payload(item: dict[str, Any], include_raw: bool = True
         "price_hint": str(item.get("price_hint") or ""),
         "stock_hint": str(item.get("stock_hint") or ""),
         "restock_hint": str(item.get("restock_hint") or ""),
-        "fetch_strategy": normalize_fetch_strategy(item.get("fetch_strategy") or FETCH_STRATEGY_BROWSER),
+        "fetch_strategy": normalize_fetch_strategy(item.get("fetch_strategy") or DEFAULT_TASK_FETCH_STRATEGY),
         "source_config": source_config,
         "backend_used": str(source_config.get("catalog_backend") or item.get("backend_used") or ""),
         "discovery_source": str(source_config.get("catalog_discovery_source") or item.get("discovery_source") or ""),
@@ -7141,7 +7160,7 @@ def make_app() -> Flask:
                     normalize_task_subgroup(payload.get("subgroup_name")),
                     str(payload["monitor_url"]).strip(),
                     str(payload["target_keyword"]).strip(),
-                    normalize_fetch_strategy(payload.get("fetch_strategy")),
+                    normalize_fetch_strategy(payload.get("fetch_strategy") or DEFAULT_TASK_FETCH_STRATEGY),
                     normalize_source_config_text(payload.get("source_config", {})),
                     str(payload["restock_template"]).strip() or DEFAULT_RESTOCK_TEMPLATE,
                     str(payload["soldout_template"]).strip() or DEFAULT_SOLDOUT_TEMPLATE,
