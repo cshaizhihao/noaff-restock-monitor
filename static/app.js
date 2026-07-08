@@ -130,6 +130,7 @@
         merchantAutoPromote: document.getElementById("merchant-auto-promote"),
         merchantFirecrawlState: document.getElementById("merchant-firecrawl-state"),
         merchantStepper: document.getElementById("merchant-stepper"),
+        merchantWizardSummary: document.getElementById("merchant-wizard-summary"),
         merchantReviewSummary: document.getElementById("merchant-review-summary"),
         merchantImportButton: document.getElementById("merchant-import-button"),
         merchantImportButtonLabel: document.getElementById("merchant-import-button-label"),
@@ -201,6 +202,7 @@
         taskButton2Url: document.getElementById("task-button-2-url"),
         taskEnabled: document.getElementById("task-enabled"),
         taskCancelButton: document.getElementById("task-cancel-button"),
+        taskWizardSummary: document.getElementById("task-wizard-summary"),
         taskStepPrevButton: document.getElementById("task-step-prev-button"),
         taskStepNextButton: document.getElementById("task-step-next-button"),
         taskSubmitButton: document.getElementById("task-submit-button"),
@@ -225,6 +227,7 @@
         taskMoveSubgroup: document.getElementById("task-move-subgroup"),
         taskMoveSubgroupCustomWrap: document.getElementById("task-move-subgroup-custom-wrap"),
         taskMoveSubgroupCustom: document.getElementById("task-move-subgroup-custom"),
+        taskMovePreview: document.getElementById("task-move-preview"),
         taskMoveCancel: document.getElementById("task-move-cancel"),
         taskMoveSubmit: document.getElementById("task-move-submit")
     };
@@ -248,7 +251,7 @@
 
     function normalizeFetchStrategy(value) {
         const strategy = String(value || "").trim().toLowerCase().replaceAll("-", "_");
-        return strategy || "browser";
+        return strategy || "scrapling_adaptive";
     }
 
     function fetchStrategyLabel(value) {
@@ -268,7 +271,7 @@
             case "whmcs":
                 return "WHMCS";
             case "firecrawl":
-                return "Firecrawl 外部兜底";
+                return "外部兜底";
             case "firecrawl_then_static":
                 return "外部兜底 → 静态";
             case "static_then_firecrawl":
@@ -289,13 +292,13 @@
     function fetchStrategyHelp(value) {
         switch (normalizeFetchStrategy(value)) {
             case "scrapling_standard":
-                return "Scrapling 标准模式：适合普通公开 IDC / WHMCS 页面，成本最低，作为后续主采集方向。";
+                return "标准模式：轻量抓取，适合大多数公开 IDC / WHMCS 页面。";
             case "scrapling_dynamic":
-                return "Scrapling 增强模式：适合 JS 渲染页面，会启动浏览器，资源消耗高于标准模式。";
+                return "增强模式：适合需要渲染的页面，资源消耗高于标准模式。";
             case "scrapling_stealth":
-                return "Scrapling 高兼容模式：适合复杂页面，会启用 Scrapling 的 Cloudflare challenge 处理能力。";
+                return "高兼容模式：适合复杂页面，低并发运行，优先用于手动检测或少量重点商品。";
             case "scrapling_adaptive":
-                return "Scrapling 自适应：按标准、增强、高兼容逐步尝试，复杂页面不会提前判定为受保护来源。";
+                return "自适应模式：先轻量抓取，必要时再升级到增强/高兼容，是新增任务默认选择。";
             case "firecrawl":
                 return "外部付费兜底服务，会消耗 Firecrawl credits；默认不用于定时监控，只建议手动检测、商品入库或诊断时使用。";
             case "firecrawl_then_static":
@@ -319,7 +322,7 @@
             case "webhook":
                 return "由外部系统通过 Webhook 推送库存状态。只有 Webhook 任务才会显示 Token 重置操作。";
             default:
-                return "选择一种采集方式后，系统会按该策略抓取并交给解析器判断库存。";
+                return "兼容旧任务的采集方式。新任务建议使用 Scrapling 自适应。";
         }
     }
 
@@ -340,6 +343,7 @@
             els.taskFetchStrategy.value = strategy;
         }
         updateTaskStrategyUi();
+        updateTaskWizardSummary();
     }
 
     function taskStepIndex(step) {
@@ -370,12 +374,76 @@
         const saveVisible = currentIndex === taskStepOrder.length - 1;
         els.taskSubmitButton?.classList.toggle("hidden", !saveVisible);
         els.taskSaveCheckButton?.classList.toggle("hidden", !saveVisible);
+        updateTaskWizardSummary();
+    }
+
+    function validateTaskStep(step) {
+        if (step === "basic") {
+            const fields = [els.taskName, els.taskUrl, els.taskKeyword];
+            for (const field of fields) {
+                if (field && !field.checkValidity()) {
+                    field.reportValidity();
+                    return false;
+                }
+            }
+            if (!readTaskGroupValue()) {
+                showToast("请填写主分组。", "error");
+                els.taskGroupCustom?.focus();
+                return false;
+            }
+            if (!readTaskSubgroupValue()) {
+                showToast("请填写子分组。", "error");
+                els.taskSubgroupCustom?.focus();
+                return false;
+            }
+        }
+        if (step === "strategy" && !els.taskFetchStrategy?.value) {
+            showToast("请选择采集模式。", "error");
+            return false;
+        }
+        if (step === "notify") {
+            const fields = [els.taskRestock, els.taskSoldout];
+            for (const field of fields) {
+                if (field && !field.checkValidity()) {
+                    field.reportValidity();
+                    return false;
+                }
+            }
+        }
+        return true;
+    }
+
+    function requestTaskFormStep(step) {
+        const currentIndex = taskStepIndex(taskFormStep);
+        const nextIndex = taskStepIndex(step);
+        if (nextIndex > currentIndex) {
+            for (let index = currentIndex; index < nextIndex; index += 1) {
+                if (!validateTaskStep(taskStepOrder[index])) {
+                    return;
+                }
+            }
+        }
+        setTaskFormStep(taskStepOrder[nextIndex]);
     }
 
     function moveTaskFormStep(delta) {
         const currentIndex = taskStepIndex(taskFormStep);
         const nextIndex = Math.max(0, Math.min(taskStepOrder.length - 1, currentIndex + delta));
-        setTaskFormStep(taskStepOrder[nextIndex]);
+        requestTaskFormStep(taskStepOrder[nextIndex]);
+    }
+
+    function updateTaskWizardSummary() {
+        if (!els.taskWizardSummary) {
+            return;
+        }
+        const name = String(els.taskName?.value || "").trim() || "未填写商品";
+        const group = formatTaskMoveDestination(readTaskGroupValue(), readTaskSubgroupValue());
+        const strategy = fetchStrategyLabel(els.taskFetchStrategy?.value || preferredTaskFetchStrategy());
+        els.taskWizardSummary.innerHTML = `
+            <span title="${escapeHtml(name)}">${escapeHtml(name)}</span>
+            <span title="${escapeHtml(group)}">${escapeHtml(group)}</span>
+            <span>${escapeHtml(strategy)}</span>
+        `;
     }
 
     function updateTaskStrategyUi() {
@@ -560,13 +628,13 @@
         setOptionAvailability(els.merchantDefaultFetchStrategy, ["firecrawl"], enabled);
         setOptionAvailability(els.merchantDefaultExtractor, ["firecrawl_product_hint"], enabled);
         resetSelectIfDisabled(els.merchantDiscoveryStrategy, "local");
-        resetSelectIfDisabled(els.merchantScrapeStrategy, "browser");
-        resetSelectIfDisabled(els.merchantDefaultFetchStrategy, "browser");
+        resetSelectIfDisabled(els.merchantScrapeStrategy, "scrapling_adaptive");
+        resetSelectIfDisabled(els.merchantDefaultFetchStrategy, "scrapling_adaptive");
         resetSelectIfDisabled(els.merchantDefaultExtractor, "generic_pricing_table");
         if (els.merchantFirecrawlState) {
             els.merchantFirecrawlState.textContent = enabled
-                ? "Firecrawl 已启用，可用于 Map、Scrape 和商品提示解析。"
-                : "Firecrawl 未启用，相关选项已锁定；可在系统设置 > Firecrawl 外部兜底中开启。";
+                ? "外部兜底已启用，可用于 Map、Scrape 和商品提示解析。"
+                : "外部兜底未启用，相关选项已锁定；可在系统设置 > 外部兜底中开启。";
         }
         renderMerchantReviewSummary();
     }
@@ -621,6 +689,20 @@
             .join("");
     }
 
+    function updateMerchantWizardSummary() {
+        if (!els.merchantWizardSummary) {
+            return;
+        }
+        const sourceUrl = String(els.merchantSourceUrl?.value || "").trim() || "未填写来源";
+        const strategy = selectOptionLabel(els.merchantScrapeStrategy) || "Scrapling 自适应";
+        const keyword = String(els.merchantTargetKeyword?.value || "").trim() || "不限制关键词";
+        els.merchantWizardSummary.innerHTML = `
+            <span title="${escapeHtml(sourceUrl)}">${escapeHtml(sourceUrl)}</span>
+            <span>${escapeHtml(strategy)}</span>
+            <span title="${escapeHtml(keyword)}">${escapeHtml(keyword)}</span>
+        `;
+    }
+
     function updateMerchantStepCounts(metrics = {}) {
         if (els.merchantStepSourceCount) {
             els.merchantStepSourceCount.textContent = metrics.total_sources ?? 0;
@@ -642,16 +724,63 @@
             panel.classList.toggle("hidden", panel.dataset.merchantStepPanel !== normalizedStep);
         });
         renderMerchantReviewSummary();
+        updateMerchantWizardSummary();
         if (focusPanel) {
             const panel = document.querySelector(`[data-merchant-step-panel="${normalizedStep}"]`);
             panel?.scrollIntoView({ block: "nearest", behavior: "smooth" });
         }
     }
 
+    function validateMerchantStep(step) {
+        if (step === "source") {
+            if (els.merchantSourceUrl && !els.merchantSourceUrl.checkValidity()) {
+                els.merchantSourceUrl.reportValidity();
+                return false;
+            }
+            if (!readMerchantGroupValue()) {
+                showToast("请填写默认分组。", "error");
+                els.merchantGroupCustom?.focus();
+                return false;
+            }
+        }
+        if (step === "sources" && !hasMerchantPreviewSources()) {
+            showToast("请先在执行步骤发现候选 URL。", "error");
+            setMerchantStep("review", true);
+            return false;
+        }
+        if (step === "items" && !hasMerchantPreviewItems()) {
+            showToast("请先抓取选中的候选 URL。", "error");
+            setMerchantStep("sources", true);
+            return false;
+        }
+        return true;
+    }
+
+    function requestMerchantStep(step, focusPanel = true) {
+        const currentIndex = merchantStepOrder.indexOf(merchantActiveStep);
+        const nextIndex = merchantStepOrder.indexOf(step);
+        if (nextIndex < 0) {
+            setMerchantStep("source", focusPanel);
+            return;
+        }
+        if (step === "recovery") {
+            setMerchantStep(step, focusPanel);
+            return;
+        }
+        if (nextIndex > currentIndex) {
+            for (let index = currentIndex; index < nextIndex; index += 1) {
+                if (!validateMerchantStep(merchantStepOrder[index])) {
+                    return;
+                }
+            }
+        }
+        setMerchantStep(merchantStepOrder[nextIndex], focusPanel);
+    }
+
     function moveMerchantStep(delta) {
         const currentIndex = merchantStepOrder.indexOf(merchantActiveStep);
         const nextIndex = Math.max(0, Math.min(merchantStepOrder.length - 1, currentIndex + delta));
-        setMerchantStep(merchantStepOrder[nextIndex], true);
+        requestMerchantStep(merchantStepOrder[nextIndex], true);
     }
 
     function normalizePreviewResult(result = {}) {
@@ -1333,6 +1462,28 @@
         return normalizeTaskSubgroup(els.taskMoveSubgroup.value);
     }
 
+    function formatTaskMoveDestination(groupName, subgroupName) {
+        const normalizedGroup = normalizeTaskGroup(groupName);
+        const normalizedSubgroup = normalizeTaskSubgroup(subgroupName);
+        if (normalizedSubgroup === defaultTaskSubgroup) {
+            return normalizedGroup;
+        }
+        return `${normalizedGroup} / ${normalizedSubgroup}`;
+    }
+
+    function updateTaskMovePreview() {
+        if (!els.taskMovePreview) {
+            return;
+        }
+        const targetGroup = readTaskMoveGroupValue();
+        const targetSubgroup = readTaskMoveSubgroupValue();
+        const validTarget = targetGroup && targetSubgroup;
+        els.taskMovePreview.textContent = validTarget
+            ? `目标位置：${formatTaskMoveDestination(targetGroup, targetSubgroup)}`
+            : "目标位置：请选择或输入完整分组";
+        els.taskMovePreview.classList.toggle("is-invalid", !validTarget);
+    }
+
     function splitTelegramChatIds(value) {
         return String(value ?? "")
             .split(/\r?\n/)
@@ -1950,9 +2101,18 @@
     function renderSystem(system) {
         currentSystem = system || null;
         const lineBreak = String.fromCharCode(10);
-        els.systemVersion.textContent = system.version || "-";
-        els.systemBranch.textContent = system.branch || "-";
-        els.upgradeServiceState.textContent = system.upgrade_state || (system.upgrade_supported ? "\u53ef\u7528" : "\u672a\u5b89\u88c5");
+        if (!els.upgradeButton) {
+            return;
+        }
+        if (els.systemVersion) {
+            els.systemVersion.textContent = system.version || "-";
+        }
+        if (els.systemBranch) {
+            els.systemBranch.textContent = system.branch || "-";
+        }
+        if (els.upgradeServiceState) {
+            els.upgradeServiceState.textContent = system.upgrade_state || (system.upgrade_supported ? "\u53ef\u7528" : "\u672a\u5b89\u88c5");
+        }
         const mode = system.upgrade_mode || (system.upgrade_supported ? "panel" : "unsupported");
         if (mode === "panel") {
             els.upgradeButton.disabled = false;
@@ -2457,7 +2617,7 @@
             const webhookMeta = webhookMetaText(task);
             const normalizedStrategy = normalizeFetchStrategy(task.fetch_strategy);
             const attemptMeta = fetchAttemptMeta(task);
-            const rowClass = animateCards ? "task-row reveal" : "task-row";
+            const rowClass = animateCards ? "task-row task-product-card reveal" : "task-row task-product-card";
             const modeActions = (() => {
                 if (normalizedStrategy === "manual") {
                     return `
@@ -2499,22 +2659,24 @@
                         </label>
                     </div>
 
-                    <p class="task-row-url font-mono" title="${escapeHtml(task.monitor_url)}" data-task-url>${escapeHtml(task.monitor_url)}</p>
-                    ${task.source_source_name ? `<p class="task-row-source font-mono" data-task-source>来源：${escapeHtml(task.source_source_name)}${task.source_item_url ? ` · ${escapeHtml(task.source_item_url)}` : ""}</p>` : '<p class="task-row-source hidden font-mono" data-task-source></p>'}
+                    <div class="task-card-body">
+                        <p class="task-row-url font-mono" title="${escapeHtml(task.monitor_url)}" data-task-url>${escapeHtml(task.monitor_url)}</p>
+                        ${task.source_source_name ? `<p class="task-row-source font-mono" data-task-source>来源：${escapeHtml(task.source_source_name)}${task.source_item_url ? ` · ${escapeHtml(task.source_item_url)}` : ""}</p>` : '<p class="task-row-source hidden font-mono" data-task-source></p>'}
 
-                    <div class="task-card-tags">
-                        <span class="status-badge ${statusClass}" data-task-status>${statusText}</span>
-                        <span class="task-tag keyword-chip" data-task-keyword>
-                            <svg class="mr-1.5 h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/>
-                            </svg>
-                            <span data-task-keyword-text>${escapeHtml(task.target_keyword || "未设置关键词")}</span>
-                        </span>
-                        <span class="task-tag" data-task-fetch-strategy>${escapeHtml(fetchStrategyLabel(task.fetch_strategy))}</span>
-                        <span class="task-tag task-row-stock font-mono">
-                            库存:
-                            <strong class="${task.last_stock > 0 ? "text-emerald-400" : "text-slate-300"} font-bold" data-task-stock>${escapeHtml(stockText)}</strong>
-                        </span>
+                        <div class="task-card-tags">
+                            <span class="status-badge ${statusClass}" data-task-status>${statusText}</span>
+                            <span class="task-tag keyword-chip" data-task-keyword>
+                                <svg class="mr-1.5 h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/>
+                                </svg>
+                                <span data-task-keyword-text>${escapeHtml(task.target_keyword || "未设置关键词")}</span>
+                            </span>
+                            <span class="task-tag" data-task-fetch-strategy>${escapeHtml(fetchStrategyLabel(task.fetch_strategy))}</span>
+                            <span class="task-tag task-row-stock font-mono">
+                                库存:
+                                <strong class="${task.last_stock > 0 ? "text-emerald-400" : "text-slate-300"} font-bold" data-task-stock>${escapeHtml(stockText)}</strong>
+                            </span>
+                        </div>
                     </div>
 
                     <div class="task-row-log terminal-box ${task.last_error ? "" : "opacity-95"}" data-task-terminal>
@@ -2530,7 +2692,7 @@
                     </div>
 
                     <div class="task-actions">
-                        <div class="action-group">
+                        <div class="action-group task-secondary-actions">
                             <button type="button" class="icon-button !h-9 !w-9" title="${escapeHtml(actionLabel)}" aria-label="${escapeHtml(actionLabel)}" data-action="toggle" data-task-toggle>
                                 <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>
@@ -2552,7 +2714,7 @@
                                 </svg>
                             </button>
                         </div>
-                        <div class="action-group">
+                        <div class="action-group task-primary-actions">
                             ${modeActions}
                         </div>
                     </div>
@@ -3309,6 +3471,7 @@
         setTaskMoveGroupSelection(defaultGroup, [defaultGroup]);
         renderTaskMoveSubgroupOptions(defaultGroup, [defaultSubgroup]);
         setTaskMoveSubgroupSelection(defaultGroup, defaultSubgroup, [defaultSubgroup]);
+        updateTaskMovePreview();
         els.taskMoveModal?.classList.remove("hidden");
         document.body.style.overflow = "hidden";
         window.setTimeout(() => els.taskMoveGroup?.focus(), 40);
@@ -4010,12 +4173,14 @@
         updateGroupVisibility(els.taskGroup, els.taskGroupCustomWrap, els.taskGroupCustom);
         const selectedGroup = readTaskGroupValue() || defaultTaskGroup;
         renderTaskSubgroupOptions(selectedGroup);
+        updateTaskWizardSummary();
         if (els.taskGroup?.value === "__custom__") {
             window.setTimeout(() => els.taskGroupCustom?.focus(), 0);
         }
     });
     els.taskSubgroup?.addEventListener("change", () => {
         updateGroupVisibility(els.taskSubgroup, els.taskSubgroupCustomWrap, els.taskSubgroupCustom);
+        updateTaskWizardSummary();
         if (els.taskSubgroup?.value === "__custom__") {
             window.setTimeout(() => els.taskSubgroupCustom?.focus(), 0);
         }
@@ -4024,16 +4189,21 @@
         updateGroupVisibility(els.taskMoveGroup, els.taskMoveGroupCustomWrap, els.taskMoveGroupCustom);
         const selectedGroup = readTaskMoveGroupValue() || defaultTaskGroup;
         renderTaskMoveSubgroupOptions(selectedGroup);
+        setTaskMoveSubgroupSelection(selectedGroup, defaultTaskSubgroup, [defaultTaskSubgroup]);
+        updateTaskMovePreview();
         if (els.taskMoveGroup?.value === "__custom__") {
             window.setTimeout(() => els.taskMoveGroupCustom?.focus(), 0);
         }
     });
     els.taskMoveSubgroup?.addEventListener("change", () => {
         updateGroupVisibility(els.taskMoveSubgroup, els.taskMoveSubgroupCustomWrap, els.taskMoveSubgroupCustom);
+        updateTaskMovePreview();
         if (els.taskMoveSubgroup?.value === "__custom__") {
             window.setTimeout(() => els.taskMoveSubgroupCustom?.focus(), 0);
         }
     });
+    els.taskMoveGroupCustom?.addEventListener("input", updateTaskMovePreview);
+    els.taskMoveSubgroupCustom?.addEventListener("input", updateTaskMovePreview);
     els.merchantGroup?.addEventListener("change", () => {
         updateGroupVisibility(els.merchantGroup, els.merchantGroupCustomWrap, els.merchantGroupCustom);
         if (els.merchantGroup?.value === "__custom__") {
@@ -4181,7 +4351,7 @@
     els.merchantView?.addEventListener("click", (event) => {
         const stepTarget = event.target.closest("[data-merchant-step-target]");
         if (stepTarget && els.merchantView.contains(stepTarget)) {
-            setMerchantStep(stepTarget.dataset.merchantStepTarget, true);
+            requestMerchantStep(stepTarget.dataset.merchantStepTarget, true);
             return;
         }
         if (event.target.closest("[data-merchant-step-next]")) {
@@ -4195,6 +4365,8 @@
 
     els.merchantForm?.addEventListener("input", renderMerchantReviewSummary);
     els.merchantForm?.addEventListener("change", renderMerchantReviewSummary);
+    els.merchantForm?.addEventListener("input", updateMerchantWizardSummary);
+    els.merchantForm?.addEventListener("change", updateMerchantWizardSummary);
 
     els.groupRenameForm?.addEventListener("submit", submitTaskGroupRename);
     els.groupRenameCancel?.addEventListener("click", closeTaskGroupRenameModal);
@@ -4239,11 +4411,16 @@
         }
     });
 
-    els.taskFetchStrategy?.addEventListener("change", updateTaskStrategyUi);
+    els.taskFetchStrategy?.addEventListener("change", () => {
+        updateTaskStrategyUi();
+        updateTaskWizardSummary();
+    });
+    [els.taskName, els.taskUrl, els.taskKeyword, els.taskGroupCustom, els.taskSubgroupCustom]
+        .forEach((element) => element?.addEventListener("input", updateTaskWizardSummary));
     els.taskForm?.addEventListener("click", (event) => {
         const stepTarget = event.target.closest("[data-task-step-target]");
         if (stepTarget && els.taskForm.contains(stepTarget)) {
-            setTaskFormStep(stepTarget.dataset.taskStepTarget);
+            requestTaskFormStep(stepTarget.dataset.taskStepTarget);
             return;
         }
         if (event.target.closest("[data-task-step-prev]")) {

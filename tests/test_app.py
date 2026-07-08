@@ -3654,16 +3654,31 @@ class PortalAppTestCase(unittest.TestCase):
         self.assertEqual(result.stock, 1)
         self.assertEqual(result.error_kind, "")
 
-    def test_firecrawl_monitor_disabled_does_not_call_external_backend(self) -> None:
+    def test_legacy_firecrawl_monitor_uses_scrapling_not_external_backend(self) -> None:
         class ExplodingFirecrawlFetcher:
             def fetch(self, url: str, timeout_seconds: int) -> app_module.FetchResult:
-                raise AssertionError("scheduled monitor must not call Firecrawl unless explicitly enabled")
+                raise AssertionError("scheduled monitor must not call Firecrawl")
 
+        class FakeScraplingResponse:
+            url = "https://merchant.example.com/products"
+            status = 200
+            html_content = "<html><body><section>Credit Safe VM <a>Order Now</a></section></body></html>"
+
+        class FakeScraplingClient:
+            def __init__(self) -> None:
+                self.calls: list[str] = []
+
+            def fetch(self, mode: str, url: str, timeout_seconds: int):
+                self.calls.append(mode)
+                return FakeScraplingResponse()
+
+        scrapling_client = FakeScraplingClient()
         engine = self.app.extensions["monitor_engine"]
         original_selector = engine.fetcher_selector
         try:
             engine.fetcher_selector = app_module.FetcherSelector(
                 firecrawl_fetcher=ExplodingFirecrawlFetcher(),
+                scrapling_client=scrapling_client,
             )
             result = engine.scrape_task(
                 {
@@ -3679,10 +3694,11 @@ class PortalAppTestCase(unittest.TestCase):
         finally:
             engine.fetcher_selector = original_selector
 
-        self.assertIsNone(result.stock)
-        self.assertEqual(result.error_kind, "firecrawl_monitor_disabled")
-        self.assertIn("未允许用于定时监控", result.detail)
-        self.assertEqual([attempt.backend for attempt in result.fetch_attempts or []], ["firecrawl"])
+        self.assertEqual(result.stock, 1)
+        self.assertEqual(result.error_kind, "")
+        self.assertEqual(result.backend_used, "scrapling_stealth")
+        self.assertEqual(scrapling_client.calls, ["stealth"])
+        self.assertEqual([attempt.backend for attempt in result.fetch_attempts or []], ["scrapling_stealth"])
 
     def test_firecrawl_credit_error_enters_long_cooldown(self) -> None:
         timestamp = app_module.now_iso()
@@ -4060,51 +4076,7 @@ class PortalAppTestCase(unittest.TestCase):
         self.assertEqual(result.stock, 1)
         self.assertEqual(client.urls, ["https://www.dmit.io/cart.php?region=hong-kong&network=premium&generation=as3"])
 
-    def test_scrapling_adaptive_uses_public_pricing_fallback_for_dmit_cart(self) -> None:
-        pricing_markdown = """
-        Pricing
-        Heads up: The LAX AS3 series is still being built out and optimized.
-        TINY
-        1 vCore
-        2GB
-        20GB SSD
-        1000GB
-        1Gbps
-        $ 10.90/Monthly
-        Order Now
-        * The products and prices in the table may not be updated in time due to adjustment, for reference only.
-        TINY
-        1 vCore
-        2GB
-        20GB SSD
-        1500GB
-        2Gbps
-        $ 10.90/Monthly
-        Order Now
-        * The products and prices in the table may not be updated in time due to adjustment, for reference only.
-        WEE
-        1 vCore
-        1GB
-        20GB SSD
-        1000GB Max (IN, OUT)
-        $ 36.90/Annually
-        Order Now
-        TINY
-        1 vCore
-        1GB
-        20GB SSD
-        2000GB Max (IN, OUT)
-        $ 6.90/Monthly
-        Order Now
-        STARTER
-        2 vCore
-        2GB
-        40GB SSD
-        4000GB Max (IN, OUT)
-        $ 12.90/Monthly
-        Order Now
-        """
-
+    def test_scrapling_adaptive_does_not_use_public_pricing_reference_for_dmit_cart(self) -> None:
         class FakeScraplingResponse:
             url = "https://www.dmit.io/cart.php?region=hong-kong&network=premium&generation=as3"
             status = 403
@@ -4118,28 +4090,11 @@ class PortalAppTestCase(unittest.TestCase):
                 self.calls.append(mode)
                 return FakeScraplingResponse()
 
-        class FakePublicPricingFetcher:
-            def __init__(self) -> None:
-                self.urls: list[str] = []
-
-            def fetch(self, url: str, timeout_seconds: int) -> app_module.FetchResult:
-                self.urls.append(url)
-                return app_module.FetchResult(
-                    html=pricing_markdown,
-                    final_url="https://www.dmit.io/pages/pricing",
-                    status_code=200,
-                    detail="fake public pricing",
-                )
-
         client = FakeScraplingClient()
-        public_fetcher = FakePublicPricingFetcher()
         engine = self.app.extensions["monitor_engine"]
         original_selector = engine.fetcher_selector
         try:
-            engine.fetcher_selector = app_module.FetcherSelector(
-                scrapling_client=client,
-                public_pricing_fetcher=public_fetcher,
-            )
+            engine.fetcher_selector = app_module.FetcherSelector(scrapling_client=client)
             result = engine.scrape_task(
                 {
                     "name": "DMIT Hong Kong HKG.AS3.Pro.TINY",
@@ -4154,35 +4109,16 @@ class PortalAppTestCase(unittest.TestCase):
         finally:
             engine.fetcher_selector = original_selector
 
-        self.assertEqual(result.stock, 1)
-        self.assertEqual(result.backend_used, app_module.PUBLIC_PRICING_FALLBACK_BACKEND)
-        self.assertEqual(client.calls, ["standard"])
-        self.assertEqual(public_fetcher.urls, ["https://www.dmit.io/cart.php?region=hong-kong&network=premium&generation=as3"])
-        self.assertIn("DMIT 公开价格页", result.detail)
-        self.assertEqual([attempt.backend for attempt in result.fetch_attempts or []], ["scrapling_standard", app_module.PUBLIC_PRICING_FALLBACK_BACKEND])
+        self.assertIsNone(result.stock)
+        self.assertEqual(client.calls, ["standard", "dynamic", "stealth"])
+        self.assertEqual(
+            [attempt.backend for attempt in result.fetch_attempts or []],
+            ["scrapling_standard", "scrapling_dynamic", "scrapling_stealth"],
+        )
+        self.assertFalse(any("public" in attempt.backend for attempt in result.fetch_attempts or []))
+        self.assertNotIn("public_pricing", (result.detail or "").lower())
 
-    def test_dmit_public_pricing_fallback_ignores_stale_protected_cooldown(self) -> None:
-        pricing_markdown = """
-        Pricing
-        TINY
-        1 vCore
-        2GB
-        20GB SSD
-        1000GB
-        1Gbps
-        $ 10.90/Monthly
-        Order Now
-        * The products and prices in the table may not be updated in time due to adjustment, for reference only.
-        TINY
-        1 vCore
-        2GB
-        20GB SSD
-        1500GB
-        2Gbps
-        $ 10.90/Monthly
-        Order Now
-        """
-
+    def test_dmit_protected_cooldown_is_not_bypassed_by_pricing_reference(self) -> None:
         class FakeScraplingResponse:
             url = "https://www.dmit.io/cart.php?region=hong-kong&network=premium&generation=as3"
             status = 403
@@ -4196,28 +4132,11 @@ class PortalAppTestCase(unittest.TestCase):
                 self.calls.append(mode)
                 return FakeScraplingResponse()
 
-        class FakePublicPricingFetcher:
-            def __init__(self) -> None:
-                self.urls: list[str] = []
-
-            def fetch(self, url: str, timeout_seconds: int) -> app_module.FetchResult:
-                self.urls.append(url)
-                return app_module.FetchResult(
-                    html=pricing_markdown,
-                    final_url="https://www.dmit.io/pages/pricing",
-                    status_code=200,
-                    detail="fake public pricing",
-                )
-
         client = FakeScraplingClient()
-        public_fetcher = FakePublicPricingFetcher()
         engine = self.app.extensions["monitor_engine"]
         original_selector = engine.fetcher_selector
         try:
-            engine.fetcher_selector = app_module.FetcherSelector(
-                scrapling_client=client,
-                public_pricing_fetcher=public_fetcher,
-            )
+            engine.fetcher_selector = app_module.FetcherSelector(scrapling_client=client)
             result = engine.scrape_task(
                 {
                     "name": "DMIT Hong Kong HKG.AS3.Pro.TINY",
@@ -4234,11 +4153,106 @@ class PortalAppTestCase(unittest.TestCase):
         finally:
             engine.fetcher_selector = original_selector
 
+        self.assertIsNone(result.stock)
+        self.assertTrue(result.cooldown_skip)
+        self.assertEqual(result.error_kind, "cloudflare_challenge")
+        self.assertEqual(client.calls, [])
+
+    def test_dmit_lax_cart_out_of_stock_card_parses_sold_out(self) -> None:
+        class FakeScraplingResponse:
+            url = "https://www.dmit.io/cart.php?region=los-angeles&network=premium&generation=as3"
+            status = 200
+            html_content = """
+            <html><body>
+              <section class="product-card">
+                <h2>LAX.AS3.Pro.TINY</h2>
+                <span>Out of Stock</span>
+                <button disabled>Out of Stock</button>
+              </section>
+              <section class="product-card">
+                <h2>LAX.AS3.Pro.STARTER</h2>
+                <a>Order Now</a>
+              </section>
+            </body></html>
+            """
+
+        class FakeScraplingClient:
+            def __init__(self) -> None:
+                self.urls: list[str] = []
+
+            def fetch(self, mode: str, url: str, timeout_seconds: int):
+                self.urls.append(url)
+                return FakeScraplingResponse()
+
+        client = FakeScraplingClient()
+        engine = self.app.extensions["monitor_engine"]
+        original_selector = engine.fetcher_selector
+        try:
+            engine.fetcher_selector = app_module.FetcherSelector(scrapling_client=client)
+            result = engine.scrape_task(
+                {
+                    "name": "LAX.AS3.Pro.TINY",
+                    "monitor_url": "https://www.dmit.io/cart.php?region=los-angeles&network=premium&generation=as3",
+                    "target_keyword": "LAX.AS3.Pro.TINY",
+                    "fetch_strategy": "scrapling_standard",
+                    "source_config": "{}",
+                },
+                {"request_timeout_seconds": 25, **self.scrapling_settings()},
+                use_test_browser=True,
+            )
+        finally:
+            engine.fetcher_selector = original_selector
+
+        self.assertEqual(result.stock, 0)
+        self.assertEqual(client.urls, ["https://www.dmit.io/cart.php?region=los-angeles&network=premium&generation=as3"])
+
+    def test_dmit_hkg_cart_orderable_card_parses_in_stock(self) -> None:
+        class FakeScraplingResponse:
+            url = "https://www.dmit.io/cart.php?region=hong-kong&network=premium&generation=as3"
+            status = 200
+            html_content = """
+            <html><body>
+              <section class="product-card">
+                <h2>HKG.AS3.Pro.TINY</h2>
+                <span>$ 6.90 USD</span>
+                <a href="/cart.php?a=confproduct&i=1">Order Now</a>
+              </section>
+              <section class="product-card">
+                <h2>HKG.AS3.Pro.MINI</h2>
+                <button disabled>Out of Stock</button>
+              </section>
+            </body></html>
+            """
+
+        class FakeScraplingClient:
+            def __init__(self) -> None:
+                self.urls: list[str] = []
+
+            def fetch(self, mode: str, url: str, timeout_seconds: int):
+                self.urls.append(url)
+                return FakeScraplingResponse()
+
+        client = FakeScraplingClient()
+        engine = self.app.extensions["monitor_engine"]
+        original_selector = engine.fetcher_selector
+        try:
+            engine.fetcher_selector = app_module.FetcherSelector(scrapling_client=client)
+            result = engine.scrape_task(
+                {
+                    "name": "DMIT Hong Kong HKG.AS3.Pro.TINY",
+                    "monitor_url": "https://www.dmit.io/cart.php?region=hong-kong&network=premium&generation=as3",
+                    "target_keyword": "HKG.AS3.Pro.TINY",
+                    "fetch_strategy": "scrapling_standard",
+                    "source_config": "{}",
+                },
+                {"request_timeout_seconds": 25, **self.scrapling_settings()},
+                use_test_browser=True,
+            )
+        finally:
+            engine.fetcher_selector = original_selector
+
         self.assertEqual(result.stock, 1)
-        self.assertFalse(result.cooldown_skip)
-        self.assertEqual(result.backend_used, app_module.PUBLIC_PRICING_FALLBACK_BACKEND)
-        self.assertEqual(client.calls, ["standard"])
-        self.assertEqual(public_fetcher.urls, ["https://www.dmit.io/cart.php?region=hong-kong&network=premium&generation=as3"])
+        self.assertEqual(client.urls, ["https://www.dmit.io/cart.php?region=hong-kong&network=premium&generation=as3"])
 
     def test_scrapling_adaptive_escalates_after_cloudflare_challenge(self) -> None:
         class FakeScraplingResponse:
@@ -4281,7 +4295,7 @@ class PortalAppTestCase(unittest.TestCase):
         self.assertEqual(result.backend_used, "scrapling_dynamic")
         self.assertEqual([attempt.backend for attempt in result.fetch_attempts or []], ["scrapling_standard", "scrapling_dynamic"])
 
-    def test_scrapling_stealth_challenge_failure_is_not_protected_cooldown(self) -> None:
+    def test_scrapling_stealth_challenge_failure_enters_protected_cooldown(self) -> None:
         class FakeScraplingResponse:
             url = "https://example.com/products"
             status = 200
@@ -4296,9 +4310,9 @@ class PortalAppTestCase(unittest.TestCase):
             75,
         )
 
-        self.assertEqual(result.error_kind, "scrapling_challenge_failed")
+        self.assertEqual(result.error_kind, "cloudflare_challenge")
         self.assertIn("Scrapling 高兼容已尝试处理 Cloudflare managed challenge", result.detail)
-        self.assertEqual(
+        self.assertGreater(
             app_module.scrapling_domain_cooldown_seconds("scrapling_stealth", result.error_kind, self.scrapling_settings()),
             0,
         )
@@ -4316,7 +4330,7 @@ class PortalAppTestCase(unittest.TestCase):
         self.assertEqual(result.error_kind, "scrapling_unavailable")
         self.assertIn("依赖未安装", result.detail)
 
-    def test_static_then_firecrawl_falls_back_after_static_failure(self) -> None:
+    def test_static_then_firecrawl_monitor_uses_scrapling_without_firecrawl(self) -> None:
         class FailingStaticFetcher:
             def __init__(self) -> None:
                 self.calls = 0
@@ -4343,14 +4357,29 @@ class PortalAppTestCase(unittest.TestCase):
                     detail="ok",
                 )
 
+        class FakeScraplingResponse:
+            url = "https://merchant.example.com/products"
+            status = 200
+            html_content = "<html><body><section>HK-CMI <a>Order Now</a></section></body></html>"
+
+        class FakeScraplingClient:
+            def __init__(self) -> None:
+                self.calls: list[str] = []
+
+            def fetch(self, mode: str, url: str, timeout_seconds: int):
+                self.calls.append(mode)
+                return FakeScraplingResponse()
+
         static_fetcher = FailingStaticFetcher()
         firecrawl_fetcher = SuccessfulFirecrawlFetcher()
+        scrapling_client = FakeScraplingClient()
         engine = self.app.extensions["monitor_engine"]
         original_selector = engine.fetcher_selector
         try:
             engine.fetcher_selector = app_module.FetcherSelector(
                 static_http_fetcher=static_fetcher,
                 firecrawl_fetcher=firecrawl_fetcher,
+                scrapling_client=scrapling_client,
             )
             result = engine.scrape_task(
                 {
@@ -4367,12 +4396,13 @@ class PortalAppTestCase(unittest.TestCase):
             engine.fetcher_selector = original_selector
 
         self.assertEqual(result.stock, 1)
-        self.assertEqual(static_fetcher.calls, 1)
-        self.assertEqual(firecrawl_fetcher.calls, 1)
-        self.assertEqual(result.backend_used, "firecrawl")
-        self.assertEqual([attempt.backend for attempt in result.fetch_attempts or []], ["static_http", "firecrawl"])
+        self.assertEqual(static_fetcher.calls, 0)
+        self.assertEqual(firecrawl_fetcher.calls, 0)
+        self.assertEqual(scrapling_client.calls, ["standard"])
+        self.assertEqual(result.backend_used, "scrapling_standard")
+        self.assertEqual([attempt.backend for attempt in result.fetch_attempts or []], ["scrapling_standard"])
 
-    def test_firecrawl_then_browser_falls_back_after_rate_limit(self) -> None:
+    def test_firecrawl_then_browser_monitor_uses_scrapling_without_browser(self) -> None:
         class RateLimitedFirecrawlFetcher:
             def fetch(self, url: str, timeout_seconds: int) -> app_module.FetchResult:
                 return app_module.FetchResult(
@@ -4395,6 +4425,20 @@ class PortalAppTestCase(unittest.TestCase):
             def rebuild(self, reason):
                 self.rebuilds.append(reason)
 
+        class FakeScraplingResponse:
+            url = "https://merchant.example.com/products"
+            status = 200
+            html_content = "<html><body><section>Tokyo NVMe <a>Order Now</a></section></body></html>"
+
+        class FakeScraplingClient:
+            def __init__(self) -> None:
+                self.calls: list[str] = []
+
+            def fetch(self, mode: str, url: str, timeout_seconds: int):
+                self.calls.append(mode)
+                return FakeScraplingResponse()
+
+        scrapling_client = FakeScraplingClient()
         engine = self.app.extensions["monitor_engine"]
         original_selector = engine.fetcher_selector
         original_browser = engine.monitor_browser
@@ -4402,6 +4446,7 @@ class PortalAppTestCase(unittest.TestCase):
         try:
             engine.fetcher_selector = app_module.FetcherSelector(
                 firecrawl_fetcher=RateLimitedFirecrawlFetcher(),
+                scrapling_client=scrapling_client,
             )
             engine.monitor_browser = browser
             result = engine.scrape_task(
@@ -4420,12 +4465,13 @@ class PortalAppTestCase(unittest.TestCase):
             engine.monitor_browser = original_browser
 
         self.assertEqual(result.stock, 1)
-        self.assertEqual(browser.calls, 1)
+        self.assertEqual(browser.calls, 0)
         self.assertEqual(browser.rebuilds, [])
-        self.assertEqual(result.backend_used, "browser")
-        self.assertEqual([attempt.backend for attempt in result.fetch_attempts or []], ["firecrawl", "browser"])
+        self.assertEqual(scrapling_client.calls, ["stealth"])
+        self.assertEqual(result.backend_used, "scrapling_stealth")
+        self.assertEqual([attempt.backend for attempt in result.fetch_attempts or []], ["scrapling_stealth"])
 
-    def test_adaptive_cloudflare_uses_firecrawl_once_without_browser_rebuild(self) -> None:
+    def test_adaptive_monitor_uses_scrapling_pipeline_without_firecrawl(self) -> None:
         class CloudflareStaticFetcher:
             def fetch(self, url: str, timeout_seconds: int) -> app_module.FetchResult:
                 return app_module.FetchResult(
@@ -4456,7 +4502,22 @@ class PortalAppTestCase(unittest.TestCase):
             def rebuild(self, reason):
                 raise AssertionError("cloudflare challenge must not rebuild browser")
 
+        class FakeScraplingResponse:
+            def __init__(self, mode: str) -> None:
+                self.url = "https://merchant.example.com/products"
+                self.status = 200
+                self.html_content = "<html><body><section>Premium VPS <a>Order Now</a></section></body></html>"
+
+        class FakeScraplingClient:
+            def __init__(self) -> None:
+                self.calls: list[str] = []
+
+            def fetch(self, mode: str, url: str, timeout_seconds: int):
+                self.calls.append(mode)
+                return FakeScraplingResponse(mode)
+
         firecrawl_fetcher = SuccessfulFirecrawlFetcher()
+        scrapling_client = FakeScraplingClient()
         engine = self.app.extensions["monitor_engine"]
         original_selector = engine.fetcher_selector
         original_browser = engine.monitor_browser
@@ -4464,6 +4525,7 @@ class PortalAppTestCase(unittest.TestCase):
             engine.fetcher_selector = app_module.FetcherSelector(
                 static_http_fetcher=CloudflareStaticFetcher(),
                 firecrawl_fetcher=firecrawl_fetcher,
+                scrapling_client=scrapling_client,
             )
             engine.monitor_browser = BrowserHarnessStub()
             result = engine.scrape_task(
@@ -4482,8 +4544,9 @@ class PortalAppTestCase(unittest.TestCase):
             engine.monitor_browser = original_browser
 
         self.assertEqual(result.stock, 1)
-        self.assertEqual(firecrawl_fetcher.calls, 1)
-        self.assertEqual([attempt.backend for attempt in result.fetch_attempts or []], ["static_http", "firecrawl"])
+        self.assertEqual(firecrawl_fetcher.calls, 0)
+        self.assertEqual(scrapling_client.calls, ["standard"])
+        self.assertEqual([attempt.backend for attempt in result.fetch_attempts or []], ["scrapling_standard"])
 
     def test_firecrawl_challenge_enters_protected_source_cooldown(self) -> None:
         class CloudflareStaticFetcher:
@@ -4517,6 +4580,20 @@ class PortalAppTestCase(unittest.TestCase):
             def rebuild(self, reason):
                 raise AssertionError("cloudflare challenge must not rebuild browser")
 
+        class FakeScraplingResponse:
+            def __init__(self, mode: str) -> None:
+                self.url = "https://merchant.example.com/products"
+                self.status = 403
+                self.html_content = "<html><title>Just a moment...</title><body>cf-turnstile</body></html>"
+
+        class FakeScraplingClient:
+            def __init__(self) -> None:
+                self.calls: list[str] = []
+
+            def fetch(self, mode: str, url: str, timeout_seconds: int):
+                self.calls.append(mode)
+                return FakeScraplingResponse(mode)
+
         timestamp = app_module.now_iso()
         with app_module.open_connection() as connection:
             cursor = connection.execute(
@@ -4545,6 +4622,7 @@ class PortalAppTestCase(unittest.TestCase):
             task = connection.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()
 
         firecrawl_fetcher = ChallengeFirecrawlFetcher()
+        scrapling_client = FakeScraplingClient()
         engine = self.app.extensions["monitor_engine"]
         original_selector = engine.fetcher_selector
         original_browser = engine.monitor_browser
@@ -4552,6 +4630,7 @@ class PortalAppTestCase(unittest.TestCase):
             engine.fetcher_selector = app_module.FetcherSelector(
                 static_http_fetcher=CloudflareStaticFetcher(),
                 firecrawl_fetcher=firecrawl_fetcher,
+                scrapling_client=scrapling_client,
             )
             engine.monitor_browser = BrowserHarnessStub()
             result = engine.scrape_task(
@@ -4569,17 +4648,21 @@ class PortalAppTestCase(unittest.TestCase):
             engine.monitor_browser = original_browser
 
         self.assertFalse(processed)
-        self.assertEqual(firecrawl_fetcher.calls, 1)
-        self.assertEqual([attempt.backend for attempt in result.fetch_attempts or []], ["static_http", "firecrawl"])
+        self.assertEqual(firecrawl_fetcher.calls, 0)
+        self.assertEqual(scrapling_client.calls, ["standard", "dynamic", "stealth"])
+        self.assertEqual(
+            [attempt.backend for attempt in result.fetch_attempts or []],
+            ["scrapling_standard", "scrapling_dynamic", "scrapling_stealth"],
+        )
         with app_module.open_connection() as connection:
             row = connection.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()
         self.assertEqual(row["last_stock"], 5)
         self.assertEqual(row["last_state"], "in_stock")
-        self.assertEqual(row["last_fetch_backend"], "firecrawl")
-        self.assertEqual(row["last_protected_source_backend"], "firecrawl")
+        self.assertEqual(row["last_fetch_backend"], "scrapling_stealth")
+        self.assertEqual(row["last_protected_source_backend"], "scrapling_stealth")
         self.assertEqual(row["blocked_count"], 1)
         self.assertTrue(row["cooldown_until"])
-        self.assertIn("Firecrawl 返回的内容仍是 Cloudflare", row["last_error"])
+        self.assertIn("Scrapling 高兼容", row["last_error"])
 
     def test_fetch_pipeline_attempts_are_saved_to_task_payload(self) -> None:
         class FailingStaticFetcher:
@@ -4599,6 +4682,19 @@ class PortalAppTestCase(unittest.TestCase):
                     error_kind="firecrawl_bad_response",
                     detail="Firecrawl 响应未包含 rawHtml/html/markdown 内容。",
                 )
+
+        class FakeScraplingResponse:
+            url = "https://merchant.example.com/products"
+            status = 200
+            html_content = "<html><body><section>HK-CMI <p>规格展示</p></section></body></html>"
+
+        class FakeScraplingClient:
+            def __init__(self) -> None:
+                self.calls: list[str] = []
+
+            def fetch(self, mode: str, url: str, timeout_seconds: int):
+                self.calls.append(mode)
+                return FakeScraplingResponse()
 
         timestamp = app_module.now_iso()
         with app_module.open_connection() as connection:
@@ -4626,10 +4722,12 @@ class PortalAppTestCase(unittest.TestCase):
 
         engine = self.app.extensions["monitor_engine"]
         original_selector = engine.fetcher_selector
+        scrapling_client = FakeScraplingClient()
         try:
             engine.fetcher_selector = app_module.FetcherSelector(
                 static_http_fetcher=FailingStaticFetcher(),
                 firecrawl_fetcher=SuccessfulFirecrawlFetcher(),
+                scrapling_client=scrapling_client,
             )
             result = engine.scrape_task(
                 task,
@@ -4648,8 +4746,9 @@ class PortalAppTestCase(unittest.TestCase):
         with app_module.open_connection() as connection:
             row = connection.execute("SELECT * FROM tasks WHERE id = ?", (task["id"],)).fetchone()
         payload = app_module.to_task_payload(row)
-        self.assertEqual(payload["last_fetch_backend"], "firecrawl")
-        self.assertEqual([attempt["backend"] for attempt in payload["last_fetch_attempts"]], ["static_http", "firecrawl"])
+        self.assertEqual(payload["last_fetch_backend"], "scrapling_standard")
+        self.assertEqual([attempt["backend"] for attempt in payload["last_fetch_attempts"]], ["scrapling_standard"])
+        self.assertEqual(scrapling_client.calls, ["standard"])
         self.assertNotIn("fc-secret-token", json.dumps(payload, ensure_ascii=False))
 
     def test_cycle_context_reuses_same_url_fetch_result(self) -> None:
@@ -4711,7 +4810,7 @@ class PortalAppTestCase(unittest.TestCase):
         self.assertIn("复用同轮抓取结果", second.detail)
         self.assertEqual(second.shared_fetch_backend, "scrapling_standard")
 
-    def test_scrapling_challenge_keeps_trying_without_protected_cooldown(self) -> None:
+    def test_scrapling_challenge_sets_domain_cooldown_for_same_domain(self) -> None:
         class FakeScraplingResponse:
             def __init__(self, url: str) -> None:
                 self.url = url
@@ -4760,15 +4859,15 @@ class PortalAppTestCase(unittest.TestCase):
 
         self.assertEqual(
             [call[0] for call in client.calls],
-            ["standard", "dynamic", "stealth", "standard", "dynamic", "stealth"],
+            ["standard", "dynamic", "stealth"],
         )
-        self.assertEqual(first.error_kind, "scrapling_challenge_failed")
-        self.assertEqual(first.domain_cooldown_until, "")
-        self.assertEqual(second.error_kind, "scrapling_challenge_failed")
-        self.assertFalse(second.cooldown_skip)
-        self.assertEqual(second.domain_cooldown_until, "")
-        self.assertIn("Scrapling 高兼容已尝试处理 Cloudflare managed challenge", second.detail)
-        self.assertNotIn("同域名保护等待", second.detail)
+        self.assertEqual(first.error_kind, "cloudflare_challenge")
+        self.assertTrue(first.domain_cooldown_until)
+        self.assertIn("Scrapling 高兼容已尝试处理 Cloudflare managed challenge", first.detail)
+        self.assertEqual(second.error_kind, "cloudflare_challenge")
+        self.assertTrue(second.cooldown_skip)
+        self.assertEqual(second.domain_cooldown_until, first.domain_cooldown_until)
+        self.assertIn("同域名保护等待", second.detail)
 
     def test_generic_pricing_table_extractor_handles_order_and_soldout_buttons(self) -> None:
         fetch_result = app_module.FetchResult(html="", final_url="https://example.com/pricing")

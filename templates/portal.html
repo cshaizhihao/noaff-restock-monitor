@@ -286,6 +286,12 @@
                                     </button>
                                 </nav>
 
+                                <div id="merchant-wizard-summary" class="merchant-wizard-summary">
+                                    <span>未填写来源</span>
+                                    <span>Scrapling 自适应</span>
+                                    <span>先发现 URL，再抓取商品</span>
+                                </div>
+
                                 <div class="merchant-workbench-body intake-results-stack">
                                     <form id="merchant-form" class="merchant-panel-shell">
                                         <section id="merchant-step-source" class="merchant-step-panel" data-merchant-step-panel="source">
@@ -347,8 +353,6 @@
                                                     <label for="merchant-discovery-strategy" class="form-label">发现方式</label>
                                                     <select id="merchant-discovery-strategy" class="input-dark">
                                                         <option value="local">Scrapling 页面链接</option>
-                                                        <option value="hybrid">Scrapling + 外部 Map</option>
-                                                        <option value="firecrawl_map">Firecrawl Map 外部兜底</option>
                                                     </select>
                                                 </div>
                                                 <div>
@@ -358,10 +362,6 @@
                                                         <option value="scrapling_standard">Scrapling 标准</option>
                                                         <option value="scrapling_dynamic">Scrapling 增强</option>
                                                         <option value="scrapling_stealth">Scrapling 高兼容</option>
-                                                        <option value="adaptive">自适应 fallback</option>
-                                                        <option value="browser">浏览器渲染</option>
-                                                        <option value="static_http">静态 HTTP</option>
-                                                        <option value="firecrawl">Firecrawl 外部兜底</option>
                                                     </select>
                                                 </div>
                                                 <div>
@@ -371,12 +371,6 @@
                                                         <option value="scrapling_standard">Scrapling 标准</option>
                                                         <option value="scrapling_dynamic">Scrapling 增强</option>
                                                         <option value="scrapling_stealth">Scrapling 高兼容</option>
-                                                        <option value="adaptive">自适应 fallback</option>
-                                                        <option value="generic_pricing_table">通用价格表</option>
-                                                        <option value="whmcs">WHMCS</option>
-                                                        <option value="browser">浏览器渲染</option>
-                                                        <option value="static_http">静态 HTTP</option>
-                                                        <option value="firecrawl">Firecrawl 外部兜底</option>
                                                     </select>
                                                 </div>
                                                 <div>
@@ -567,6 +561,7 @@
                                             <h3 class="panel-heading">系统设置</h3>
                                         </div>
                                     </div>
+                                    <p class="settings-home-note">常用设置放在上排；外部兜底和旧链路放在高级区，普通使用不需要调整。</p>
                                     <div class="settings-entry-list" role="list">
                                         <button type="button" class="settings-nav-item settings-entry settings-entry-top" data-settings-target="settings-runtime">
                                             <span class="settings-entry-icon">TG</span>
@@ -599,22 +594,22 @@
                                         <button type="button" class="settings-nav-item settings-entry settings-entry-bottom" data-settings-target="settings-engine-runtime">
                                             <span class="settings-entry-icon">RT</span>
                                             <span class="settings-entry-copy">
-                                                <strong>运行参数</strong>
+                                                <strong>监控节奏</strong>
                                                 <small>轮询间隔与超时</small>
                                             </span>
                                         </button>
                                         <button type="button" class="settings-nav-item settings-entry settings-entry-bottom settings-entry-secondary" data-settings-target="settings-firecrawl">
                                             <span class="settings-entry-icon">FC</span>
                                             <span class="settings-entry-copy">
-                                                <strong>Firecrawl 外部兜底</strong>
-                                                <small>付费诊断能力</small>
+                                                <strong>外部兜底</strong>
+                                                <small>默认不参与定时</small>
                                             </span>
                                         </button>
                                         <button type="button" class="settings-nav-item settings-entry settings-entry-bottom settings-entry-secondary" data-settings-target="settings-browser-runtime">
                                             <span class="settings-entry-icon">AD</span>
                                             <span class="settings-entry-copy">
-                                                <strong>兼容高级项</strong>
-                                                <small>旧链路兼容设置</small>
+                                                <strong>旧链路兼容</strong>
+                                                <small>旧浏览器设置</small>
                                             </span>
                                         </button>
                                         <button type="button" class="settings-nav-item settings-entry settings-entry-bottom" data-settings-target="settings-logs">
@@ -661,11 +656,11 @@
                                             <div class="settings-section-heading">
                                                 <div>
                                                     <p class="settings-kicker">Runtime</p>
-                                                    <h3 class="panel-heading">运行参数</h3>
+                                                    <h3 class="panel-heading">监控节奏</h3>
                                                 </div>
                                                 <div class="settings-section-actions">
                                                     <button type="button" class="ghost-button settings-back-button" data-settings-back>返回</button>
-                                                    <button type="submit" class="primary-button">保存运行参数</button>
+                                                    <button type="submit" class="primary-button">保存监控节奏</button>
                                                 </div>
                                             </div>
                                             <div class="settings-grid">
@@ -686,12 +681,12 @@
                                             <div class="settings-section-heading">
                                                 <div>
                                                     <p class="settings-kicker">Legacy</p>
-                                                    <h3 class="panel-heading">兼容高级项</h3>
-                                                    <p class="field-help mt-2">仅用于旧版 DrissionPage / 浏览器兜底链路。Scrapling 是当前主采集引擎，普通用户无需修改这里。</p>
+                                                    <h3 class="panel-heading">旧链路兼容</h3>
+                                                    <p class="field-help mt-2">只影响旧任务和诊断链路，不影响 Scrapling 主采集。普通用户无需修改这里。</p>
                                                 </div>
                                                 <div class="settings-section-actions">
                                                     <button type="button" class="ghost-button settings-back-button" data-settings-back>返回</button>
-                                                    <button type="submit" class="primary-button">保存高级项</button>
+                                                    <button type="submit" class="primary-button">保存旧链路</button>
                                                 </div>
                                             </div>
                                             <div class="settings-grid settings-grid-three">
@@ -812,13 +807,13 @@
                                         <section id="settings-firecrawl" class="settings-section settings-page hidden" data-settings-panel>
                                             <div class="settings-section-heading">
                                                 <div>
-                                                    <p class="settings-kicker">Integration</p>
-                                                    <h3 class="panel-heading">Firecrawl 外部兜底</h3>
-                                                    <p class="field-help mt-2">Firecrawl 会消耗外部 credits，默认不建议用于高频定时监控；更适合手动诊断或个别复杂页面兜底。</p>
+                                                    <p class="settings-kicker">External Fallback</p>
+                                                    <h3 class="panel-heading">外部兜底</h3>
+                                                    <p class="field-help mt-2">Firecrawl 会消耗外部 credits，默认不参与高频定时监控；只建议用于手动诊断或个别复杂页面兜底。</p>
                                                 </div>
                                                 <div class="settings-section-actions">
                                                     <button type="button" class="ghost-button settings-back-button" data-settings-back>返回</button>
-                                                    <button type="submit" class="primary-button">保存 Firecrawl</button>
+                                                    <button type="submit" class="primary-button">保存外部兜底</button>
                                                 </div>
                                             </div>
                                             <div class="settings-grid settings-firecrawl-grid">
@@ -925,42 +920,6 @@
                                         </form>
                                     </section>
 
-                                    <section id="settings-upgrade" class="settings-section settings-page hidden" data-settings-panel>
-                                        <div class="settings-section-heading">
-                                            <div>
-                                                <p class="settings-kicker">Maintenance</p>
-                                                <h3 class="panel-heading">升级与维护</h3>
-                                            </div>
-                                            <button type="button" class="ghost-button settings-back-button" data-settings-back>返回</button>
-                                        </div>
-                                        <div class="grid gap-4">
-                                            <div class="grid gap-4 border-b border-slate-800/80 pb-4 sm:grid-cols-3">
-                                                <div class="min-w-0">
-                                                    <p class="text-xs font-bold text-slate-500">版本</p>
-                                                    <p id="system-version" class="mt-2 truncate font-mono text-lg font-bold text-white">-</p>
-                                                </div>
-                                                <div class="min-w-0">
-                                                    <p class="text-xs font-bold text-slate-500">分支</p>
-                                                    <p id="system-branch" class="mt-2 truncate font-mono text-lg font-bold text-white">-</p>
-                                                </div>
-                                                <div class="min-w-0">
-                                                    <p class="text-xs font-bold text-slate-500">服务</p>
-                                                    <p id="upgrade-service-state" class="mt-2 truncate font-mono text-lg font-bold text-white">-</p>
-                                                </div>
-                                            </div>
-                                            <button id="upgrade-button" type="button" class="primary-button w-fit">
-                                                <svg class="mr-2 h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 11l5-5m0 0l5 5m-5-5v12"/>
-                                                </svg>
-                                                <span id="upgrade-button-label">执行升级</span>
-                                            </button>
-                                            <p id="upgrade-help" class="text-sm leading-6 text-slate-500"></p>
-                                            <div class="terminal-box max-h-52 overflow-y-auto p-4">
-                                                <pre id="upgrade-log" class="whitespace-pre-wrap font-mono text-xs leading-6 text-slate-400">暂无升级日志。</pre>
-                                            </div>
-                                        </div>
-                                    </section>
-
                                     <section id="settings-backup" class="settings-section settings-page hidden" data-settings-panel>
                                         <div class="settings-section-heading">
                                             <div>
@@ -1056,8 +1015,8 @@
                             <section class="firecrawl-guide-slide">
                                 <p class="settings-kicker">Step 4 / 5</p>
                                 <h4>优先用于商品入库</h4>
-                                <p>Firecrawl 更适合人工触发的商品入库：到“商品入库”页选择 Firecrawl Map 或 Firecrawl Scrape，先发现候选商品页，再生成监控任务。</p>
-                                <p>实时监控场景优先使用本地 static/browser；只有明确需要时，再把任务策略改成 Firecrawl 或 fallback 策略。</p>
+                                <p>Firecrawl 现在只作为外部兜底/诊断能力，不作为默认入库或定时监控路径。</p>
+                                <p>商品入库优先使用 Scrapling 发现和抓取，再通过解析规则生成监控任务。</p>
                             </section>
                             <section class="firecrawl-guide-slide">
                                 <p class="settings-kicker">Step 5 / 5</p>
@@ -1105,6 +1064,11 @@
                         <button type="button" class="task-step-button" data-task-step-target="strategy">2 采集</button>
                         <button type="button" class="task-step-button" data-task-step-target="rules">3 解析</button>
                         <button type="button" class="task-step-button" data-task-step-target="notify">4 推送</button>
+                    </div>
+                    <div id="task-wizard-summary" class="task-wizard-summary">
+                        <span>未填写商品</span>
+                        <span>Scrapling 自适应</span>
+                        <span>保存后可立即检测</span>
                     </div>
                     <section class="task-step-panel is-active" data-task-step-panel="basic">
                         <div class="grid gap-4 lg:grid-cols-2">
@@ -1155,17 +1119,8 @@
                                     <option value="scrapling_standard">Scrapling 标准</option>
                                     <option value="scrapling_dynamic">Scrapling 增强</option>
                                     <option value="scrapling_stealth">Scrapling 高兼容</option>
-                                    <option value="adaptive">旧版自适应低成本</option>
-                                    <option value="generic_pricing_table">通用价格页</option>
-                                    <option value="whmcs">WHMCS</option>
-                                    <option value="browser">浏览器渲染</option>
-                                    <option value="static_http">静态 HTTP</option>
                                     <option value="manual">手动录入</option>
                                     <option value="webhook">Webhook</option>
-                                    <option value="static_then_firecrawl">静态 HTTP → Firecrawl 外部兜底</option>
-                                    <option value="firecrawl">Firecrawl 外部兜底（消耗 credits）</option>
-                                    <option value="firecrawl_then_static">Firecrawl 外部兜底 → 静态 HTTP</option>
-                                    <option value="firecrawl_then_browser">Firecrawl 外部兜底 → 浏览器</option>
                                 </select>
                             </div>
                         </div>
@@ -1209,31 +1164,11 @@
                                 <em>外部系统主动上报库存，才显示 Token。</em>
                             </button>
                         </div>
-                        <details class="task-external-fallback">
-                            <summary>外部兜底 / 旧版采集方式</summary>
-                            <div class="task-strategy-card-grid compact">
-                                <button type="button" class="task-strategy-card" data-task-strategy-card="static_http" role="radio" aria-checked="false">
-                                    <span>旧版</span>
-                                    <strong>静态 HTTP</strong>
-                                    <em>低成本，仅适合静态公开 HTML。</em>
-                                </button>
-                                <button type="button" class="task-strategy-card" data-task-strategy-card="browser" role="radio" aria-checked="false">
-                                    <span>旧版</span>
-                                    <strong>浏览器渲染</strong>
-                                    <em>保留兼容，不再作为首选。</em>
-                                </button>
-                                <button type="button" class="task-strategy-card is-external" data-task-strategy-card="firecrawl" role="radio" aria-checked="false">
-                                    <span>付费</span>
-                                    <strong>Firecrawl</strong>
-                                    <em>外部服务，会消耗 credits。</em>
-                                </button>
-                            </div>
-                        </details>
                         </section>
                         <div id="task-strategy-help" class="task-strategy-help" aria-live="polite">
                             <div>
                                 <p class="task-strategy-title">当前模式</p>
-                                <p id="task-strategy-summary">默认使用 Scrapling 自适应采集。Firecrawl 属于外部付费兜底，默认不参与定时监控。</p>
+                                <p id="task-strategy-summary">默认使用 Scrapling 自适应采集。</p>
                             </div>
                             <div id="task-webhook-hint" class="task-strategy-pill hidden">Webhook 模式才会显示 Token 操作</div>
                         </div>
@@ -1339,9 +1274,7 @@
                         </div>
                     </div>
                     </section>
-                    <div id="task-first-check-hint" class="task-first-check-hint">
-                        首次创建建议点“保存并检测”，立刻确认库存状态。
-                    </div>
+                    <div id="task-first-check-hint" class="task-first-check-hint">首次创建建议点“保存并检测”。</div>
                     <div class="task-wizard-footer">
                         <button id="task-step-prev-button" type="button" class="ghost-button" data-task-step-prev>上一步</button>
                         <button id="task-step-next-button" type="button" class="ghost-button" data-task-step-next>下一步</button>
@@ -1457,6 +1390,7 @@
                             <input id="task-move-subgroup-custom" type="text" class="input-dark" maxlength="120" placeholder="例如 香港 / Tier 1 / AS3">
                         </div>
                     </div>
+                    <p id="task-move-preview" class="task-move-preview">目标位置：默认分组</p>
                     <p class="rounded-lg border border-slate-800 bg-slate-950/60 px-4 py-3 text-sm leading-6 text-slate-400">
                         跨层级移动只改变商品所在分组和排序位置，不会清空库存状态、Telegram message_id、商品入库来源或解析规则。
                     </p>

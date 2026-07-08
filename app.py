@@ -465,18 +465,6 @@ SENSITIVE_SOURCE_CONFIG_KEYS = {
     "headers",
     "authorization",
 }
-PUBLIC_PRICING_FALLBACK_BACKEND = "public_pricing_fallback"
-PUBLIC_READER_BASE_URL = os.getenv("PUBLIC_READER_BASE_URL", "https://r.jina.ai/http://").strip() or "https://r.jina.ai/http://"
-PUBLIC_PRICING_FALLBACK_ERROR_KINDS = {
-    "cloudflare_challenge",
-    "scrapling_challenge_failed",
-    "scrapling_challenge_upgrade_required",
-    "timeout",
-    "http_error",
-    "empty_response",
-    "request_error",
-    "scrapling_browser_failed",
-}
 STOCK_RULE_TYPES = {
     "auto_card",
     "css_selector",
@@ -3544,96 +3532,6 @@ class StaticHttpFetcher:
         return FetchResult(html=html_text, final_url=final_url, status_code=status_code, detail="ok")
 
 
-def public_reader_url(target_url: str) -> str:
-    base = PUBLIC_READER_BASE_URL
-    if "{url}" in base:
-        return base.format(url=target_url)
-    return f"{base}{target_url}"
-
-
-def public_pricing_fallback_url(url: str) -> str:
-    try:
-        parsed = urlparse(str(url or ""))
-    except Exception:
-        return ""
-    host = (parsed.hostname or "").lower()
-    path = (parsed.path or "").lower()
-    if host in {"dmit.io", "www.dmit.io"} and (path.endswith("/cart.php") or path.endswith("/pages/pricing")):
-        scheme = parsed.scheme or "https"
-        return f"{scheme}://{parsed.netloc}/pages/pricing"
-    return ""
-
-
-def task_public_pricing_fallback_url(task: Any) -> str:
-    source_config = raw_source_config(mapping_value(task, "source_config", "{}"))
-    if parse_setting_bool(source_config.get("disable_public_pricing_fallback"), False):
-        return ""
-    return public_pricing_fallback_url(monitor_url_for_fetch(task))
-
-
-class PublicPricingFallbackFetcher:
-    def __init__(self, session: requests.Session | None = None) -> None:
-        self.session = session or requests.Session()
-
-    def fetch(self, url: str, timeout_seconds: int) -> FetchResult:
-        pricing_url = public_pricing_fallback_url(url)
-        if not pricing_url:
-            return FetchResult(
-                html="",
-                final_url=url,
-                error_kind="public_pricing_unsupported",
-                detail="当前链接没有可用的公开价格页兜底。",
-            )
-        reader_url = public_reader_url(pricing_url)
-        try:
-            response = self.session.get(
-                reader_url,
-                headers={"User-Agent": DEFAULT_BROWSER_USER_AGENT or STATIC_HTTP_USER_AGENT},
-                timeout=max(10, min(int(timeout_seconds or DEFAULT_TIMEOUT_SECONDS), 45)),
-            )
-        except requests.Timeout:
-            return FetchResult(html="", final_url=pricing_url, error_kind="timeout", detail="公开价格页兜底请求超时。")
-        except requests.RequestException as exc:
-            return FetchResult(
-                html="",
-                final_url=pricing_url,
-                error_kind="request_error",
-                detail=f"公开价格页兜底请求失败：{str(exc)[:300]}",
-            )
-        html_text = getattr(response, "text", "") or ""
-        status_code = int(getattr(response, "status_code", 0) or 0)
-        if status_code >= 400:
-            return FetchResult(
-                html="",
-                final_url=pricing_url,
-                status_code=status_code,
-                error_kind="http_error",
-                detail=f"公开价格页兜底 HTTP {status_code}。",
-            )
-        if looks_like_cloudflare_challenge(html_text, extract_page_title(html_text), pricing_url):
-            return FetchResult(
-                html="",
-                final_url=pricing_url,
-                status_code=status_code,
-                error_kind="cloudflare_challenge",
-                detail="公开价格页兜底仍返回验证页。",
-            )
-        if "Order Now" not in html_text and "Out of Stock" not in html_text:
-            return FetchResult(
-                html="",
-                final_url=pricing_url,
-                status_code=status_code,
-                error_kind="empty_response",
-                detail="公开价格页兜底未返回可识别的价格表。",
-            )
-        return FetchResult(
-            html=html_text,
-            final_url=pricing_url,
-            status_code=status_code,
-            detail="公开价格页兜底已返回价格表。",
-        )
-
-
 class ScraplingUnavailableError(RuntimeError):
     pass
 
@@ -3885,7 +3783,7 @@ class ScraplingFetcher:
                     html="",
                     final_url=final_url,
                     status_code=status_code,
-                    error_kind="scrapling_challenge_failed",
+                    error_kind="cloudflare_challenge",
                     detail="Scrapling 高兼容已尝试处理 Cloudflare managed challenge，但本次仍未拿到商品页。",
                 )
             return FetchResult(
@@ -4253,31 +4151,16 @@ class FetcherSelector:
         self,
         static_http_fetcher: StaticHttpFetcher | None = None,
         firecrawl_fetcher: FirecrawlFetcher | None = None,
-        public_pricing_fetcher: PublicPricingFallbackFetcher | None = None,
         scrapling_client: Any = None,
     ) -> None:
         self.static_http_fetcher = static_http_fetcher or StaticHttpFetcher()
         self.firecrawl_fetcher = firecrawl_fetcher
-        self.public_pricing_fetcher = public_pricing_fetcher or PublicPricingFallbackFetcher()
         self.scrapling_client = scrapling_client
 
     def settings_for_task(self, settings_payload: dict[str, Any] | None, task: Any) -> dict[str, Any]:
         effective = dict(settings_payload or {})
         effective["source_config"] = raw_source_config(mapping_value(task, "source_config", "{}"))
         return effective
-
-    def add_public_pricing_fallback(
-        self,
-        backends: list[str],
-        task: Any,
-        settings_payload: dict[str, Any] | None = None,
-        insert_after_first: bool = True,
-    ) -> list[str]:
-        if task_public_pricing_fallback_url(task) and PUBLIC_PRICING_FALLBACK_BACKEND not in backends:
-            if insert_after_first and backends:
-                return [backends[0], PUBLIC_PRICING_FALLBACK_BACKEND, *backends[1:]]
-            return [*backends, PUBLIC_PRICING_FALLBACK_BACKEND]
-        return backends
 
     def select(
         self,
@@ -4303,15 +4186,13 @@ class FetcherSelector:
         backend: str,
         browser_harness: BrowserHarness,
         settings_payload: dict[str, Any] | None = None,
-    ) -> BrowserFetcher | StaticHttpFetcher | FirecrawlFetcher | ExternalInputFetcher | ScraplingFetcher | PublicPricingFallbackFetcher:
+    ) -> BrowserFetcher | StaticHttpFetcher | FirecrawlFetcher | ExternalInputFetcher | ScraplingFetcher:
         if backend == FETCH_STRATEGY_FIRECRAWL:
             if self.firecrawl_fetcher is not None:
                 return self.firecrawl_fetcher
             return FirecrawlFetcher(settings_payload or {})
         if backend in SCRAPLING_FETCH_STRATEGIES:
             return ScraplingFetcher(settings_payload or {}, scrapling_mode_for_backend(backend), self.scrapling_client)
-        if backend == PUBLIC_PRICING_FALLBACK_BACKEND:
-            return self.public_pricing_fetcher
         if backend == FETCH_STRATEGY_STATIC_HTTP:
             return self.static_http_fetcher
         if backend in EXTERNAL_INPUT_FETCH_STRATEGIES:
@@ -4334,33 +4215,43 @@ class FetcherSelector:
             FETCH_STRATEGY_SCRAPLING_DYNAMIC,
             FETCH_STRATEGY_SCRAPLING_STEALTH,
         }:
-            return self.add_public_pricing_fallback([strategy], task, settings_payload)
+            return [strategy]
         if strategy == FETCH_STRATEGY_SCRAPLING_ADAPTIVE:
-            return self.add_public_pricing_fallback(
-                [
+            return [
+                FETCH_STRATEGY_SCRAPLING_STANDARD,
+                FETCH_STRATEGY_SCRAPLING_DYNAMIC,
+                FETCH_STRATEGY_SCRAPLING_STEALTH,
+            ]
+        if strategy == FETCH_STRATEGY_FIRECRAWL:
+            if context == "monitor":
+                return [FETCH_STRATEGY_SCRAPLING_STEALTH]
+            return [FETCH_STRATEGY_FIRECRAWL]
+        if strategy == FETCH_STRATEGY_FIRECRAWL_THEN_STATIC:
+            if context == "monitor":
+                return [FETCH_STRATEGY_SCRAPLING_STEALTH]
+            return ([FETCH_STRATEGY_FIRECRAWL] if firecrawl_allowed else []) + [FETCH_STRATEGY_STATIC_HTTP]
+        if strategy == FETCH_STRATEGY_STATIC_THEN_FIRECRAWL:
+            if context == "monitor":
+                return [FETCH_STRATEGY_SCRAPLING_STANDARD, FETCH_STRATEGY_SCRAPLING_STEALTH]
+            return [FETCH_STRATEGY_STATIC_HTTP] + ([FETCH_STRATEGY_FIRECRAWL] if firecrawl_allowed else [])
+        if strategy == FETCH_STRATEGY_FIRECRAWL_THEN_BROWSER:
+            if context == "monitor":
+                return [FETCH_STRATEGY_SCRAPLING_STEALTH]
+            return ([FETCH_STRATEGY_FIRECRAWL] if firecrawl_allowed else []) + [FETCH_STRATEGY_BROWSER]
+        if strategy == FETCH_STRATEGY_ADAPTIVE:
+            if context == "monitor":
+                return [
                     FETCH_STRATEGY_SCRAPLING_STANDARD,
                     FETCH_STRATEGY_SCRAPLING_DYNAMIC,
                     FETCH_STRATEGY_SCRAPLING_STEALTH,
-                ],
-                task,
-                settings_payload,
-            )
-        if strategy == FETCH_STRATEGY_FIRECRAWL:
-            return self.add_public_pricing_fallback([FETCH_STRATEGY_FIRECRAWL], task, settings_payload, insert_after_first=False)
-        if strategy == FETCH_STRATEGY_FIRECRAWL_THEN_STATIC:
-            return self.add_public_pricing_fallback(([FETCH_STRATEGY_FIRECRAWL] if firecrawl_allowed else []) + [FETCH_STRATEGY_STATIC_HTTP], task, settings_payload)
-        if strategy == FETCH_STRATEGY_STATIC_THEN_FIRECRAWL:
-            return self.add_public_pricing_fallback([FETCH_STRATEGY_STATIC_HTTP] + ([FETCH_STRATEGY_FIRECRAWL] if firecrawl_allowed else []), task, settings_payload)
-        if strategy == FETCH_STRATEGY_FIRECRAWL_THEN_BROWSER:
-            return self.add_public_pricing_fallback(([FETCH_STRATEGY_FIRECRAWL] if firecrawl_allowed else []) + [FETCH_STRATEGY_BROWSER], task, settings_payload)
-        if strategy == FETCH_STRATEGY_ADAPTIVE:
+                ]
             backends = [FETCH_STRATEGY_STATIC_HTTP, FETCH_STRATEGY_BROWSER]
-            if firecrawl_allowed:
+            if context != "monitor" and firecrawl_allowed:
                 backends.append(FETCH_STRATEGY_FIRECRAWL)
-            return self.add_public_pricing_fallback(backends, task, settings_payload)
+            return backends
         if strategy in STATIC_HTTP_FETCH_STRATEGIES:
-            return self.add_public_pricing_fallback([FETCH_STRATEGY_STATIC_HTTP], task, settings_payload)
-        return self.add_public_pricing_fallback([FETCH_STRATEGY_BROWSER], task, settings_payload)
+            return [FETCH_STRATEGY_STATIC_HTTP]
+        return [FETCH_STRATEGY_BROWSER]
 
     def should_try_next_backend(
         self,
@@ -4371,8 +4262,6 @@ class FetcherSelector:
         settings_payload = settings_payload or {}
         if not result.error_kind:
             return False
-        if next_backend == PUBLIC_PRICING_FALLBACK_BACKEND:
-            return result.error_kind in PUBLIC_PRICING_FALLBACK_ERROR_KINDS
         if next_backend in SCRAPLING_FETCH_STRATEGIES and not settings_payload.get("scrapling_enabled", True):
             return False
         if next_backend in {FETCH_STRATEGY_SCRAPLING_DYNAMIC, FETCH_STRATEGY_SCRAPLING_STEALTH}:
@@ -4386,8 +4275,6 @@ class FetcherSelector:
                 "scrapling_browser_failed",
                 "scrapling_unavailable",
             }
-        if result.error_kind == "cloudflare_challenge":
-            return next_backend == FETCH_STRATEGY_FIRECRAWL and bool(settings_payload.get("firecrawl_enabled"))
         if next_backend == FETCH_STRATEGY_FIRECRAWL and not settings_payload.get("firecrawl_enabled"):
             return False
         return result.error_kind in {
@@ -4415,12 +4302,6 @@ class FetcherSelector:
         url = monitor_url_for_fetch(task)
         strategy = task_fetch_strategy(task)
         settings_payload = self.settings_for_task(settings_payload, task)
-        if (
-            context == "monitor"
-            and strategy == FETCH_STRATEGY_FIRECRAWL
-            and not bool(settings_payload.get("firecrawl_use_for_monitor"))
-        ):
-            return firecrawl_monitor_disabled_result(url)
         timeout_seconds = int(settings_payload.get("request_timeout_seconds") or DEFAULT_TIMEOUT_SECONDS)
         backends = self.backends_for_strategy(task, settings_payload, context=context)
         attempts: list[FetchAttempt] = []
@@ -4647,8 +4528,7 @@ class MonitoringEngine:
     ) -> ScrapeResult:
         fetch_domain = fetch_domain_for_url(mapping_value(task, "monitor_url", ""))
         shared_key = fetch_cache_key(task)
-        has_public_pricing_fallback = bool(task_public_pricing_fallback_url(task))
-        if not use_test_browser and is_task_in_protected_cooldown(task) and not has_public_pricing_fallback:
+        if not use_test_browser and is_task_in_protected_cooldown(task):
             cooldown_until = str(mapping_value(task, "cooldown_until", "") or "")
             if last_error_looks_like_firecrawl_cost(task):
                 return ScrapeResult(
@@ -4677,7 +4557,7 @@ class MonitoringEngine:
         if cycle_context and fetch_domain and not use_test_browser:
             domain_cooldown = cycle_context.domain_cooldowns.get(fetch_domain)
             cooldown_at = parse_iso_datetime(domain_cooldown.until) if domain_cooldown else None
-            if domain_cooldown and cooldown_at and cooldown_at > now_utc() and not has_public_pricing_fallback:
+            if domain_cooldown and cooldown_at and cooldown_at > now_utc():
                 return ScrapeResult(
                     stock=None,
                     fragment="",
@@ -6870,240 +6750,9 @@ def default_stock_extractor(
     task: Any,
     fetch_result: FetchResult,
 ) -> ExtractorResult:
-    fragment = slice_fragment(html_text, target_keyword)
+    fragment = locate_product_fragment(html_text, target_keyword, has_generic_pricing_signal)
     stock, detail = parse_stock(fragment)
     return ExtractorResult(stock=stock, fragment=fragment, detail=detail)
-
-
-DMIT_PRICING_PRODUCTS = {
-    "WEE",
-    "TINY",
-    "Pocket",
-    "STARTER",
-    "MINI",
-    "MICRO",
-    "MEDIUM",
-    "LARGE",
-    "GIANT",
-    "TINYv2",
-    "STARTERv2",
-    "MINIv2",
-    "MICROv2",
-    "MEDIUMv2",
-    "LARGEv2",
-    "GIANTv2",
-    "G16C32G",
-}
-DMIT_PRICING_RUN_MAP = {
-    ("los-angeles", "premium", "as3"): 0,
-    ("los-angeles", "eyeball", "as3"): 1,
-    ("los-angeles", "tier-1", "as3"): 7,
-    ("hong-kong", "premium", "as3"): 3,
-    ("hong-kong", "eyeball", "as3"): 4,
-    ("hong-kong", "tier-1", "as3"): 11,
-    ("tokyo", "premium", "as3"): 9,
-    ("tokyo", "tier-1", "as3"): 13,
-}
-
-
-def dmit_normalize_region(value: Any, target_keyword: str = "") -> str:
-    text = str(value or "").strip().lower().replace("_", "-")
-    aliases = {
-        "hk": "hong-kong",
-        "hkg": "hong-kong",
-        "hongkong": "hong-kong",
-        "hong-kong": "hong-kong",
-        "los-angeles": "los-angeles",
-        "lax": "los-angeles",
-        "la": "los-angeles",
-        "tokyo": "tokyo",
-        "tyo": "tokyo",
-        "jp": "tokyo",
-    }
-    if text in aliases:
-        return aliases[text]
-    token = normalized_product_token(target_keyword)
-    if token.startswith("hkg"):
-        return "hong-kong"
-    if token.startswith("lax"):
-        return "los-angeles"
-    if token.startswith(("tyo", "tokyo")):
-        return "tokyo"
-    return ""
-
-
-def dmit_normalize_network(value: Any, target_keyword: str = "") -> str:
-    text = str(value or "").strip().lower().replace("_", "-")
-    aliases = {
-        "pro": "premium",
-        "premium": "premium",
-        "eyeball": "eyeball",
-        "eye-ball": "eyeball",
-        "t1": "tier-1",
-        "tier1": "tier-1",
-        "tier-1": "tier-1",
-        "international-optimization": "tier-1",
-    }
-    if text in aliases:
-        return aliases[text]
-    token = normalized_product_token(target_keyword)
-    if "pro" in token or "premium" in token:
-        return "premium"
-    if "eyeball" in token:
-        return "eyeball"
-    if "t1" in token or "tier1" in token:
-        return "tier-1"
-    return ""
-
-
-def dmit_normalize_generation(value: Any, target_keyword: str = "") -> str:
-    text = str(value or "").strip().lower().replace("_", "-")
-    if text:
-        return text
-    match = re.search(r"\b(as\d+|an\d+)\b", str(target_keyword or ""), re.IGNORECASE)
-    return match.group(1).lower() if match else ""
-
-
-def dmit_query_context(task: Any, fetch_result: FetchResult, target_keyword: str) -> tuple[str, str, str]:
-    region = network = generation = ""
-    for raw_url in (
-        mapping_value(task, "monitor_url", ""),
-        monitor_url_for_fetch(task),
-        getattr(fetch_result, "final_url", ""),
-    ):
-        try:
-            parsed = urlparse(str(raw_url or ""))
-        except Exception:
-            continue
-        query = parse_qs(parsed.query)
-        if not region:
-            region = dmit_normalize_region((query.get("region") or [""])[0], target_keyword)
-        if not network:
-            network = dmit_normalize_network((query.get("network") or [""])[0], target_keyword)
-        if not generation:
-            generation = dmit_normalize_generation((query.get("generation") or [""])[0], target_keyword)
-    return (
-        region or dmit_normalize_region("", target_keyword),
-        network or dmit_normalize_network("", target_keyword),
-        generation or dmit_normalize_generation("", target_keyword),
-    )
-
-
-def dmit_target_plan(target_keyword: str) -> str:
-    tokens = [token.upper() for token in re.findall(r"[A-Za-z0-9]+", str(target_keyword or ""))]
-    product_names = {name.upper(): name for name in DMIT_PRICING_PRODUCTS}
-    for token in reversed(tokens):
-        if token in product_names:
-            return product_names[token]
-    return ""
-
-
-def dmit_pricing_lines(html_text: str) -> list[str]:
-    return [line.strip() for line in str(html_text or "").splitlines() if line.strip()]
-
-
-def dmit_is_pricing_separator(line: str) -> bool:
-    return (
-        line.startswith("* The products and prices")
-        or line.startswith("* For the IP")
-        or line.startswith("Heads up:")
-        or line.startswith("Register now")
-        or bool(re.match(r"^[A-Z]{3}\.AS\d+\.T\d+\b", line))
-    )
-
-
-def dmit_is_product_start(lines: list[str], index: int) -> bool:
-    if index < 0 or index >= len(lines):
-        return False
-    line = lines[index]
-    if line not in DMIT_PRICING_PRODUCTS:
-        return False
-    return any("vCore" in value for value in lines[index + 1 : index + 5])
-
-
-def dmit_parse_pricing_runs(html_text: str) -> list[list[dict[str, Any]]]:
-    lines = dmit_pricing_lines(html_text)
-    runs: list[list[dict[str, Any]]] = []
-    current: list[dict[str, Any]] = []
-    index = 0
-    while index < len(lines):
-        line = lines[index]
-        if dmit_is_pricing_separator(line):
-            if current:
-                runs.append(current)
-                current = []
-            index += 1
-            continue
-        if not dmit_is_product_start(lines, index):
-            index += 1
-            continue
-        block_lines = [line]
-        status = ""
-        cursor = index + 1
-        while cursor < len(lines):
-            next_line = lines[cursor]
-            if dmit_is_pricing_separator(next_line) or (cursor != index and dmit_is_product_start(lines, cursor)):
-                break
-            block_lines.append(next_line)
-            if next_line in {"Order Now", "Out of Stock"}:
-                status = next_line
-                cursor += 1
-                break
-            cursor += 1
-        current.append({"name": line, "status": status, "fragment": "\n".join(block_lines)})
-        index = max(cursor, index + 1)
-    if current:
-        runs.append(current)
-    return runs
-
-
-def dmit_pricing_extractor(
-    html_text: str,
-    target_keyword: str,
-    task: Any,
-    fetch_result: FetchResult,
-) -> ExtractorResult | None:
-    final_url = str(getattr(fetch_result, "final_url", "") or "")
-    task_url = str(mapping_value(task, "monitor_url", "") or "")
-    if "dmit.io" not in f"{final_url} {task_url}".lower() or "/pages/pricing" not in final_url.lower():
-        return None
-    plan = dmit_target_plan(target_keyword)
-    if not plan:
-        return None
-    region, network, generation = dmit_query_context(task, fetch_result, target_keyword)
-    run_index = DMIT_PRICING_RUN_MAP.get((region, network, generation))
-    runs = dmit_parse_pricing_runs(html_text)
-    candidates: list[dict[str, Any]] = []
-    if run_index is not None and 0 <= run_index < len(runs):
-        candidates.extend(runs[run_index])
-    if not candidates:
-        for run in runs:
-            candidates.extend(run)
-    plan_upper = plan.upper()
-    for item in candidates:
-        if str(item.get("name") or "").upper() != plan_upper:
-            continue
-        fragment = str(item.get("fragment") or "")
-        status = str(item.get("status") or "")
-        if status == "Order Now":
-            return ExtractorResult(
-                stock=1,
-                fragment=fragment,
-                detail=f"DMIT 公开价格页：{region}/{network}/{generation}/{plan} 显示 Order Now，按有货处理。",
-            )
-        if status == "Out of Stock":
-            return ExtractorResult(
-                stock=0,
-                fragment=fragment,
-                detail=f"DMIT 公开价格页：{region}/{network}/{generation}/{plan} 显示 Out of Stock。",
-            )
-        stock, detail = parse_stock(fragment)
-        return ExtractorResult(stock=stock, fragment=fragment, detail=f"DMIT 公开价格页：{detail}")
-    return ExtractorResult(
-        stock=None,
-        fragment="\n".join(item.get("fragment", "") for item in candidates[:4]),
-        detail=f"DMIT 公开价格页：未找到 {region}/{network}/{generation}/{plan} 对应产品。",
-    )
 
 
 def generic_pricing_table_extractor(
@@ -7112,9 +6761,6 @@ def generic_pricing_table_extractor(
     task: Any,
     fetch_result: FetchResult,
 ) -> ExtractorResult:
-    dmit_result = dmit_pricing_extractor(html_text, target_keyword, task, fetch_result)
-    if dmit_result is not None:
-        return dmit_result
     fragment = locate_product_fragment(html_text, target_keyword, has_generic_pricing_signal)
     if not fragment and target_selected_by_url(task, fetch_result, target_keyword):
         query_position = find_product_query_position(html_text, task, fetch_result)
@@ -7241,9 +6887,6 @@ def extract_stock_for_strategy(
     rule_result = extract_stock_by_rule(html_text, target_keyword, task, fetch_result)
     if rule_result is not None:
         return rule_result
-    dmit_result = dmit_pricing_extractor(html_text, target_keyword, task, fetch_result)
-    if dmit_result is not None:
-        return dmit_result
     source_config = parse_source_config(mapping_value(task, "source_config", "{}"))
     configured_extractor = normalize_fetch_strategy(source_config.get("extractor"))
     extractor_key = configured_extractor if configured_extractor in EXTRACTOR_REGISTRY else normalize_fetch_strategy(strategy)
