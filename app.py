@@ -1,6 +1,7 @@
 import hashlib
 import hmac
 import html as html_module
+import importlib
 import importlib.util
 import ipaddress
 import json
@@ -308,6 +309,10 @@ FETCH_STRATEGY_FIRECRAWL_THEN_STATIC = "firecrawl_then_static"
 FETCH_STRATEGY_STATIC_THEN_FIRECRAWL = "static_then_firecrawl"
 FETCH_STRATEGY_FIRECRAWL_THEN_BROWSER = "firecrawl_then_browser"
 FETCH_STRATEGY_ADAPTIVE = "adaptive"
+FETCH_STRATEGY_SCRAPLING_STANDARD = "scrapling_standard"
+FETCH_STRATEGY_SCRAPLING_DYNAMIC = "scrapling_dynamic"
+FETCH_STRATEGY_SCRAPLING_STEALTH = "scrapling_stealth"
+FETCH_STRATEGY_SCRAPLING_ADAPTIVE = "scrapling_adaptive"
 FETCH_STRATEGY_MANUAL = "manual"
 FETCH_STRATEGY_WEBHOOK = "webhook"
 SUPPORTED_FETCH_STRATEGIES = {
@@ -320,6 +325,10 @@ SUPPORTED_FETCH_STRATEGIES = {
     FETCH_STRATEGY_STATIC_THEN_FIRECRAWL,
     FETCH_STRATEGY_FIRECRAWL_THEN_BROWSER,
     FETCH_STRATEGY_ADAPTIVE,
+    FETCH_STRATEGY_SCRAPLING_STANDARD,
+    FETCH_STRATEGY_SCRAPLING_DYNAMIC,
+    FETCH_STRATEGY_SCRAPLING_STEALTH,
+    FETCH_STRATEGY_SCRAPLING_ADAPTIVE,
     FETCH_STRATEGY_MANUAL,
     FETCH_STRATEGY_WEBHOOK,
 }
@@ -336,6 +345,12 @@ FIRECRAWL_FETCH_STRATEGIES = {
 }
 FIRECRAWL_COST_ERROR_KINDS = {"firecrawl_credit_required", "firecrawl_rate_limited"}
 FIRECRAWL_COST_COOLDOWN_MINUTES = 360
+SCRAPLING_FETCH_STRATEGIES = {
+    FETCH_STRATEGY_SCRAPLING_STANDARD,
+    FETCH_STRATEGY_SCRAPLING_DYNAMIC,
+    FETCH_STRATEGY_SCRAPLING_STEALTH,
+    FETCH_STRATEGY_SCRAPLING_ADAPTIVE,
+}
 EXTERNAL_INPUT_FETCH_STRATEGIES = {FETCH_STRATEGY_MANUAL, FETCH_STRATEGY_WEBHOOK}
 EXTERNAL_INPUT_PENDING_ERROR_KINDS = {"manual_pending", "webhook_pending"}
 CATALOG_DISCOVERY_LOCAL = "local"
@@ -750,10 +765,22 @@ def scrapling_runtime_status() -> dict[str, str | bool]:
             "status": "unavailable",
             "detail": "Scrapling 未安装或当前运行环境无法导入；安装依赖后即可启用。",
         }
+    missing: list[str] = []
+    for module_name in ("scrapling.fetchers", "curl_cffi", "playwright", "patchright"):
+        try:
+            importlib.import_module(module_name)
+        except Exception:
+            missing.append(module_name)
+    if missing:
+        return {
+            "available": False,
+            "status": "missing_fetchers",
+            "detail": f"Scrapling 主包已安装，但 fetcher 依赖缺失：{', '.join(missing)}。请重新安装 requirements.txt。",
+        }
     return {
         "available": True,
         "status": "available",
-        "detail": "Scrapling 已安装，配置骨架可用。",
+        "detail": "Scrapling 采集引擎和 fetcher 依赖均可用。",
     }
 
 
@@ -3153,6 +3180,169 @@ class StaticHttpFetcher:
         return FetchResult(html=html_text, final_url=final_url, status_code=status_code, detail="ok")
 
 
+class ScraplingUnavailableError(RuntimeError):
+    pass
+
+
+class ScraplingFetcher:
+    def __init__(self, settings_payload: dict[str, Any], mode: str, client: Any = None) -> None:
+        self.settings = settings_payload
+        self.mode = normalize_scrapling_mode(mode)
+        self.client = client
+
+    def timeout_seconds(self, fallback: int) -> int:
+        key = f"scrapling_timeout_{self.mode}"
+        return int(self.settings.get(key) or fallback or DEFAULT_TIMEOUT_SECONDS)
+
+    def browser_kwargs(self, timeout_seconds: int) -> dict[str, Any]:
+        timeout_ms = max(5, int(timeout_seconds)) * 1000
+        flags = ["--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu"]
+        kwargs: dict[str, Any] = {
+            "headless": True,
+            "disable_resources": True,
+            "block_ads": True,
+            "load_dom": True,
+            "network_idle": self.mode != "standard",
+            "timeout": timeout_ms,
+            "wait": 900 if self.mode == "stealth" else 300,
+            "extra_flags": flags,
+            "extra_headers": {"Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8"},
+        }
+        if DEFAULT_BROWSER_USER_AGENT:
+            kwargs["useragent"] = DEFAULT_BROWSER_USER_AGENT
+        if self.mode == "stealth":
+            kwargs.update(
+                {
+                    "hide_canvas": True,
+                    "block_webrtc": True,
+                    "allow_webgl": True,
+                    "solve_cloudflare": False,
+                }
+            )
+        return kwargs
+
+    def static_kwargs(self, timeout_seconds: int) -> dict[str, Any]:
+        return {
+            "timeout": timeout_seconds,
+            "follow_redirects": True,
+            "retries": 1,
+            "headers": {
+                "User-Agent": DEFAULT_BROWSER_USER_AGENT or STATIC_HTTP_USER_AGENT,
+                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+                "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+                "Cache-Control": "no-cache",
+            },
+        }
+
+    def fetch(self, url: str, timeout_seconds: int) -> FetchResult:
+        if not self.settings.get("scrapling_enabled", True):
+            return FetchResult(html="", final_url=url, error_kind="scrapling_disabled", detail="Scrapling 采集引擎未启用。")
+        timeout_seconds = self.timeout_seconds(timeout_seconds)
+        try:
+            response = self._fetch_response(url, timeout_seconds)
+        except ImportError as exc:
+            return FetchResult(
+                html="",
+                final_url=url,
+                error_kind="scrapling_unavailable",
+                detail=f"Scrapling fetcher 依赖未安装或无法导入：{exc}",
+            )
+        except TimeoutError:
+            return FetchResult(html="", final_url=url, error_kind="timeout", detail=f"Scrapling {self.mode} 请求超时：{url}")
+        except Exception as exc:
+            message = str(exc)
+            return FetchResult(
+                html="",
+                final_url=url,
+                error_kind=self.classify_exception(message),
+                detail=f"Scrapling {self.mode} 请求失败：{message[:500]}",
+            )
+        return self.response_to_fetch_result(response, url)
+
+    def _fetch_response(self, url: str, timeout_seconds: int) -> Any:
+        if self.client is not None:
+            return self.client.fetch(self.mode, url, timeout_seconds)
+        try:
+            scrapling_module = importlib.import_module("scrapling")
+        except ModuleNotFoundError as exc:
+            raise ImportError("scrapling") from exc
+        if self.mode == "standard":
+            return scrapling_module.Fetcher.get(url, **self.static_kwargs(timeout_seconds))
+        fetcher_name = "StealthyFetcher" if self.mode == "stealth" else "DynamicFetcher"
+        try:
+            fetcher = getattr(scrapling_module, fetcher_name)
+        except AttributeError as exc:
+            raise ImportError(fetcher_name) from exc
+        return fetcher.fetch(url, **self.browser_kwargs(timeout_seconds))
+
+    def response_to_fetch_result(self, response: Any, fallback_url: str) -> FetchResult:
+        final_url = str(getattr(response, "url", "") or fallback_url)
+        status_code = int(getattr(response, "status", None) or getattr(response, "status_code", None) or 0)
+        html_text = scrapling_response_html(response)
+        if looks_like_cloudflare_challenge(html_text, extract_page_title(html_text), final_url):
+            return FetchResult(
+                html="",
+                final_url=final_url,
+                status_code=status_code,
+                error_kind="cloudflare_challenge",
+                detail=f"Scrapling {self.mode} 返回 Cloudflare / Turnstile 验证页。",
+            )
+        if status_code in {403, 429} or status_code >= 500:
+            return FetchResult(
+                html="",
+                final_url=final_url,
+                status_code=status_code,
+                error_kind="http_error",
+                detail=f"Scrapling {self.mode} HTTP {status_code}：{final_url}",
+            )
+        if not html_text:
+            return FetchResult(
+                html="",
+                final_url=final_url,
+                status_code=status_code,
+                error_kind="empty_response",
+                detail=f"Scrapling {self.mode} 返回了空 HTML：{final_url}",
+            )
+        return FetchResult(
+            html=html_text,
+            final_url=final_url,
+            status_code=status_code,
+            detail=f"Scrapling {self.mode} ok",
+        )
+
+    def classify_exception(self, message: str) -> str:
+        lowered = message.lower()
+        if any(token in lowered for token in ("timeout", "timed out", "超时")):
+            return "timeout"
+        if any(token in lowered for token in ("browser", "playwright", "patchright", "chromium", "chrome")):
+            return "scrapling_browser_failed"
+        return classify_browser_error(message) or "request_error"
+
+
+class ScraplingSessionManager:
+    def __init__(self, settings_payload: dict[str, Any], client: Any = None) -> None:
+        self.settings = settings_payload
+        self.client = client
+
+    def fetcher(self, mode: str) -> ScraplingFetcher:
+        return ScraplingFetcher(self.settings, mode, self.client)
+
+
+def scrapling_response_html(response: Any) -> str:
+    for attr in ("html_content", "text", "body", "content"):
+        value = getattr(response, attr, "")
+        if callable(value):
+            try:
+                value = value()
+            except TypeError:
+                continue
+        if isinstance(value, bytes):
+            return value.decode(getattr(response, "encoding", "utf-8") or "utf-8", errors="replace")
+        if value:
+            return str(value)
+    return ""
+
+
 def sanitize_firecrawl_detail(value: str, api_key: str = "") -> str:
     text = str(value or "")
     if api_key:
@@ -3442,22 +3632,38 @@ class ExternalInputFetcher:
         )
 
 
+def scrapling_mode_for_backend(backend: str) -> str:
+    if backend == FETCH_STRATEGY_SCRAPLING_STEALTH:
+        return "stealth"
+    if backend == FETCH_STRATEGY_SCRAPLING_DYNAMIC:
+        return "dynamic"
+    return "standard"
+
+
 class FetcherSelector:
-    def __init__(self, static_http_fetcher: StaticHttpFetcher | None = None, firecrawl_fetcher: FirecrawlFetcher | None = None) -> None:
+    def __init__(
+        self,
+        static_http_fetcher: StaticHttpFetcher | None = None,
+        firecrawl_fetcher: FirecrawlFetcher | None = None,
+        scrapling_client: Any = None,
+    ) -> None:
         self.static_http_fetcher = static_http_fetcher or StaticHttpFetcher()
         self.firecrawl_fetcher = firecrawl_fetcher
+        self.scrapling_client = scrapling_client
 
     def select(
         self,
         task: Any,
         browser_harness: BrowserHarness,
         settings_payload: dict[str, Any] | None = None,
-    ) -> BrowserFetcher | StaticHttpFetcher | FirecrawlFetcher | ExternalInputFetcher:
+    ) -> BrowserFetcher | StaticHttpFetcher | FirecrawlFetcher | ExternalInputFetcher | ScraplingFetcher:
         strategy = task_fetch_strategy(task)
         if strategy == FETCH_STRATEGY_FIRECRAWL:
             if self.firecrawl_fetcher is not None:
                 return self.firecrawl_fetcher
             return FirecrawlFetcher(settings_payload or {})
+        if strategy in SCRAPLING_FETCH_STRATEGIES:
+            return ScraplingFetcher(settings_payload or {}, scrapling_mode_for_backend(strategy), self.scrapling_client)
         if strategy in STATIC_HTTP_FETCH_STRATEGIES:
             return self.static_http_fetcher
         if strategy in EXTERNAL_INPUT_FETCH_STRATEGIES:
@@ -3469,11 +3675,13 @@ class FetcherSelector:
         backend: str,
         browser_harness: BrowserHarness,
         settings_payload: dict[str, Any] | None = None,
-    ) -> BrowserFetcher | StaticHttpFetcher | FirecrawlFetcher | ExternalInputFetcher:
+    ) -> BrowserFetcher | StaticHttpFetcher | FirecrawlFetcher | ExternalInputFetcher | ScraplingFetcher:
         if backend == FETCH_STRATEGY_FIRECRAWL:
             if self.firecrawl_fetcher is not None:
                 return self.firecrawl_fetcher
             return FirecrawlFetcher(settings_payload or {})
+        if backend in SCRAPLING_FETCH_STRATEGIES:
+            return ScraplingFetcher(settings_payload or {}, scrapling_mode_for_backend(backend), self.scrapling_client)
         if backend == FETCH_STRATEGY_STATIC_HTTP:
             return self.static_http_fetcher
         if backend in EXTERNAL_INPUT_FETCH_STRATEGIES:
@@ -3491,6 +3699,18 @@ class FetcherSelector:
         firecrawl_allowed = firecrawl_allowed_for_context(settings_payload, context)
         if strategy in EXTERNAL_INPUT_FETCH_STRATEGIES:
             return [strategy]
+        if strategy in {
+            FETCH_STRATEGY_SCRAPLING_STANDARD,
+            FETCH_STRATEGY_SCRAPLING_DYNAMIC,
+            FETCH_STRATEGY_SCRAPLING_STEALTH,
+        }:
+            return [strategy]
+        if strategy == FETCH_STRATEGY_SCRAPLING_ADAPTIVE:
+            return [
+                FETCH_STRATEGY_SCRAPLING_STANDARD,
+                FETCH_STRATEGY_SCRAPLING_DYNAMIC,
+                FETCH_STRATEGY_SCRAPLING_STEALTH,
+            ]
         if strategy == FETCH_STRATEGY_FIRECRAWL:
             return [FETCH_STRATEGY_FIRECRAWL]
         if strategy == FETCH_STRATEGY_FIRECRAWL_THEN_STATIC:
@@ -3517,6 +3737,18 @@ class FetcherSelector:
         settings_payload = settings_payload or {}
         if not result.error_kind:
             return False
+        if next_backend in SCRAPLING_FETCH_STRATEGIES and not settings_payload.get("scrapling_enabled", True):
+            return False
+        if next_backend in {FETCH_STRATEGY_SCRAPLING_DYNAMIC, FETCH_STRATEGY_SCRAPLING_STEALTH}:
+            return result.error_kind in {
+                "cloudflare_challenge",
+                "timeout",
+                "request_error",
+                "empty_response",
+                "http_error",
+                "scrapling_browser_failed",
+                "scrapling_unavailable",
+            }
         if result.error_kind == "cloudflare_challenge":
             return next_backend == FETCH_STRATEGY_FIRECRAWL and bool(settings_payload.get("firecrawl_enabled"))
         if next_backend == FETCH_STRATEGY_FIRECRAWL and not settings_payload.get("firecrawl_enabled"):
@@ -3531,6 +3763,9 @@ class FetcherSelector:
             "firecrawl_request_error",
             "firecrawl_bad_response",
             "firecrawl_disabled",
+            "scrapling_browser_failed",
+            "scrapling_unavailable",
+            "scrapling_disabled",
         }
 
     def fetch_pipeline(

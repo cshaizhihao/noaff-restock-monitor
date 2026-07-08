@@ -213,6 +213,14 @@
 
     function fetchStrategyLabel(value) {
         switch (normalizeFetchStrategy(value)) {
+            case "scrapling_standard":
+                return "Scrapling 标准";
+            case "scrapling_dynamic":
+                return "Scrapling 增强";
+            case "scrapling_stealth":
+                return "Scrapling 高兼容";
+            case "scrapling_adaptive":
+                return "Scrapling 自适应";
             case "static_http":
                 return "静态 HTTP";
             case "generic_pricing_table":
@@ -240,6 +248,14 @@
 
     function fetchStrategyHelp(value) {
         switch (normalizeFetchStrategy(value)) {
+            case "scrapling_standard":
+                return "Scrapling 标准模式：适合普通公开 IDC / WHMCS 页面，成本最低，作为后续主采集方向。";
+            case "scrapling_dynamic":
+                return "Scrapling 增强模式：适合 JS 渲染页面，会启动浏览器，资源消耗高于标准模式。";
+            case "scrapling_stealth":
+                return "Scrapling 高兼容模式：适合复杂页面，低并发、长超时；仍不会处理验证码或 Turnstile。";
+            case "scrapling_adaptive":
+                return "Scrapling 自适应：按标准、增强、高兼容逐步尝试，失败后进入受保护来源处理。";
             case "firecrawl":
                 return "外部付费兜底服务，会消耗 Firecrawl credits；默认不用于定时监控，只建议手动检测、商品入库或诊断时使用。";
             case "firecrawl_then_static":

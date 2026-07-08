@@ -2881,6 +2881,18 @@ class PortalAppTestCase(unittest.TestCase):
         settings.update(overrides)
         return settings
 
+    def scrapling_settings(self, **overrides) -> dict[str, object]:
+        settings = {
+            "scrapling_enabled": True,
+            "scrapling_timeout_standard": 25,
+            "scrapling_timeout_dynamic": 45,
+            "scrapling_timeout_stealth": 75,
+            "scrapling_use_for_monitor": True,
+            "scrapling_use_for_catalog": True,
+        }
+        settings.update(overrides)
+        return settings
+
     def test_firecrawl_fetcher_success_uses_raw_html_and_cache_controls(self) -> None:
         class FakeResponse:
             status_code = 200
@@ -3408,6 +3420,132 @@ class PortalAppTestCase(unittest.TestCase):
         self.assertEqual(result.stock, 17)
         self.assertIn("Available", result.fragment)
         self.assertEqual(result.error_kind, "")
+
+    def test_scrapling_fetcher_standard_success_returns_html(self) -> None:
+        class FakeScraplingResponse:
+            url = "https://example.com/products"
+            status = 200
+            html_content = "<html><body>Tokyo VPS <a>Order Now</a></body></html>"
+
+        class FakeScraplingClient:
+            def __init__(self) -> None:
+                self.calls: list[tuple[str, str, int]] = []
+
+            def fetch(self, mode: str, url: str, timeout_seconds: int):
+                self.calls.append((mode, url, timeout_seconds))
+                return FakeScraplingResponse()
+
+        client = FakeScraplingClient()
+        fetcher = app_module.ScraplingFetcher(self.scrapling_settings(), "standard", client)
+        result = fetcher.fetch("https://example.com/products", 12)
+
+        self.assertEqual(result.error_kind, "")
+        self.assertIn("Tokyo VPS", result.html)
+        self.assertEqual(result.detail, "Scrapling standard ok")
+        self.assertEqual(client.calls, [("standard", "https://example.com/products", 25)])
+
+    def test_scrape_task_scrapling_standard_strategy_parses_stock(self) -> None:
+        class FakeScraplingResponse:
+            url = "https://example.com/products"
+            status = 200
+            html_content = "<html><body><section>Osaka VPS <a>Order Now</a><strong>库存 8</strong></section></body></html>"
+
+        class FakeScraplingClient:
+            def fetch(self, mode: str, url: str, timeout_seconds: int):
+                return FakeScraplingResponse()
+
+        engine = self.app.extensions["monitor_engine"]
+        original_selector = engine.fetcher_selector
+        try:
+            engine.fetcher_selector = app_module.FetcherSelector(scrapling_client=FakeScraplingClient())
+            result = engine.scrape_task(
+                {
+                    "name": "Osaka VPS",
+                    "monitor_url": "https://example.com/products",
+                    "target_keyword": "Osaka VPS",
+                    "fetch_strategy": "scrapling_standard",
+                },
+                {"request_timeout_seconds": 25, **self.scrapling_settings()},
+                use_test_browser=False,
+            )
+        finally:
+            engine.fetcher_selector = original_selector
+
+        self.assertEqual(result.stock, 8)
+        self.assertEqual(result.backend_used, "scrapling_standard")
+        self.assertEqual([attempt.backend for attempt in result.fetch_attempts or []], ["scrapling_standard"])
+
+    def test_scrapling_adaptive_escalates_after_cloudflare_challenge(self) -> None:
+        class FakeScraplingResponse:
+            def __init__(self, mode: str) -> None:
+                self.url = "https://example.com/products"
+                self.status = 200
+                if mode == "standard":
+                    self.html_content = "<html><title>Just a moment...</title><body>cloudflare</body></html>"
+                else:
+                    self.html_content = "<html><body><section>Seoul VPS <a>Order Now</a></section></body></html>"
+
+        class FakeScraplingClient:
+            def __init__(self) -> None:
+                self.calls: list[str] = []
+
+            def fetch(self, mode: str, url: str, timeout_seconds: int):
+                self.calls.append(mode)
+                return FakeScraplingResponse(mode)
+
+        client = FakeScraplingClient()
+        engine = self.app.extensions["monitor_engine"]
+        original_selector = engine.fetcher_selector
+        try:
+            engine.fetcher_selector = app_module.FetcherSelector(scrapling_client=client)
+            result = engine.scrape_task(
+                {
+                    "name": "Seoul VPS",
+                    "monitor_url": "https://example.com/products",
+                    "target_keyword": "Seoul VPS",
+                    "fetch_strategy": "scrapling_adaptive",
+                },
+                {"request_timeout_seconds": 25, **self.scrapling_settings()},
+                use_test_browser=False,
+            )
+        finally:
+            engine.fetcher_selector = original_selector
+
+        self.assertEqual(result.stock, 1)
+        self.assertEqual(client.calls, ["standard", "dynamic"])
+        self.assertEqual(result.backend_used, "scrapling_dynamic")
+        self.assertEqual([attempt.backend for attempt in result.fetch_attempts or []], ["scrapling_standard", "scrapling_dynamic"])
+
+    def test_scrapling_fetcher_classifies_cloudflare_challenge(self) -> None:
+        class FakeScraplingResponse:
+            url = "https://example.com/products"
+            status = 200
+            html_content = "<html><title>Just a moment...</title><body>Checking your browser before accessing Cloudflare.</body></html>"
+
+        class FakeScraplingClient:
+            def fetch(self, mode: str, url: str, timeout_seconds: int):
+                return FakeScraplingResponse()
+
+        result = app_module.ScraplingFetcher(self.scrapling_settings(), "stealth", FakeScraplingClient()).fetch(
+            "https://example.com/products",
+            75,
+        )
+
+        self.assertEqual(result.error_kind, "cloudflare_challenge")
+        self.assertIn("Scrapling stealth", result.detail)
+
+    def test_scrapling_fetcher_unavailable_is_user_readable(self) -> None:
+        class MissingScraplingClient:
+            def fetch(self, mode: str, url: str, timeout_seconds: int):
+                raise ImportError("curl_cffi")
+
+        result = app_module.ScraplingFetcher(self.scrapling_settings(), "dynamic", MissingScraplingClient()).fetch(
+            "https://example.com/products",
+            45,
+        )
+
+        self.assertEqual(result.error_kind, "scrapling_unavailable")
+        self.assertIn("依赖未安装", result.detail)
 
     def test_static_then_firecrawl_falls_back_after_static_failure(self) -> None:
         class FailingStaticFetcher:
