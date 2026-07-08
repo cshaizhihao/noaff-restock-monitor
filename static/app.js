@@ -2392,11 +2392,14 @@
 
                     <div class="task-row-log terminal-box ${task.last_error ? "" : "opacity-95"}" data-task-terminal>
                         <p class="task-log-text truncate-two font-mono ${task.last_error ? errorKindTone(task.last_error_kind) : "animate-pulse-soft text-emerald-400"}" data-task-log>${logMessage}</p>
-                        <p class="mt-2 rounded border border-amber-500/20 bg-amber-500/10 px-2.5 py-1.5 text-xs leading-5 text-amber-200 ${protectedNotice ? "" : "hidden"}" data-task-protected-notice>${escapeHtml(protectedNotice)}</p>
-                        <p class="mt-2 rounded border border-cyan-500/20 bg-cyan-500/10 px-2.5 py-1.5 font-mono text-[11px] leading-5 text-cyan-200 ${webhookMeta ? "" : "hidden"}" data-task-webhook-meta>${escapeHtml(webhookMeta)}</p>
-                        <div class="task-row-checked font-mono" data-task-meta>
-                            message_id: ${task.message_id ?? "-"} · checked: ${lastChecked}${escapeHtml(attemptMeta)}
-                        </div>
+                        <details class="task-row-details" data-task-log-details>
+                            <summary>详情</summary>
+                            <p class="rounded border border-amber-500/20 bg-amber-500/10 px-2.5 py-1.5 text-xs leading-5 text-amber-200 ${protectedNotice ? "" : "hidden"}" data-task-protected-notice>${escapeHtml(protectedNotice)}</p>
+                            <p class="mt-2 rounded border border-cyan-500/20 bg-cyan-500/10 px-2.5 py-1.5 font-mono text-[11px] leading-5 text-cyan-200 ${webhookMeta ? "" : "hidden"}" data-task-webhook-meta>${escapeHtml(webhookMeta)}</p>
+                            <div class="task-row-checked font-mono" data-task-meta>
+                                message_id: ${task.message_id ?? "-"} · checked: ${lastChecked}${escapeHtml(attemptMeta)}
+                            </div>
+                        </details>
                     </div>
 
                     <div class="task-actions flex flex-col gap-2">
@@ -2405,7 +2408,7 @@
                                 <svg class="mr-1.5 h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8"/>
                                 </svg>
-                                立即检测库存
+                                检测
                             </button>
                             <div class="flex gap-1 ${normalizedStrategy === "manual" ? "" : "hidden"}" data-task-manual-actions>
                                 <button type="button" class="ghost-button !min-h-9 !rounded-lg !px-3 !py-2 text-[12px] text-emerald-300" data-action="manual-in-stock">有货</button>
