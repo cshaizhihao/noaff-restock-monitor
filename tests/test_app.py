@@ -3934,6 +3934,7 @@ class PortalAppTestCase(unittest.TestCase):
 
         self.assertEqual(kwargs["executable_path"], "/usr/bin/chromium")
         self.assertIn("--no-sandbox", kwargs["extra_flags"])
+        self.assertIs(kwargs["solve_cloudflare"], True)
 
     def test_scrape_task_scrapling_standard_strategy_parses_stock(self) -> None:
         class FakeScraplingResponse:
@@ -4044,7 +4045,7 @@ class PortalAppTestCase(unittest.TestCase):
         self.assertEqual(result.backend_used, "scrapling_dynamic")
         self.assertEqual([attempt.backend for attempt in result.fetch_attempts or []], ["scrapling_standard", "scrapling_dynamic"])
 
-    def test_scrapling_fetcher_classifies_cloudflare_challenge(self) -> None:
+    def test_scrapling_stealth_challenge_failure_is_not_protected_cooldown(self) -> None:
         class FakeScraplingResponse:
             url = "https://example.com/products"
             status = 200
@@ -4059,8 +4060,12 @@ class PortalAppTestCase(unittest.TestCase):
             75,
         )
 
-        self.assertEqual(result.error_kind, "cloudflare_challenge")
-        self.assertIn("Scrapling stealth", result.detail)
+        self.assertEqual(result.error_kind, "scrapling_challenge_failed")
+        self.assertIn("Scrapling 高兼容已启用 Cloudflare 处理", result.detail)
+        self.assertEqual(
+            app_module.scrapling_domain_cooldown_seconds("scrapling_stealth", result.error_kind, self.scrapling_settings()),
+            0,
+        )
 
     def test_scrapling_fetcher_unavailable_is_user_readable(self) -> None:
         class MissingScraplingClient:
@@ -4470,7 +4475,7 @@ class PortalAppTestCase(unittest.TestCase):
         self.assertIn("复用同轮抓取结果", second.detail)
         self.assertEqual(second.shared_fetch_backend, "scrapling_standard")
 
-    def test_cycle_context_domain_cooldown_skips_remaining_same_domain_tasks(self) -> None:
+    def test_scrapling_challenge_keeps_trying_without_protected_cooldown(self) -> None:
         class FakeScraplingResponse:
             def __init__(self, url: str) -> None:
                 self.url = url
@@ -4517,14 +4522,17 @@ class PortalAppTestCase(unittest.TestCase):
         finally:
             engine.fetcher_selector = original_selector
 
-        self.assertEqual([call[0] for call in client.calls], ["standard", "dynamic", "stealth"])
-        self.assertEqual(first.error_kind, "cloudflare_challenge")
-        self.assertTrue(first.domain_cooldown_until)
-        self.assertEqual(second.error_kind, "cloudflare_challenge")
-        self.assertTrue(second.cooldown_skip)
-        self.assertEqual(second.shared_fetch_backend, "scrapling_stealth")
-        self.assertIn("同域名保护等待", second.detail)
-        self.assertIn("本轮不会重复请求该域名", second.detail)
+        self.assertEqual(
+            [call[0] for call in client.calls],
+            ["standard", "dynamic", "stealth", "standard", "dynamic", "stealth"],
+        )
+        self.assertEqual(first.error_kind, "scrapling_challenge_failed")
+        self.assertEqual(first.domain_cooldown_until, "")
+        self.assertEqual(second.error_kind, "scrapling_challenge_failed")
+        self.assertFalse(second.cooldown_skip)
+        self.assertEqual(second.domain_cooldown_until, "")
+        self.assertIn("Scrapling 高兼容已启用 Cloudflare 处理", second.detail)
+        self.assertNotIn("同域名保护等待", second.detail)
 
     def test_generic_pricing_table_extractor_handles_order_and_soldout_buttons(self) -> None:
         fetch_result = app_module.FetchResult(html="", final_url="https://example.com/pricing")

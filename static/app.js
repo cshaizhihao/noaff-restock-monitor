@@ -292,9 +292,9 @@
             case "scrapling_dynamic":
                 return "Scrapling 增强模式：适合 JS 渲染页面，会启动浏览器，资源消耗高于标准模式。";
             case "scrapling_stealth":
-                return "Scrapling 高兼容模式：适合复杂页面，低并发、长超时；仍不会处理验证码或 Turnstile。";
+                return "Scrapling 高兼容模式：适合复杂页面，会启用 Scrapling 的 Cloudflare challenge 处理能力。";
             case "scrapling_adaptive":
-                return "Scrapling 自适应：按标准、增强、高兼容逐步尝试，失败后进入受保护来源处理。";
+                return "Scrapling 自适应：按标准、增强、高兼容逐步尝试，复杂页面不会提前判定为受保护来源。";
             case "firecrawl":
                 return "外部付费兜底服务，会消耗 Firecrawl credits；默认不用于定时监控，只建议手动检测、商品入库或诊断时使用。";
             case "firecrawl_then_static":
@@ -887,6 +887,10 @@
                 return "同域名保护等待";
             case "scrapling_browser_failed":
                 return "Scrapling 浏览器依赖异常";
+            case "scrapling_challenge_upgrade_required":
+                return "Scrapling 正在升级采集模式";
+            case "scrapling_challenge_failed":
+                return "Scrapling 高兼容未拿到可解析页面";
             case "scrapling_unavailable":
                 return "Scrapling 未安装";
             case "scrapling_disabled":
@@ -924,6 +928,8 @@
                 return "text-sky-300";
             case "scrapling_unavailable":
             case "scrapling_disabled":
+            case "scrapling_challenge_upgrade_required":
+            case "scrapling_challenge_failed":
             case "empty_response":
             case "parse_unknown":
                 return "text-amber-300";

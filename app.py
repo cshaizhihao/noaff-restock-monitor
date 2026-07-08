@@ -143,7 +143,7 @@ DEFAULT_SCRAPLING_TIMEOUT_DYNAMIC = int(os.getenv("SCRAPLING_TIMEOUT_DYNAMIC", "
 DEFAULT_SCRAPLING_TIMEOUT_STEALTH = int(os.getenv("SCRAPLING_TIMEOUT_STEALTH", "75"))
 DEFAULT_SCRAPLING_DOMAIN_COOLDOWN_STANDARD = int(os.getenv("SCRAPLING_DOMAIN_COOLDOWN_STANDARD", "0"))
 DEFAULT_SCRAPLING_DOMAIN_COOLDOWN_DYNAMIC = int(os.getenv("SCRAPLING_DOMAIN_COOLDOWN_DYNAMIC", "60"))
-DEFAULT_SCRAPLING_DOMAIN_COOLDOWN_STEALTH = int(os.getenv("SCRAPLING_DOMAIN_COOLDOWN_STEALTH", "300"))
+DEFAULT_SCRAPLING_DOMAIN_COOLDOWN_STEALTH = int(os.getenv("SCRAPLING_DOMAIN_COOLDOWN_STEALTH", "60"))
 DEFAULT_SCRAPLING_MAX_CONCURRENCY_STANDARD = int(os.getenv("SCRAPLING_MAX_CONCURRENCY_STANDARD", "3"))
 DEFAULT_SCRAPLING_MAX_CONCURRENCY_DYNAMIC = int(os.getenv("SCRAPLING_MAX_CONCURRENCY_DYNAMIC", "2"))
 DEFAULT_SCRAPLING_MAX_CONCURRENCY_STEALTH = int(os.getenv("SCRAPLING_MAX_CONCURRENCY_STEALTH", "1"))
@@ -1058,6 +1058,8 @@ def shared_fetch_detail(result: "FetchPipelineResult") -> str:
 
 
 def scrapling_domain_cooldown_seconds(backend: str, error_kind: str, settings_payload: dict[str, Any]) -> int:
+    if error_kind in {"scrapling_challenge_upgrade_required", "scrapling_challenge_failed"}:
+        return 0
     if error_kind == "cloudflare_challenge" or backend == FETCH_STRATEGY_SCRAPLING_STEALTH:
         return int(settings_payload.get("scrapling_domain_cooldown_stealth") or DEFAULT_SCRAPLING_DOMAIN_COOLDOWN_STEALTH)
     if backend == FETCH_STRATEGY_SCRAPLING_DYNAMIC:
@@ -3471,7 +3473,7 @@ class ScraplingFetcher:
                     "hide_canvas": True,
                     "block_webrtc": True,
                     "allow_webgl": True,
-                    "solve_cloudflare": False,
+                    "solve_cloudflare": True,
                 }
             )
         return kwargs
@@ -3535,12 +3537,20 @@ class ScraplingFetcher:
         status_code = int(getattr(response, "status", None) or getattr(response, "status_code", None) or 0)
         html_text = scrapling_response_html(response)
         if looks_like_cloudflare_challenge(html_text, extract_page_title(html_text), final_url):
+            if self.mode == "stealth":
+                return FetchResult(
+                    html="",
+                    final_url=final_url,
+                    status_code=status_code,
+                    error_kind="scrapling_challenge_failed",
+                    detail="Scrapling 高兼容已启用 Cloudflare 处理，但本次仍未拿到可解析页面；下轮会继续尝试。",
+                )
             return FetchResult(
                 html="",
                 final_url=final_url,
                 status_code=status_code,
-                error_kind="cloudflare_challenge",
-                detail=f"Scrapling {self.mode} 返回 Cloudflare / Turnstile 验证页。",
+                error_kind="scrapling_challenge_upgrade_required",
+                detail=f"Scrapling {self.mode} 需要升级到更高兼容模式。",
             )
         if status_code in {403, 429} or status_code >= 500:
             return FetchResult(
@@ -3997,6 +4007,7 @@ class FetcherSelector:
         if next_backend in {FETCH_STRATEGY_SCRAPLING_DYNAMIC, FETCH_STRATEGY_SCRAPLING_STEALTH}:
             return result.error_kind in {
                 "cloudflare_challenge",
+                "scrapling_challenge_upgrade_required",
                 "timeout",
                 "request_error",
                 "empty_response",
