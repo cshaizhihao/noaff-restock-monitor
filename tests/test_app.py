@@ -3971,6 +3971,120 @@ class PortalAppTestCase(unittest.TestCase):
         self.assertEqual([attempt["backend"] for attempt in payload["last_fetch_attempts"]], ["static_http", "firecrawl"])
         self.assertNotIn("fc-secret-token", json.dumps(payload, ensure_ascii=False))
 
+    def test_cycle_context_reuses_same_url_fetch_result(self) -> None:
+        class FakeScraplingResponse:
+            url = "https://merchant.example.com/products"
+            status = 200
+            html_content = """
+            <html>
+              <body>
+                <section><h2>Tokyo Alpha</h2><p>库存 2</p><a>Order Now</a></section>
+                <section><h2>Tokyo Beta</h2><p>库存 5</p><a>Order Now</a></section>
+              </body>
+            </html>
+            """
+
+        class FakeScraplingClient:
+            def __init__(self) -> None:
+                self.calls: list[tuple[str, str, int]] = []
+
+            def fetch(self, mode: str, url: str, timeout_seconds: int):
+                self.calls.append((mode, url, timeout_seconds))
+                return FakeScraplingResponse()
+
+        client = FakeScraplingClient()
+        engine = self.app.extensions["monitor_engine"]
+        original_selector = engine.fetcher_selector
+        try:
+            engine.fetcher_selector = app_module.FetcherSelector(scrapling_client=client)
+            context = app_module.MonitorCycleContext()
+            settings = {"request_timeout_seconds": 25, **self.scrapling_settings()}
+            first = engine.scrape_task(
+                {
+                    "name": "Tokyo Alpha",
+                    "monitor_url": "https://merchant.example.com/products",
+                    "target_keyword": "Tokyo Alpha",
+                    "fetch_strategy": "scrapling_standard",
+                },
+                settings,
+                use_test_browser=False,
+                cycle_context=context,
+            )
+            second = engine.scrape_task(
+                {
+                    "name": "Tokyo Beta",
+                    "monitor_url": "https://merchant.example.com/products",
+                    "target_keyword": "Tokyo Beta",
+                    "fetch_strategy": "scrapling_standard",
+                },
+                settings,
+                use_test_browser=False,
+                cycle_context=context,
+            )
+        finally:
+            engine.fetcher_selector = original_selector
+
+        self.assertEqual(client.calls, [("standard", "https://merchant.example.com/products", 25)])
+        self.assertEqual(first.stock, 2)
+        self.assertEqual(second.stock, 5)
+        self.assertIn("复用同轮抓取结果", second.detail)
+        self.assertEqual(second.shared_fetch_backend, "scrapling_standard")
+
+    def test_cycle_context_domain_cooldown_skips_remaining_same_domain_tasks(self) -> None:
+        class FakeScraplingResponse:
+            def __init__(self, url: str) -> None:
+                self.url = url
+                self.status = 200
+                self.html_content = "<html><title>Just a moment...</title><body>Cloudflare checking your browser</body></html>"
+
+        class FakeScraplingClient:
+            def __init__(self) -> None:
+                self.calls: list[tuple[str, str, int]] = []
+
+            def fetch(self, mode: str, url: str, timeout_seconds: int):
+                self.calls.append((mode, url, timeout_seconds))
+                return FakeScraplingResponse(url)
+
+        client = FakeScraplingClient()
+        engine = self.app.extensions["monitor_engine"]
+        original_selector = engine.fetcher_selector
+        try:
+            engine.fetcher_selector = app_module.FetcherSelector(scrapling_client=client)
+            context = app_module.MonitorCycleContext()
+            settings = {"request_timeout_seconds": 25, **self.scrapling_settings()}
+            first = engine.scrape_task(
+                {
+                    "name": "Protected One",
+                    "monitor_url": "https://merchant.example.com/a",
+                    "target_keyword": "Protected One",
+                    "fetch_strategy": "scrapling_adaptive",
+                },
+                settings,
+                use_test_browser=False,
+                cycle_context=context,
+            )
+            second = engine.scrape_task(
+                {
+                    "name": "Protected Two",
+                    "monitor_url": "https://merchant.example.com/b",
+                    "target_keyword": "Protected Two",
+                    "fetch_strategy": "scrapling_adaptive",
+                },
+                settings,
+                use_test_browser=False,
+                cycle_context=context,
+            )
+        finally:
+            engine.fetcher_selector = original_selector
+
+        self.assertEqual([call[0] for call in client.calls], ["standard", "dynamic", "stealth"])
+        self.assertEqual(first.error_kind, "cloudflare_challenge")
+        self.assertTrue(first.domain_cooldown_until)
+        self.assertEqual(second.error_kind, "cloudflare_challenge")
+        self.assertTrue(second.cooldown_skip)
+        self.assertEqual(second.shared_fetch_backend, "scrapling_stealth")
+        self.assertIn("本轮不会继续请求该域名", second.detail)
+
     def test_generic_pricing_table_extractor_handles_order_and_soldout_buttons(self) -> None:
         fetch_result = app_module.FetchResult(html="", final_url="https://example.com/pricing")
         in_stock_html = """

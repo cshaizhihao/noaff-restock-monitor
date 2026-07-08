@@ -16,7 +16,7 @@ import subprocess
 import threading
 import time
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from functools import wraps
 from pathlib import Path
@@ -933,6 +933,55 @@ def is_task_in_protected_cooldown(task: Any, now: datetime | None = None) -> boo
     return cooldown_at > now
 
 
+def fetch_domain_for_url(url: Any) -> str:
+    try:
+        parsed = urlparse(str(url or ""))
+    except Exception:
+        return ""
+    return (parsed.hostname or "").lower()
+
+
+def fetch_cache_key(task: Any) -> str:
+    url = str(mapping_value(task, "monitor_url", "") or "").strip()
+    normalized_url, _ = urldefrag(url)
+    return "|".join(
+        [
+            task_fetch_strategy(task),
+            normalized_url.rstrip("/") or url,
+        ]
+    )
+
+
+def shared_fetch_detail(result: "FetchPipelineResult") -> str:
+    backend = result.backend_used or last_fetch_attempt_backend(result.attempts, result.error_kind)
+    if result.error_kind:
+        return f"复用同轮抓取失败结果：{result.error_kind}（{backend or 'unknown'}）。"
+    return f"复用同轮抓取结果（{backend or 'unknown'}）。"
+
+
+def scrapling_domain_cooldown_seconds(backend: str, error_kind: str, settings_payload: dict[str, Any]) -> int:
+    if error_kind == "cloudflare_challenge" or backend == FETCH_STRATEGY_SCRAPLING_STEALTH:
+        return int(settings_payload.get("scrapling_domain_cooldown_stealth") or DEFAULT_SCRAPLING_DOMAIN_COOLDOWN_STEALTH)
+    if backend == FETCH_STRATEGY_SCRAPLING_DYNAMIC:
+        return int(settings_payload.get("scrapling_domain_cooldown_dynamic") or DEFAULT_SCRAPLING_DOMAIN_COOLDOWN_DYNAMIC)
+    if backend == FETCH_STRATEGY_SCRAPLING_STANDARD:
+        return int(settings_payload.get("scrapling_domain_cooldown_standard") or DEFAULT_SCRAPLING_DOMAIN_COOLDOWN_STANDARD)
+    return 0
+
+
+def domain_cooldown_until(backend: str, error_kind: str, settings_payload: dict[str, Any], now: datetime | None = None) -> str:
+    seconds = scrapling_domain_cooldown_seconds(backend, error_kind, settings_payload)
+    if seconds <= 0:
+        return ""
+    now = now or now_utc()
+    return (now + timedelta(seconds=seconds)).isoformat(timespec="seconds")
+
+
+def domain_cooldown_message(domain: str, cooldown_until: str, detail: str = "") -> str:
+    base = f"{domain or '同域名'} 已进入采集冷却，冷却至 {cooldown_until}。本轮不会继续请求该域名。"
+    return f"{base}{detail}" if detail else base
+
+
 def protected_source_cooldown_message(cooldown_until: str) -> str:
     return (
         f"Cloudflare 受保护站点冷却中，冷却至 {cooldown_until}。"
@@ -1803,6 +1852,10 @@ def initialize_database() -> None:
                 last_error TEXT DEFAULT '',
                 last_fetch_backend TEXT DEFAULT '',
                 last_fetch_attempts TEXT DEFAULT '',
+                last_fetch_domain TEXT DEFAULT '',
+                domain_cooldown_until TEXT,
+                last_shared_fetch_key TEXT DEFAULT '',
+                last_shared_fetch_backend TEXT DEFAULT '',
                 last_protected_source_backend TEXT DEFAULT '',
                 blocked_count INTEGER NOT NULL DEFAULT 0,
                 last_blocked_at TEXT,
@@ -1888,6 +1941,10 @@ def initialize_database() -> None:
         ensure_column(connection, "tasks", "source_config", "TEXT NOT NULL DEFAULT '{}'")
         ensure_column(connection, "tasks", "last_fetch_backend", "TEXT DEFAULT ''")
         ensure_column(connection, "tasks", "last_fetch_attempts", "TEXT DEFAULT ''")
+        ensure_column(connection, "tasks", "last_fetch_domain", "TEXT DEFAULT ''")
+        ensure_column(connection, "tasks", "domain_cooldown_until", "TEXT")
+        ensure_column(connection, "tasks", "last_shared_fetch_key", "TEXT DEFAULT ''")
+        ensure_column(connection, "tasks", "last_shared_fetch_backend", "TEXT DEFAULT ''")
         ensure_column(connection, "tasks", "last_protected_source_backend", "TEXT DEFAULT ''")
         ensure_column(connection, "tasks", "blocked_count", "INTEGER NOT NULL DEFAULT 0")
         ensure_column(connection, "tasks", "last_blocked_at", "TEXT")
@@ -2012,6 +2069,10 @@ def to_task_payload(row: sqlite3.Row) -> dict[str, Any]:
         ),
         "last_fetch_backend": (row["last_fetch_backend"] or "") if "last_fetch_backend" in keys else "",
         "last_fetch_attempts": parse_fetch_attempts_text(row["last_fetch_attempts"] if "last_fetch_attempts" in keys else ""),
+        "last_fetch_domain": (row["last_fetch_domain"] or "") if "last_fetch_domain" in keys else "",
+        "domain_cooldown_until": (row["domain_cooldown_until"] or "") if "domain_cooldown_until" in keys else "",
+        "last_shared_fetch_key": (row["last_shared_fetch_key"] or "") if "last_shared_fetch_key" in keys else "",
+        "last_shared_fetch_backend": (row["last_shared_fetch_backend"] or "") if "last_shared_fetch_backend" in keys else "",
         "last_protected_source_backend": (row["last_protected_source_backend"] or "") if "last_protected_source_backend" in keys else "",
         "blocked_count": int(row["blocked_count"] or 0) if "blocked_count" in keys else 0,
         "last_blocked_at": (row["last_blocked_at"] or "") if "last_blocked_at" in keys else "",
@@ -2595,6 +2656,20 @@ class FetchPipelineResult:
     detail: str = ""
 
 
+@dataclass
+class DomainCooldown:
+    until: str
+    error_kind: str = "domain_cooldown"
+    detail: str = ""
+    backend: str = ""
+
+
+@dataclass
+class MonitorCycleContext:
+    fetch_cache: dict[str, FetchPipelineResult] = field(default_factory=dict)
+    domain_cooldowns: dict[str, DomainCooldown] = field(default_factory=dict)
+
+
 def fetch_attempt_to_payload(attempt: FetchAttempt) -> dict[str, str]:
     return {
         "backend": attempt.backend,
@@ -2676,6 +2751,10 @@ class ScrapeResult:
     cooldown_skip: bool = False
     backend_used: str = ""
     fetch_attempts: list[FetchAttempt] | None = None
+    fetch_domain: str = ""
+    shared_fetch_key: str = ""
+    shared_fetch_backend: str = ""
+    domain_cooldown_until: str = ""
 
 
 class ProtectedSourceError(RuntimeError):
@@ -3979,10 +4058,11 @@ class MonitoringEngine:
                         ORDER BY id ASC
                         """
                     ).fetchall()
+                cycle_context = MonitorCycleContext()
                 for task in tasks:
                     if self.stop_event.is_set():
                         break
-                    processed = self.process_task(task, settings_payload, use_test_browser=False)
+                    processed = self.process_task(task, settings_payload, use_test_browser=False, cycle_context=cycle_context)
                     if processed:
                         successful += 1
                 self.process_merchant_sources(settings_payload)
@@ -4004,7 +4084,15 @@ class MonitoringEngine:
             self.last_successful_tasks = successful
             self.last_exception = error_message
 
-    def scrape_task(self, task: sqlite3.Row, settings_payload: dict[str, Any], use_test_browser: bool) -> ScrapeResult:
+    def scrape_task(
+        self,
+        task: sqlite3.Row | dict[str, Any],
+        settings_payload: dict[str, Any],
+        use_test_browser: bool,
+        cycle_context: MonitorCycleContext | None = None,
+    ) -> ScrapeResult:
+        fetch_domain = fetch_domain_for_url(mapping_value(task, "monitor_url", ""))
+        shared_key = fetch_cache_key(task)
         if is_task_in_protected_cooldown(task):
             cooldown_until = str(mapping_value(task, "cooldown_until", "") or "")
             if last_error_looks_like_firecrawl_cost(task):
@@ -4015,6 +4103,9 @@ class MonitoringEngine:
                     used_test_browser=use_test_browser,
                     error_kind=last_firecrawl_cost_error_kind(task),
                     cooldown_skip=True,
+                    fetch_domain=fetch_domain,
+                    shared_fetch_key=shared_key,
+                    domain_cooldown_until=cooldown_until,
                 )
             return ScrapeResult(
                 stock=None,
@@ -4023,17 +4114,72 @@ class MonitoringEngine:
                 used_test_browser=use_test_browser,
                 error_kind="cloudflare_challenge",
                 cooldown_skip=True,
+                fetch_domain=fetch_domain,
+                shared_fetch_key=shared_key,
+                domain_cooldown_until=cooldown_until,
             )
+
+        if cycle_context and fetch_domain:
+            domain_cooldown = cycle_context.domain_cooldowns.get(fetch_domain)
+            cooldown_at = parse_iso_datetime(domain_cooldown.until) if domain_cooldown else None
+            if domain_cooldown and cooldown_at and cooldown_at > now_utc():
+                return ScrapeResult(
+                    stock=None,
+                    fragment="",
+                    detail=domain_cooldown_message(fetch_domain, domain_cooldown.until, domain_cooldown.detail),
+                    used_test_browser=use_test_browser,
+                    error_kind=domain_cooldown.error_kind,
+                    cooldown_skip=True,
+                    backend_used=domain_cooldown.backend,
+                    fetch_domain=fetch_domain,
+                    shared_fetch_key=shared_key,
+                    shared_fetch_backend=domain_cooldown.backend,
+                    domain_cooldown_until=domain_cooldown.until,
+                )
 
         browser = self.test_browser if use_test_browser else self.monitor_browser
         target_keyword = str(mapping_value(task, "target_keyword", "") or "")
-        pipeline_result = self.fetcher_selector.fetch_pipeline(
-            task,
-            browser,
-            settings_payload,
-            context="test" if use_test_browser else "monitor",
-        )
+        shared_backend = ""
+        shared_detail_text = ""
+        if cycle_context and not use_test_browser and shared_key in cycle_context.fetch_cache:
+            pipeline_result = cycle_context.fetch_cache[shared_key]
+            shared_backend = pipeline_result.backend_used or last_fetch_attempt_backend(pipeline_result.attempts, pipeline_result.error_kind)
+            shared_detail_text = shared_fetch_detail(pipeline_result)
+            if pipeline_result.detail:
+                pipeline_result = FetchPipelineResult(
+                    html=pipeline_result.html,
+                    final_url=pipeline_result.final_url,
+                    status_code=pipeline_result.status_code,
+                    backend_used=pipeline_result.backend_used,
+                    attempts=pipeline_result.attempts,
+                    error_kind=pipeline_result.error_kind,
+                    detail=f"{shared_detail_text}{pipeline_result.detail}",
+                )
+        else:
+            pipeline_result = self.fetcher_selector.fetch_pipeline(
+                task,
+                browser,
+                settings_payload,
+                context="test" if use_test_browser else "monitor",
+            )
+            if cycle_context and not use_test_browser and shared_key:
+                cycle_context.fetch_cache[shared_key] = pipeline_result
+            backend_for_cooldown = pipeline_result.backend_used or last_fetch_attempt_backend(
+                pipeline_result.attempts,
+                pipeline_result.error_kind,
+            )
+            cooldown_until = domain_cooldown_until(backend_for_cooldown, pipeline_result.error_kind, settings_payload)
+            if cycle_context and fetch_domain and cooldown_until and pipeline_result.error_kind:
+                cycle_context.domain_cooldowns[fetch_domain] = DomainCooldown(
+                    until=cooldown_until,
+                    error_kind=pipeline_result.error_kind,
+                    detail=fetch_attempts_summary(pipeline_result.attempts),
+                    backend=backend_for_cooldown,
+                )
         attempts_summary = fetch_attempts_summary(pipeline_result.attempts)
+        backend_used = pipeline_result.backend_used or last_fetch_attempt_backend(pipeline_result.attempts, pipeline_result.error_kind)
+        task_domain_cooldown = cycle_context.domain_cooldowns.get(fetch_domain) if cycle_context and fetch_domain else None
+        task_domain_cooldown_until = task_domain_cooldown.until if task_domain_cooldown else ""
         if pipeline_result.error_kind:
             return ScrapeResult(
                 stock=None,
@@ -4043,6 +4189,10 @@ class MonitoringEngine:
                 error_kind=pipeline_result.error_kind,
                 backend_used=pipeline_result.backend_used,
                 fetch_attempts=pipeline_result.attempts,
+                fetch_domain=fetch_domain,
+                shared_fetch_key=shared_key,
+                shared_fetch_backend=shared_backend or backend_used,
+                domain_cooldown_until=task_domain_cooldown_until,
             )
         if not pipeline_result.html:
             return ScrapeResult(
@@ -4053,6 +4203,10 @@ class MonitoringEngine:
                 error_kind="empty_response",
                 backend_used=pipeline_result.backend_used,
                 fetch_attempts=pipeline_result.attempts,
+                fetch_domain=fetch_domain,
+                shared_fetch_key=shared_key,
+                shared_fetch_backend=shared_backend or backend_used,
+                domain_cooldown_until=task_domain_cooldown_until,
             )
         fetch_result = FetchResult(
             html=pipeline_result.html,
@@ -4070,10 +4224,14 @@ class MonitoringEngine:
         return ScrapeResult(
             stock=extracted.stock,
             fragment=extracted.fragment,
-            detail=extracted.detail + attempts_summary,
+            detail=extracted.detail + (f"；{shared_detail_text}" if shared_detail_text else "") + attempts_summary,
             used_test_browser=use_test_browser,
             backend_used=pipeline_result.backend_used,
             fetch_attempts=pipeline_result.attempts,
+            fetch_domain=fetch_domain,
+            shared_fetch_key=shared_key,
+            shared_fetch_backend=shared_backend or backend_used,
+            domain_cooldown_until=task_domain_cooldown_until,
         )
 
     def fetch_catalog_entry_html(self, source_url: str, settings_payload: dict[str, Any], timeout_seconds: int) -> FetchResult:
@@ -4705,6 +4863,9 @@ class MonitoringEngine:
             if result.stock is None:
                 fetch_backend = result.backend_used or last_fetch_attempt_backend(result.fetch_attempts, result.error_kind)
                 fetch_attempts_text = serialize_fetch_attempts(result.fetch_attempts)
+                fetch_domain = result.fetch_domain or fetch_domain_for_url(task["monitor_url"])
+                shared_fetch_key = result.shared_fetch_key or fetch_cache_key(task)
+                shared_fetch_backend = result.shared_fetch_backend or fetch_backend
                 if result.error_kind in EXTERNAL_INPUT_PENDING_ERROR_KINDS:
                     connection.execute(
                         """
@@ -4713,15 +4874,30 @@ class MonitoringEngine:
                             last_error = '',
                             last_fetch_backend = ?,
                             last_fetch_attempts = ?,
+                            last_fetch_domain = ?,
+                            domain_cooldown_until = ?,
+                            last_shared_fetch_key = ?,
+                            last_shared_fetch_backend = ?,
                             last_protected_source_backend = '',
                             updated_at = ?
                         WHERE id = ?
                         """,
-                        (timestamp, fetch_backend, fetch_attempts_text, timestamp, task["id"]),
+                        (
+                            timestamp,
+                            fetch_backend,
+                            fetch_attempts_text,
+                            fetch_domain,
+                            result.domain_cooldown_until or None,
+                            shared_fetch_key,
+                            shared_fetch_backend,
+                            timestamp,
+                            task["id"],
+                        ),
                     )
                 elif result.error_kind == "cloudflare_challenge" and not result.cooldown_skip:
                     blocked_count = task_blocked_count(task) + 1
                     cooldown_until = protected_source_cooldown_until(blocked_count, checked_at)
+                    domain_until = result.domain_cooldown_until or cooldown_until
                     protected_backend = result.backend_used or last_fetch_attempt_backend(result.fetch_attempts, "cloudflare_challenge")
                     connection.execute(
                         """
@@ -4730,6 +4906,10 @@ class MonitoringEngine:
                             last_error = ?,
                             last_fetch_backend = ?,
                             last_fetch_attempts = ?,
+                            last_fetch_domain = ?,
+                            domain_cooldown_until = ?,
+                            last_shared_fetch_key = ?,
+                            last_shared_fetch_backend = ?,
                             last_protected_source_backend = ?,
                             blocked_count = ?,
                             last_blocked_at = ?,
@@ -4742,6 +4922,10 @@ class MonitoringEngine:
                             result.detail[:1000],
                             fetch_backend,
                             fetch_attempts_text,
+                            fetch_domain,
+                            domain_until,
+                            shared_fetch_key,
+                            shared_fetch_backend,
                             protected_backend,
                             blocked_count,
                             timestamp,
@@ -4759,6 +4943,10 @@ class MonitoringEngine:
                             last_error = ?,
                             last_fetch_backend = ?,
                             last_fetch_attempts = ?,
+                            last_fetch_domain = ?,
+                            domain_cooldown_until = ?,
+                            last_shared_fetch_key = ?,
+                            last_shared_fetch_backend = ?,
                             last_protected_source_backend = '',
                             last_blocked_at = ?,
                             cooldown_until = ?,
@@ -4770,6 +4958,10 @@ class MonitoringEngine:
                             result.detail[:1000],
                             fetch_backend,
                             fetch_attempts_text,
+                            fetch_domain,
+                            result.domain_cooldown_until or cooldown_until,
+                            shared_fetch_key,
+                            shared_fetch_backend,
                             timestamp,
                             cooldown_until,
                             timestamp,
@@ -4784,11 +4976,26 @@ class MonitoringEngine:
                             last_error = ?,
                             last_fetch_backend = ?,
                             last_fetch_attempts = ?,
+                            last_fetch_domain = ?,
+                            domain_cooldown_until = ?,
+                            last_shared_fetch_key = ?,
+                            last_shared_fetch_backend = ?,
                             last_protected_source_backend = '',
                             updated_at = ?
                         WHERE id = ?
                         """,
-                        (timestamp, result.detail[:1000], fetch_backend, fetch_attempts_text, timestamp, task["id"]),
+                        (
+                            timestamp,
+                            result.detail[:1000],
+                            fetch_backend,
+                            fetch_attempts_text,
+                            fetch_domain,
+                            result.domain_cooldown_until or None,
+                            shared_fetch_key,
+                            shared_fetch_backend,
+                            timestamp,
+                            task["id"],
+                        ),
                     )
                 connection.commit()
                 return False
@@ -4893,6 +5100,10 @@ class MonitoringEngine:
                     last_error = ?,
                     last_fetch_backend = ?,
                     last_fetch_attempts = ?,
+                    last_fetch_domain = ?,
+                    domain_cooldown_until = ?,
+                    last_shared_fetch_key = ?,
+                    last_shared_fetch_backend = ?,
                     last_protected_source_backend = '',
                     blocked_count = 0,
                     last_blocked_at = NULL,
@@ -4909,6 +5120,10 @@ class MonitoringEngine:
                     last_error[:1000],
                     result.backend_used or last_fetch_attempt_backend(result.fetch_attempts),
                     serialize_fetch_attempts(result.fetch_attempts),
+                    result.fetch_domain or fetch_domain_for_url(task["monitor_url"]),
+                    result.domain_cooldown_until or None,
+                    result.shared_fetch_key or fetch_cache_key(task),
+                    result.shared_fetch_backend or result.backend_used or last_fetch_attempt_backend(result.fetch_attempts),
                     timestamp,
                     task["id"],
                 ),
@@ -4916,8 +5131,17 @@ class MonitoringEngine:
             connection.commit()
         return True
 
-    def process_task(self, task: sqlite3.Row, settings_payload: dict[str, Any], use_test_browser: bool) -> bool:
-        result = self.scrape_task(task, settings_payload, use_test_browser)
+    def process_task(
+        self,
+        task: sqlite3.Row,
+        settings_payload: dict[str, Any],
+        use_test_browser: bool,
+        cycle_context: MonitorCycleContext | None = None,
+    ) -> bool:
+        if cycle_context is None:
+            result = self.scrape_task(task, settings_payload, use_test_browser)
+        else:
+            result = self.scrape_task(task, settings_payload, use_test_browser, cycle_context=cycle_context)
         if use_test_browser:
             raise RuntimeError("测试推送应走 run_test_push 流程，不进入常规状态机。")
         return self.apply_task_result(task, settings_payload, result)
