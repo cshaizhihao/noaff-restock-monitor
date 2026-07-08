@@ -1416,6 +1416,10 @@ button:disabled,
         transform 220ms cubic-bezier(0.25, 1, 0.5, 1);
 }
 
+.task-product-card {
+    min-width: 0;
+}
+
 .task-row:hover {
     border-color: #3e4455;
     background: #1c1f2a;

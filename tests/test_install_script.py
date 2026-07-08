@@ -1095,6 +1095,7 @@ class InstallScriptTestCase(unittest.TestCase):
         self.assertIn(".task-browser-card", app_css)
         self.assertIn("[data-drag-scope]", app_css)
         self.assertIn(".task-row", app_css)
+        self.assertIn(".task-product-card", app_css)
         self.assertIn("task-row-details", app_js)
         self.assertIn("data-task-log-details", app_js)
         self.assertIn(".task-row-details", app_css)
