@@ -868,6 +868,8 @@ class InstallScriptTestCase(unittest.TestCase):
         self.assertIn("prefers-reduced-motion", app_css)
         self.assertIn(".task-actions", app_css)
         self.assertIn('class="task-actions', app_js)
+        self.assertIn('class="glass-sidebar hidden h-full w-64 flex-none flex-col md:flex"', portal_html)
+        self.assertNotRegex(app_css, r"(?m)^\\.hidden\\s*\\{\\s*display:\\s*none\\s*!important;\\s*\\}")
         self.assertNotIn("精准狙击关键词", portal_html)
         self.assertNotIn("库存嗅探", app_js)
 
