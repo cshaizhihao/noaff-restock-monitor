@@ -4,8 +4,10 @@ import html as html_module
 import importlib
 import importlib.util
 import ipaddress
+import atexit
 import json
 import logging
+import multiprocessing
 import os
 import re
 import secrets
@@ -59,6 +61,10 @@ SECRET_KEY_PATH = DATA_DIR / ".secret_key"
 UTC = timezone.utc
 
 load_dotenv(ENV_PATH if ENV_PATH.exists() else None)
+
+_SCRAPLING_XVFB_PROCESS = None
+_SCRAPLING_XVFB_DISPLAY = ""
+_SCRAPLING_XVFB_LOCK = threading.Lock()
 
 
 def now_utc() -> datetime:
@@ -149,6 +155,7 @@ DEFAULT_SCRAPLING_MAX_CONCURRENCY_DYNAMIC = int(os.getenv("SCRAPLING_MAX_CONCURR
 DEFAULT_SCRAPLING_MAX_CONCURRENCY_STEALTH = int(os.getenv("SCRAPLING_MAX_CONCURRENCY_STEALTH", "1"))
 DEFAULT_SCRAPLING_SESSION_REUSE = env_bool("SCRAPLING_SESSION_REUSE", True)
 DEFAULT_SCRAPLING_ADAPTIVE_SELECTOR = env_bool("SCRAPLING_ADAPTIVE_SELECTOR", True)
+DEFAULT_SCRAPLING_HEADLESS = env_bool("SCRAPLING_HEADLESS", True)
 DEFAULT_CATALOG_DISCOVERY_STRATEGY = os.getenv("CATALOG_DISCOVERY_STRATEGY", "local").strip().lower() or "local"
 DEFAULT_CATALOG_SCRAPE_STRATEGY = os.getenv("CATALOG_SCRAPE_STRATEGY", "scrapling_adaptive").strip().lower() or "scrapling_adaptive"
 DEFAULT_CATALOG_FETCH_STRATEGY = os.getenv("CATALOG_DEFAULT_FETCH_STRATEGY", "scrapling_adaptive").strip().lower() or "scrapling_adaptive"
@@ -289,6 +296,7 @@ SETTINGS_DEFAULTS = {
     "scrapling_max_concurrency_stealth": str(DEFAULT_SCRAPLING_MAX_CONCURRENCY_STEALTH),
     "scrapling_session_reuse": settings_bool_text(DEFAULT_SCRAPLING_SESSION_REUSE),
     "scrapling_adaptive_selector": settings_bool_text(DEFAULT_SCRAPLING_ADAPTIVE_SELECTOR),
+    "scrapling_headless": settings_bool_text(DEFAULT_SCRAPLING_HEADLESS),
     "catalog_discovery_strategy": DEFAULT_CATALOG_DISCOVERY_STRATEGY,
     "catalog_scrape_strategy": DEFAULT_CATALOG_SCRAPE_STRATEGY,
     "catalog_default_fetch_strategy": DEFAULT_CATALOG_FETCH_STRATEGY,
@@ -452,6 +460,22 @@ SENSITIVE_SOURCE_CONFIG_KEYS = {
     "token",
     "secret",
     "hmac_secret",
+    "cookie",
+    "cookies",
+    "headers",
+    "authorization",
+}
+PUBLIC_PRICING_FALLBACK_BACKEND = "public_pricing_fallback"
+PUBLIC_READER_BASE_URL = os.getenv("PUBLIC_READER_BASE_URL", "https://r.jina.ai/http://").strip() or "https://r.jina.ai/http://"
+PUBLIC_PRICING_FALLBACK_ERROR_KINDS = {
+    "cloudflare_challenge",
+    "scrapling_challenge_failed",
+    "scrapling_challenge_upgrade_required",
+    "timeout",
+    "http_error",
+    "empty_response",
+    "request_error",
+    "scrapling_browser_failed",
 }
 STOCK_RULE_TYPES = {
     "auto_card",
@@ -790,6 +814,7 @@ def normalize_scrapling_settings(raw: dict[str, str]) -> dict[str, Any]:
         "scrapling_max_concurrency_stealth": bounded_setting_int(raw.get("scrapling_max_concurrency_stealth"), DEFAULT_SCRAPLING_MAX_CONCURRENCY_STEALTH, 1, 3),
         "scrapling_session_reuse": parse_setting_bool(raw.get("scrapling_session_reuse"), DEFAULT_SCRAPLING_SESSION_REUSE),
         "scrapling_adaptive_selector": parse_setting_bool(raw.get("scrapling_adaptive_selector"), DEFAULT_SCRAPLING_ADAPTIVE_SELECTOR),
+        "scrapling_headless": parse_setting_bool(raw.get("scrapling_headless"), DEFAULT_SCRAPLING_HEADLESS),
     }
 
 
@@ -819,11 +844,67 @@ def scrapling_runtime_status() -> dict[str, str | bool]:
             "status": "missing_browser",
             "detail": "Scrapling 依赖已安装，但未找到可用 Chromium/Chrome。请重新执行安装或升级脚本安装浏览器依赖。",
         }
+    headed_ready = bool(os.getenv("DISPLAY") or os.getenv("WAYLAND_DISPLAY"))
+    xvfb_ready = shutil.which("Xvfb") is not None or shutil.which("xvfb-run") is not None
     return {
         "available": True,
         "status": "available",
         "detail": f"Scrapling 采集引擎可用，浏览器：{browser_binary}",
+        "browser_binary": browser_binary,
+        "headed_ready": headed_ready,
+        "xvfb_ready": xvfb_ready,
+        "headed_detail": "可直接启动有头浏览器。" if headed_ready else ("可通过 Xvfb 启动有头浏览器。" if xvfb_ready else "当前环境没有 DISPLAY/Xvfb，有头浏览器会启动失败。"),
     }
+
+
+def cleanup_scrapling_xvfb() -> None:
+    global _SCRAPLING_XVFB_PROCESS
+    process = _SCRAPLING_XVFB_PROCESS
+    if process is not None and process.poll() is None:
+        try:
+            process.terminate()
+            process.wait(timeout=2)
+        except Exception:
+            try:
+                process.kill()
+            except Exception:
+                pass
+    _SCRAPLING_XVFB_PROCESS = None
+
+
+atexit.register(cleanup_scrapling_xvfb)
+
+
+def ensure_scrapling_display_for_headed() -> str:
+    global _SCRAPLING_XVFB_PROCESS, _SCRAPLING_XVFB_DISPLAY
+    existing_display = os.getenv("DISPLAY") or os.getenv("WAYLAND_DISPLAY")
+    if existing_display:
+        return existing_display
+    xvfb_binary = shutil.which("Xvfb")
+    if not xvfb_binary:
+        return ""
+    with _SCRAPLING_XVFB_LOCK:
+        if _SCRAPLING_XVFB_PROCESS is not None and _SCRAPLING_XVFB_PROCESS.poll() is None and _SCRAPLING_XVFB_DISPLAY:
+            os.environ["DISPLAY"] = _SCRAPLING_XVFB_DISPLAY
+            return _SCRAPLING_XVFB_DISPLAY
+        requested_display = os.getenv("SCRAPLING_XVFB_DISPLAY", ":99").strip() or ":99"
+        candidate_displays = list(dict.fromkeys([requested_display, ":98", ":97", ":96"]))
+        for display in candidate_displays:
+            try:
+                process = subprocess.Popen(
+                    [xvfb_binary, display, "-screen", "0", "1920x1080x24", "-nolisten", "tcp"],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                )
+            except Exception:
+                continue
+            time.sleep(0.3)
+            if process.poll() is None:
+                _SCRAPLING_XVFB_PROCESS = process
+                _SCRAPLING_XVFB_DISPLAY = display
+                os.environ["DISPLAY"] = display
+                return display
+        return ""
 
 
 def catalog_option_int(value: Any, default: int, minimum: int = 1, maximum: int = 250) -> int:
@@ -937,6 +1018,16 @@ def parse_source_config(value: Any) -> dict[str, Any]:
     except json.JSONDecodeError:
         return {}
     return scrub_source_config(parsed) if isinstance(parsed, dict) else {}
+
+
+def raw_source_config(value: Any) -> dict[str, Any]:
+    if isinstance(value, dict):
+        return value
+    try:
+        parsed = json.loads(str(value or "{}"))
+    except json.JSONDecodeError:
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
 
 
 def catalog_item_metadata(raw_payload: Any) -> dict[str, Any]:
@@ -2210,6 +2301,9 @@ def login_required(view):
 
 def to_task_payload(row: sqlite3.Row) -> dict[str, Any]:
     keys = set(row.keys())
+    last_error = sanitize_telegram_error(row["last_error"] or "")
+    last_fetch_attempts = parse_fetch_attempts_text(row["last_fetch_attempts"] if "last_fetch_attempts" in keys else "")
+    last_error_kind = task_error_kind_from_attempts(last_error, last_fetch_attempts)
     return {
         "id": row["id"],
         "name": row["name"],
@@ -2239,14 +2333,14 @@ def to_task_payload(row: sqlite3.Row) -> dict[str, Any]:
         "last_state": row["last_state"],
         "message_id": row["message_id"],
         "last_checked_at": row["last_checked_at"] or "",
-        "last_error": sanitize_telegram_error(row["last_error"] or ""),
-        "last_error_kind": classify_browser_error(row["last_error"] or ""),
+        "last_error": last_error,
+        "last_error_kind": last_error_kind,
         "last_error_detail": summarize_task_error(
-            sanitize_telegram_error(row["last_error"] or ""),
-            classify_browser_error(row["last_error"] or ""),
+            last_error,
+            last_error_kind,
         ),
         "last_fetch_backend": (row["last_fetch_backend"] or "") if "last_fetch_backend" in keys else "",
-        "last_fetch_attempts": parse_fetch_attempts_text(row["last_fetch_attempts"] if "last_fetch_attempts" in keys else ""),
+        "last_fetch_attempts": last_fetch_attempts,
         "last_fetch_domain": (row["last_fetch_domain"] or "") if "last_fetch_domain" in keys else "",
         "domain_cooldown_until": (row["domain_cooldown_until"] or "") if "domain_cooldown_until" in keys else "",
         "last_shared_fetch_key": (row["last_shared_fetch_key"] or "") if "last_shared_fetch_key" in keys else "",
@@ -2891,6 +2985,14 @@ def parse_fetch_attempts_text(value: Any) -> list[dict[str, str]]:
     return parsed
 
 
+def task_error_kind_from_attempts(last_error: str, attempts: list[dict[str, str]]) -> str:
+    for attempt in reversed(attempts or []):
+        error_kind = str(attempt.get("error_kind") or "").strip()
+        if error_kind:
+            return error_kind
+    return classify_browser_error(last_error or "")
+
+
 def fetch_attempts_summary(attempts: list[FetchAttempt] | None) -> str:
     if not attempts:
         return ""
@@ -3442,8 +3544,122 @@ class StaticHttpFetcher:
         return FetchResult(html=html_text, final_url=final_url, status_code=status_code, detail="ok")
 
 
+def public_reader_url(target_url: str) -> str:
+    base = PUBLIC_READER_BASE_URL
+    if "{url}" in base:
+        return base.format(url=target_url)
+    return f"{base}{target_url}"
+
+
+def public_pricing_fallback_url(url: str) -> str:
+    try:
+        parsed = urlparse(str(url or ""))
+    except Exception:
+        return ""
+    host = (parsed.hostname or "").lower()
+    path = (parsed.path or "").lower()
+    if host in {"dmit.io", "www.dmit.io"} and (path.endswith("/cart.php") or path.endswith("/pages/pricing")):
+        scheme = parsed.scheme or "https"
+        return f"{scheme}://{parsed.netloc}/pages/pricing"
+    return ""
+
+
+def task_public_pricing_fallback_url(task: Any) -> str:
+    source_config = raw_source_config(mapping_value(task, "source_config", "{}"))
+    if parse_setting_bool(source_config.get("disable_public_pricing_fallback"), False):
+        return ""
+    return public_pricing_fallback_url(monitor_url_for_fetch(task))
+
+
+class PublicPricingFallbackFetcher:
+    def __init__(self, session: requests.Session | None = None) -> None:
+        self.session = session or requests.Session()
+
+    def fetch(self, url: str, timeout_seconds: int) -> FetchResult:
+        pricing_url = public_pricing_fallback_url(url)
+        if not pricing_url:
+            return FetchResult(
+                html="",
+                final_url=url,
+                error_kind="public_pricing_unsupported",
+                detail="当前链接没有可用的公开价格页兜底。",
+            )
+        reader_url = public_reader_url(pricing_url)
+        try:
+            response = self.session.get(
+                reader_url,
+                headers={"User-Agent": DEFAULT_BROWSER_USER_AGENT or STATIC_HTTP_USER_AGENT},
+                timeout=max(10, min(int(timeout_seconds or DEFAULT_TIMEOUT_SECONDS), 45)),
+            )
+        except requests.Timeout:
+            return FetchResult(html="", final_url=pricing_url, error_kind="timeout", detail="公开价格页兜底请求超时。")
+        except requests.RequestException as exc:
+            return FetchResult(
+                html="",
+                final_url=pricing_url,
+                error_kind="request_error",
+                detail=f"公开价格页兜底请求失败：{str(exc)[:300]}",
+            )
+        html_text = getattr(response, "text", "") or ""
+        status_code = int(getattr(response, "status_code", 0) or 0)
+        if status_code >= 400:
+            return FetchResult(
+                html="",
+                final_url=pricing_url,
+                status_code=status_code,
+                error_kind="http_error",
+                detail=f"公开价格页兜底 HTTP {status_code}。",
+            )
+        if looks_like_cloudflare_challenge(html_text, extract_page_title(html_text), pricing_url):
+            return FetchResult(
+                html="",
+                final_url=pricing_url,
+                status_code=status_code,
+                error_kind="cloudflare_challenge",
+                detail="公开价格页兜底仍返回验证页。",
+            )
+        if "Order Now" not in html_text and "Out of Stock" not in html_text:
+            return FetchResult(
+                html="",
+                final_url=pricing_url,
+                status_code=status_code,
+                error_kind="empty_response",
+                detail="公开价格页兜底未返回可识别的价格表。",
+            )
+        return FetchResult(
+            html=html_text,
+            final_url=pricing_url,
+            status_code=status_code,
+            detail="公开价格页兜底已返回价格表。",
+        )
+
+
 class ScraplingUnavailableError(RuntimeError):
     pass
+
+
+@dataclass
+class ScraplingResponseSnapshot:
+    url: str
+    status_code: int
+    html_content: str
+
+
+def scrapling_browser_fetch_worker(fetcher_name: str, url: str, kwargs: dict[str, Any], queue: multiprocessing.Queue) -> None:
+    try:
+        scrapling_module = importlib.import_module("scrapling")
+        fetcher = getattr(scrapling_module, fetcher_name)
+        response = fetcher.fetch(url, **kwargs)
+        queue.put(
+            {
+                "ok": True,
+                "url": str(getattr(response, "url", "") or url),
+                "status_code": int(getattr(response, "status", None) or getattr(response, "status_code", None) or 0),
+                "html": scrapling_response_html(response),
+            }
+        )
+    except BaseException as exc:
+        queue.put({"ok": False, "error": str(exc), "error_type": type(exc).__name__})
 
 
 class ScraplingFetcher:
@@ -3456,13 +3672,72 @@ class ScraplingFetcher:
         key = f"scrapling_timeout_{self.mode}"
         return int(self.settings.get(key) or fallback or DEFAULT_TIMEOUT_SECONDS)
 
+    def source_config(self) -> dict[str, Any]:
+        return raw_source_config(self.settings.get("source_config", {}))
+
+    def configured_headers(self) -> dict[str, str]:
+        config = self.source_config()
+        raw_headers = config.get("headers")
+        headers: dict[str, str] = {}
+        if isinstance(raw_headers, dict):
+            headers.update({str(key): str(value) for key, value in raw_headers.items() if str(key).strip() and str(value).strip()})
+        elif isinstance(raw_headers, str) and raw_headers.strip():
+            for line in raw_headers.splitlines():
+                if ":" not in line:
+                    continue
+                key, value = line.split(":", 1)
+                key = key.strip()
+                value = value.strip()
+                if key and value:
+                    headers[key] = value
+        cookie = str(config.get("cookie") or "").strip()
+        if cookie:
+            headers["Cookie"] = cookie
+        return headers
+
+    def configured_cookies(self, url: str) -> list[dict[str, Any]]:
+        config = self.source_config()
+        cookies = config.get("cookies")
+        if isinstance(cookies, list):
+            return [cookie for cookie in cookies if isinstance(cookie, dict)]
+        cookie_header = str(config.get("cookie") or "").strip()
+        if not cookie_header:
+            return []
+        domain = urlparse(url).hostname or ""
+        parsed_cookies: list[dict[str, Any]] = []
+        for item in cookie_header.split(";"):
+            if "=" not in item:
+                continue
+            name, value = item.split("=", 1)
+            name = name.strip()
+            value = value.strip()
+            if name:
+                parsed_cookies.append({"name": name, "value": value, "domain": domain, "path": "/"})
+        return parsed_cookies
+
+    def configured_user_data_dir(self, url: str) -> str:
+        config = self.source_config()
+        explicit_dir = str(config.get("user_data_dir") or "").strip()
+        if explicit_dir:
+            return explicit_dir
+        if parse_setting_bool(config.get("persistent_session"), False):
+            domain = re.sub(r"[^a-zA-Z0-9._-]+", "_", urlparse(url).hostname or "site")
+            profile_dir = DATA_DIR / "scrapling_profiles" / domain
+            profile_dir.mkdir(parents=True, exist_ok=True)
+            return str(profile_dir)
+        return ""
+
     def browser_kwargs(self, timeout_seconds: int) -> dict[str, Any]:
         timeout_ms = max(5, int(timeout_seconds)) * 1000
         flags = ["--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu", "--start-maximized"]
         browser_binary = find_browser_binary()
         stealth_mode = self.mode == "stealth"
+        headless = bool(self.settings.get("scrapling_headless", True))
+        if not headless:
+            ensure_scrapling_display_for_headed()
+            flags.append("--window-size=1720,1120")
         kwargs: dict[str, Any] = {
-            "headless": True,
+            "headless": headless,
             "disable_resources": not stealth_mode,
             "block_ads": not stealth_mode,
             "load_dom": True,
@@ -3489,17 +3764,37 @@ class ScraplingFetcher:
             )
         return kwargs
 
+    def apply_source_config_to_browser_kwargs(self, kwargs: dict[str, Any], url: str) -> dict[str, Any]:
+        headers = self.configured_headers()
+        if headers:
+            kwargs["extra_headers"] = {**dict(kwargs.get("extra_headers") or {}), **headers}
+        cookies = self.configured_cookies(url)
+        if cookies:
+            kwargs["cookies"] = cookies
+        user_data_dir = self.configured_user_data_dir(url)
+        if user_data_dir:
+            kwargs["user_data_dir"] = user_data_dir
+        config = self.source_config()
+        wait_selector = str(config.get("wait_selector") or "").strip()
+        if wait_selector:
+            kwargs["wait_selector"] = wait_selector
+        if "google_search" in config:
+            kwargs["google_search"] = parse_setting_bool(config.get("google_search"), True)
+        return kwargs
+
     def static_kwargs(self, timeout_seconds: int) -> dict[str, Any]:
+        headers = {
+            "User-Agent": DEFAULT_BROWSER_USER_AGENT or STATIC_HTTP_USER_AGENT,
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+            "Cache-Control": "no-cache",
+        }
+        headers.update(self.configured_headers())
         return {
             "timeout": timeout_seconds,
             "follow_redirects": True,
             "retries": 1,
-            "headers": {
-                "User-Agent": DEFAULT_BROWSER_USER_AGENT or STATIC_HTTP_USER_AGENT,
-                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-                "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
-                "Cache-Control": "no-cache",
-            },
+            "headers": headers,
         }
 
     def fetch(self, url: str, timeout_seconds: int) -> FetchResult:
@@ -3535,13 +3830,50 @@ class ScraplingFetcher:
         except ModuleNotFoundError as exc:
             raise ImportError("scrapling") from exc
         if self.mode == "standard":
-            return scrapling_module.Fetcher.get(url, **self.static_kwargs(timeout_seconds))
+            try:
+                requests_fetcher_module = importlib.import_module("scrapling.fetchers.requests")
+                fetcher_session = getattr(requests_fetcher_module, "FetcherSession")
+            except (ModuleNotFoundError, AttributeError) as exc:
+                raise ImportError("FetcherSession") from exc
+            with fetcher_session(**self.static_kwargs(timeout_seconds)) as session:
+                return session.get(url)
         fetcher_name = "StealthyFetcher" if self.mode == "stealth" else "DynamicFetcher"
         try:
             fetcher = getattr(scrapling_module, fetcher_name)
         except AttributeError as exc:
             raise ImportError(fetcher_name) from exc
-        return fetcher.fetch(url, **self.browser_kwargs(timeout_seconds))
+        return self._fetch_browser_response_in_process(fetcher_name, url, timeout_seconds)
+
+    def _fetch_browser_response_in_process(self, fetcher_name: str, url: str, timeout_seconds: int) -> ScraplingResponseSnapshot:
+        kwargs = self.apply_source_config_to_browser_kwargs(self.browser_kwargs(timeout_seconds), url)
+        queue: multiprocessing.Queue = multiprocessing.Queue(maxsize=1)
+        process = multiprocessing.Process(
+            target=scrapling_browser_fetch_worker,
+            args=(fetcher_name, url, kwargs, queue),
+            daemon=True,
+        )
+        process.start()
+        hard_timeout = max(10, int(timeout_seconds) + 5)
+        process.join(hard_timeout)
+        if process.is_alive():
+            process.terminate()
+            process.join(3)
+            if process.is_alive():
+                process.kill()
+                process.join(2)
+            raise TimeoutError(f"Scrapling {self.mode} 超过 {hard_timeout} 秒仍未返回。")
+        if queue.empty():
+            if process.exitcode:
+                raise RuntimeError(f"Scrapling {self.mode} 子进程异常退出：exit {process.exitcode}")
+            raise RuntimeError(f"Scrapling {self.mode} 子进程没有返回结果。")
+        payload = queue.get()
+        if not payload.get("ok"):
+            raise RuntimeError(str(payload.get("error") or payload.get("error_type") or "Scrapling 子进程失败"))
+        return ScraplingResponseSnapshot(
+            url=str(payload.get("url") or url),
+            status_code=int(payload.get("status_code") or 0),
+            html_content=str(payload.get("html") or ""),
+        )
 
     def response_to_fetch_result(self, response: Any, fallback_url: str) -> FetchResult:
         final_url = str(getattr(response, "url", "") or fallback_url)
@@ -3921,11 +4253,31 @@ class FetcherSelector:
         self,
         static_http_fetcher: StaticHttpFetcher | None = None,
         firecrawl_fetcher: FirecrawlFetcher | None = None,
+        public_pricing_fetcher: PublicPricingFallbackFetcher | None = None,
         scrapling_client: Any = None,
     ) -> None:
         self.static_http_fetcher = static_http_fetcher or StaticHttpFetcher()
         self.firecrawl_fetcher = firecrawl_fetcher
+        self.public_pricing_fetcher = public_pricing_fetcher or PublicPricingFallbackFetcher()
         self.scrapling_client = scrapling_client
+
+    def settings_for_task(self, settings_payload: dict[str, Any] | None, task: Any) -> dict[str, Any]:
+        effective = dict(settings_payload or {})
+        effective["source_config"] = raw_source_config(mapping_value(task, "source_config", "{}"))
+        return effective
+
+    def add_public_pricing_fallback(
+        self,
+        backends: list[str],
+        task: Any,
+        settings_payload: dict[str, Any] | None = None,
+        insert_after_first: bool = True,
+    ) -> list[str]:
+        if task_public_pricing_fallback_url(task) and PUBLIC_PRICING_FALLBACK_BACKEND not in backends:
+            if insert_after_first and backends:
+                return [backends[0], PUBLIC_PRICING_FALLBACK_BACKEND, *backends[1:]]
+            return [*backends, PUBLIC_PRICING_FALLBACK_BACKEND]
+        return backends
 
     def select(
         self,
@@ -3951,13 +4303,15 @@ class FetcherSelector:
         backend: str,
         browser_harness: BrowserHarness,
         settings_payload: dict[str, Any] | None = None,
-    ) -> BrowserFetcher | StaticHttpFetcher | FirecrawlFetcher | ExternalInputFetcher | ScraplingFetcher:
+    ) -> BrowserFetcher | StaticHttpFetcher | FirecrawlFetcher | ExternalInputFetcher | ScraplingFetcher | PublicPricingFallbackFetcher:
         if backend == FETCH_STRATEGY_FIRECRAWL:
             if self.firecrawl_fetcher is not None:
                 return self.firecrawl_fetcher
             return FirecrawlFetcher(settings_payload or {})
         if backend in SCRAPLING_FETCH_STRATEGIES:
             return ScraplingFetcher(settings_payload or {}, scrapling_mode_for_backend(backend), self.scrapling_client)
+        if backend == PUBLIC_PRICING_FALLBACK_BACKEND:
+            return self.public_pricing_fetcher
         if backend == FETCH_STRATEGY_STATIC_HTTP:
             return self.static_http_fetcher
         if backend in EXTERNAL_INPUT_FETCH_STRATEGIES:
@@ -3980,29 +4334,33 @@ class FetcherSelector:
             FETCH_STRATEGY_SCRAPLING_DYNAMIC,
             FETCH_STRATEGY_SCRAPLING_STEALTH,
         }:
-            return [strategy]
+            return self.add_public_pricing_fallback([strategy], task, settings_payload)
         if strategy == FETCH_STRATEGY_SCRAPLING_ADAPTIVE:
-            return [
-                FETCH_STRATEGY_SCRAPLING_STANDARD,
-                FETCH_STRATEGY_SCRAPLING_DYNAMIC,
-                FETCH_STRATEGY_SCRAPLING_STEALTH,
-            ]
+            return self.add_public_pricing_fallback(
+                [
+                    FETCH_STRATEGY_SCRAPLING_STANDARD,
+                    FETCH_STRATEGY_SCRAPLING_DYNAMIC,
+                    FETCH_STRATEGY_SCRAPLING_STEALTH,
+                ],
+                task,
+                settings_payload,
+            )
         if strategy == FETCH_STRATEGY_FIRECRAWL:
-            return [FETCH_STRATEGY_FIRECRAWL]
+            return self.add_public_pricing_fallback([FETCH_STRATEGY_FIRECRAWL], task, settings_payload, insert_after_first=False)
         if strategy == FETCH_STRATEGY_FIRECRAWL_THEN_STATIC:
-            return ([FETCH_STRATEGY_FIRECRAWL] if firecrawl_allowed else []) + [FETCH_STRATEGY_STATIC_HTTP]
+            return self.add_public_pricing_fallback(([FETCH_STRATEGY_FIRECRAWL] if firecrawl_allowed else []) + [FETCH_STRATEGY_STATIC_HTTP], task, settings_payload)
         if strategy == FETCH_STRATEGY_STATIC_THEN_FIRECRAWL:
-            return [FETCH_STRATEGY_STATIC_HTTP] + ([FETCH_STRATEGY_FIRECRAWL] if firecrawl_allowed else [])
+            return self.add_public_pricing_fallback([FETCH_STRATEGY_STATIC_HTTP] + ([FETCH_STRATEGY_FIRECRAWL] if firecrawl_allowed else []), task, settings_payload)
         if strategy == FETCH_STRATEGY_FIRECRAWL_THEN_BROWSER:
-            return ([FETCH_STRATEGY_FIRECRAWL] if firecrawl_allowed else []) + [FETCH_STRATEGY_BROWSER]
+            return self.add_public_pricing_fallback(([FETCH_STRATEGY_FIRECRAWL] if firecrawl_allowed else []) + [FETCH_STRATEGY_BROWSER], task, settings_payload)
         if strategy == FETCH_STRATEGY_ADAPTIVE:
             backends = [FETCH_STRATEGY_STATIC_HTTP, FETCH_STRATEGY_BROWSER]
             if firecrawl_allowed:
                 backends.append(FETCH_STRATEGY_FIRECRAWL)
-            return backends
+            return self.add_public_pricing_fallback(backends, task, settings_payload)
         if strategy in STATIC_HTTP_FETCH_STRATEGIES:
-            return [FETCH_STRATEGY_STATIC_HTTP]
-        return [FETCH_STRATEGY_BROWSER]
+            return self.add_public_pricing_fallback([FETCH_STRATEGY_STATIC_HTTP], task, settings_payload)
+        return self.add_public_pricing_fallback([FETCH_STRATEGY_BROWSER], task, settings_payload)
 
     def should_try_next_backend(
         self,
@@ -4013,6 +4371,8 @@ class FetcherSelector:
         settings_payload = settings_payload or {}
         if not result.error_kind:
             return False
+        if next_backend == PUBLIC_PRICING_FALLBACK_BACKEND:
+            return result.error_kind in PUBLIC_PRICING_FALLBACK_ERROR_KINDS
         if next_backend in SCRAPLING_FETCH_STRATEGIES and not settings_payload.get("scrapling_enabled", True):
             return False
         if next_backend in {FETCH_STRATEGY_SCRAPLING_DYNAMIC, FETCH_STRATEGY_SCRAPLING_STEALTH}:
@@ -4054,6 +4414,7 @@ class FetcherSelector:
     ) -> FetchPipelineResult:
         url = monitor_url_for_fetch(task)
         strategy = task_fetch_strategy(task)
+        settings_payload = self.settings_for_task(settings_payload, task)
         if (
             context == "monitor"
             and strategy == FETCH_STRATEGY_FIRECRAWL
@@ -4286,7 +4647,8 @@ class MonitoringEngine:
     ) -> ScrapeResult:
         fetch_domain = fetch_domain_for_url(mapping_value(task, "monitor_url", ""))
         shared_key = fetch_cache_key(task)
-        if not use_test_browser and is_task_in_protected_cooldown(task):
+        has_public_pricing_fallback = bool(task_public_pricing_fallback_url(task))
+        if not use_test_browser and is_task_in_protected_cooldown(task) and not has_public_pricing_fallback:
             cooldown_until = str(mapping_value(task, "cooldown_until", "") or "")
             if last_error_looks_like_firecrawl_cost(task):
                 return ScrapeResult(
@@ -4315,7 +4677,7 @@ class MonitoringEngine:
         if cycle_context and fetch_domain and not use_test_browser:
             domain_cooldown = cycle_context.domain_cooldowns.get(fetch_domain)
             cooldown_at = parse_iso_datetime(domain_cooldown.until) if domain_cooldown else None
-            if domain_cooldown and cooldown_at and cooldown_at > now_utc():
+            if domain_cooldown and cooldown_at and cooldown_at > now_utc() and not has_public_pricing_fallback:
                 return ScrapeResult(
                     stock=None,
                     fragment="",
@@ -5391,9 +5753,12 @@ class MonitoringEngine:
         result = self.scrape_task(task, settings_payload, use_test_browser=True)
         self.apply_task_result(task, settings_payload, result, send_notifications=False)
         log_activity("info", f"task:{task_id}", f"{task['name']} 已完成一次库存检测，结果：{result.stock if result.stock is not None else '未知'}。")
+        result_state = "failed" if result.stock is None and result.error_kind else "unknown"
+        if result.stock is not None:
+            result_state = "in_stock" if result.stock > 0 else "sold_out"
         return {
             "stock": result.stock,
-            "state": "unknown" if result.stock is None else ("in_stock" if result.stock > 0 else "sold_out"),
+            "state": result_state,
             "detail": result.detail,
             "error_kind": result.error_kind,
             "backend_used": result.backend_used or last_fetch_attempt_backend(result.fetch_attempts, result.error_kind),
@@ -6510,12 +6875,246 @@ def default_stock_extractor(
     return ExtractorResult(stock=stock, fragment=fragment, detail=detail)
 
 
+DMIT_PRICING_PRODUCTS = {
+    "WEE",
+    "TINY",
+    "Pocket",
+    "STARTER",
+    "MINI",
+    "MICRO",
+    "MEDIUM",
+    "LARGE",
+    "GIANT",
+    "TINYv2",
+    "STARTERv2",
+    "MINIv2",
+    "MICROv2",
+    "MEDIUMv2",
+    "LARGEv2",
+    "GIANTv2",
+    "G16C32G",
+}
+DMIT_PRICING_RUN_MAP = {
+    ("los-angeles", "premium", "as3"): 0,
+    ("los-angeles", "eyeball", "as3"): 1,
+    ("los-angeles", "tier-1", "as3"): 7,
+    ("hong-kong", "premium", "as3"): 3,
+    ("hong-kong", "eyeball", "as3"): 4,
+    ("hong-kong", "tier-1", "as3"): 11,
+    ("tokyo", "premium", "as3"): 9,
+    ("tokyo", "tier-1", "as3"): 13,
+}
+
+
+def dmit_normalize_region(value: Any, target_keyword: str = "") -> str:
+    text = str(value or "").strip().lower().replace("_", "-")
+    aliases = {
+        "hk": "hong-kong",
+        "hkg": "hong-kong",
+        "hongkong": "hong-kong",
+        "hong-kong": "hong-kong",
+        "los-angeles": "los-angeles",
+        "lax": "los-angeles",
+        "la": "los-angeles",
+        "tokyo": "tokyo",
+        "tyo": "tokyo",
+        "jp": "tokyo",
+    }
+    if text in aliases:
+        return aliases[text]
+    token = normalized_product_token(target_keyword)
+    if token.startswith("hkg"):
+        return "hong-kong"
+    if token.startswith("lax"):
+        return "los-angeles"
+    if token.startswith(("tyo", "tokyo")):
+        return "tokyo"
+    return ""
+
+
+def dmit_normalize_network(value: Any, target_keyword: str = "") -> str:
+    text = str(value or "").strip().lower().replace("_", "-")
+    aliases = {
+        "pro": "premium",
+        "premium": "premium",
+        "eyeball": "eyeball",
+        "eye-ball": "eyeball",
+        "t1": "tier-1",
+        "tier1": "tier-1",
+        "tier-1": "tier-1",
+        "international-optimization": "tier-1",
+    }
+    if text in aliases:
+        return aliases[text]
+    token = normalized_product_token(target_keyword)
+    if "pro" in token or "premium" in token:
+        return "premium"
+    if "eyeball" in token:
+        return "eyeball"
+    if "t1" in token or "tier1" in token:
+        return "tier-1"
+    return ""
+
+
+def dmit_normalize_generation(value: Any, target_keyword: str = "") -> str:
+    text = str(value or "").strip().lower().replace("_", "-")
+    if text:
+        return text
+    match = re.search(r"\b(as\d+|an\d+)\b", str(target_keyword or ""), re.IGNORECASE)
+    return match.group(1).lower() if match else ""
+
+
+def dmit_query_context(task: Any, fetch_result: FetchResult, target_keyword: str) -> tuple[str, str, str]:
+    region = network = generation = ""
+    for raw_url in (
+        mapping_value(task, "monitor_url", ""),
+        monitor_url_for_fetch(task),
+        getattr(fetch_result, "final_url", ""),
+    ):
+        try:
+            parsed = urlparse(str(raw_url or ""))
+        except Exception:
+            continue
+        query = parse_qs(parsed.query)
+        if not region:
+            region = dmit_normalize_region((query.get("region") or [""])[0], target_keyword)
+        if not network:
+            network = dmit_normalize_network((query.get("network") or [""])[0], target_keyword)
+        if not generation:
+            generation = dmit_normalize_generation((query.get("generation") or [""])[0], target_keyword)
+    return (
+        region or dmit_normalize_region("", target_keyword),
+        network or dmit_normalize_network("", target_keyword),
+        generation or dmit_normalize_generation("", target_keyword),
+    )
+
+
+def dmit_target_plan(target_keyword: str) -> str:
+    tokens = [token.upper() for token in re.findall(r"[A-Za-z0-9]+", str(target_keyword or ""))]
+    product_names = {name.upper(): name for name in DMIT_PRICING_PRODUCTS}
+    for token in reversed(tokens):
+        if token in product_names:
+            return product_names[token]
+    return ""
+
+
+def dmit_pricing_lines(html_text: str) -> list[str]:
+    return [line.strip() for line in str(html_text or "").splitlines() if line.strip()]
+
+
+def dmit_is_pricing_separator(line: str) -> bool:
+    return (
+        line.startswith("* The products and prices")
+        or line.startswith("* For the IP")
+        or line.startswith("Heads up:")
+        or line.startswith("Register now")
+        or bool(re.match(r"^[A-Z]{3}\.AS\d+\.T\d+\b", line))
+    )
+
+
+def dmit_is_product_start(lines: list[str], index: int) -> bool:
+    if index < 0 or index >= len(lines):
+        return False
+    line = lines[index]
+    if line not in DMIT_PRICING_PRODUCTS:
+        return False
+    return any("vCore" in value for value in lines[index + 1 : index + 5])
+
+
+def dmit_parse_pricing_runs(html_text: str) -> list[list[dict[str, Any]]]:
+    lines = dmit_pricing_lines(html_text)
+    runs: list[list[dict[str, Any]]] = []
+    current: list[dict[str, Any]] = []
+    index = 0
+    while index < len(lines):
+        line = lines[index]
+        if dmit_is_pricing_separator(line):
+            if current:
+                runs.append(current)
+                current = []
+            index += 1
+            continue
+        if not dmit_is_product_start(lines, index):
+            index += 1
+            continue
+        block_lines = [line]
+        status = ""
+        cursor = index + 1
+        while cursor < len(lines):
+            next_line = lines[cursor]
+            if dmit_is_pricing_separator(next_line) or (cursor != index and dmit_is_product_start(lines, cursor)):
+                break
+            block_lines.append(next_line)
+            if next_line in {"Order Now", "Out of Stock"}:
+                status = next_line
+                cursor += 1
+                break
+            cursor += 1
+        current.append({"name": line, "status": status, "fragment": "\n".join(block_lines)})
+        index = max(cursor, index + 1)
+    if current:
+        runs.append(current)
+    return runs
+
+
+def dmit_pricing_extractor(
+    html_text: str,
+    target_keyword: str,
+    task: Any,
+    fetch_result: FetchResult,
+) -> ExtractorResult | None:
+    final_url = str(getattr(fetch_result, "final_url", "") or "")
+    task_url = str(mapping_value(task, "monitor_url", "") or "")
+    if "dmit.io" not in f"{final_url} {task_url}".lower() or "/pages/pricing" not in final_url.lower():
+        return None
+    plan = dmit_target_plan(target_keyword)
+    if not plan:
+        return None
+    region, network, generation = dmit_query_context(task, fetch_result, target_keyword)
+    run_index = DMIT_PRICING_RUN_MAP.get((region, network, generation))
+    runs = dmit_parse_pricing_runs(html_text)
+    candidates: list[dict[str, Any]] = []
+    if run_index is not None and 0 <= run_index < len(runs):
+        candidates.extend(runs[run_index])
+    if not candidates:
+        for run in runs:
+            candidates.extend(run)
+    plan_upper = plan.upper()
+    for item in candidates:
+        if str(item.get("name") or "").upper() != plan_upper:
+            continue
+        fragment = str(item.get("fragment") or "")
+        status = str(item.get("status") or "")
+        if status == "Order Now":
+            return ExtractorResult(
+                stock=1,
+                fragment=fragment,
+                detail=f"DMIT 公开价格页：{region}/{network}/{generation}/{plan} 显示 Order Now，按有货处理。",
+            )
+        if status == "Out of Stock":
+            return ExtractorResult(
+                stock=0,
+                fragment=fragment,
+                detail=f"DMIT 公开价格页：{region}/{network}/{generation}/{plan} 显示 Out of Stock。",
+            )
+        stock, detail = parse_stock(fragment)
+        return ExtractorResult(stock=stock, fragment=fragment, detail=f"DMIT 公开价格页：{detail}")
+    return ExtractorResult(
+        stock=None,
+        fragment="\n".join(item.get("fragment", "") for item in candidates[:4]),
+        detail=f"DMIT 公开价格页：未找到 {region}/{network}/{generation}/{plan} 对应产品。",
+    )
+
+
 def generic_pricing_table_extractor(
     html_text: str,
     target_keyword: str,
     task: Any,
     fetch_result: FetchResult,
 ) -> ExtractorResult:
+    dmit_result = dmit_pricing_extractor(html_text, target_keyword, task, fetch_result)
+    if dmit_result is not None:
+        return dmit_result
     fragment = locate_product_fragment(html_text, target_keyword, has_generic_pricing_signal)
     if not fragment and target_selected_by_url(task, fetch_result, target_keyword):
         query_position = find_product_query_position(html_text, task, fetch_result)
@@ -6642,6 +7241,9 @@ def extract_stock_for_strategy(
     rule_result = extract_stock_by_rule(html_text, target_keyword, task, fetch_result)
     if rule_result is not None:
         return rule_result
+    dmit_result = dmit_pricing_extractor(html_text, target_keyword, task, fetch_result)
+    if dmit_result is not None:
+        return dmit_result
     source_config = parse_source_config(mapping_value(task, "source_config", "{}"))
     configured_extractor = normalize_fetch_strategy(source_config.get("extractor"))
     extractor_key = configured_extractor if configured_extractor in EXTRACTOR_REGISTRY else normalize_fetch_strategy(strategy)
@@ -7825,6 +8427,7 @@ def make_app() -> Flask:
                     "scrapling_max_concurrency_stealth": settings_payload["scrapling_max_concurrency_stealth"],
                     "scrapling_session_reuse": settings_payload["scrapling_session_reuse"],
                     "scrapling_adaptive_selector": settings_payload["scrapling_adaptive_selector"],
+                    "scrapling_headless": settings_payload["scrapling_headless"],
                     "catalog_discovery_strategy": settings_payload["catalog_discovery_strategy"],
                     "catalog_scrape_strategy": settings_payload["catalog_scrape_strategy"],
                     "catalog_default_fetch_strategy": settings_payload["catalog_default_fetch_strategy"],
@@ -8969,6 +9572,7 @@ def make_app() -> Flask:
             "scrapling_use_for_catalog",
             "scrapling_session_reuse",
             "scrapling_adaptive_selector",
+            "scrapling_headless",
         ):
             if key in payload:
                 updates[key] = settings_bool_text(parse_setting_bool(payload.get(key)))

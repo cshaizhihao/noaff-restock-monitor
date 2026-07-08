@@ -1592,6 +1592,12 @@ button:disabled,
     color: #fbbf24;
 }
 
+.status-fetch-failed {
+    border-color: rgba(248, 113, 113, 0.38);
+    background: rgba(248, 113, 113, 0.1);
+    color: #fca5a5;
+}
+
 .status-disabled {
     border-color: rgba(251, 113, 133, 0.32);
     background: rgba(251, 113, 133, 0.08);

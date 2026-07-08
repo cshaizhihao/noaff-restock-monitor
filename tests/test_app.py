@@ -3048,6 +3048,7 @@ class PortalAppTestCase(unittest.TestCase):
                 "scrapling_max_concurrency_stealth": 1,
                 "scrapling_session_reuse": False,
                 "scrapling_adaptive_selector": True,
+                "scrapling_headless": False,
             },
         )
         self.assertEqual(response.status_code, 200)
@@ -3075,6 +3076,7 @@ class PortalAppTestCase(unittest.TestCase):
         self.assertEqual(settings["scrapling_max_concurrency_stealth"], 1)
         self.assertFalse(settings["scrapling_session_reuse"])
         self.assertTrue(settings["scrapling_adaptive_selector"])
+        self.assertFalse(settings["scrapling_headless"])
         self.assertIn("scrapling_status", settings)
         self.assertIsInstance(settings["scrapling_status"].get("available"), bool)
 
@@ -3095,6 +3097,7 @@ class PortalAppTestCase(unittest.TestCase):
         self.assertIn("available", result)
         self.assertIn("status", result)
         self.assertIn("detail", result)
+        self.assertIn("headed_detail", result)
         self.assertNotIn("api_key", json.dumps(payload, ensure_ascii=False).lower())
 
     def test_scrapling_invalid_mode_falls_back_to_standard(self) -> None:
@@ -3967,8 +3970,27 @@ class PortalAppTestCase(unittest.TestCase):
             app_module.find_browser_binary = original_find_browser_binary
 
         self.assertEqual(kwargs["executable_path"], "/usr/bin/chromium")
+        self.assertIs(kwargs["headless"], True)
         self.assertIn("--no-sandbox", kwargs["extra_flags"])
         self.assertIs(kwargs["solve_cloudflare"], True)
+
+    def test_scrapling_browser_kwargs_can_use_headed_browser(self) -> None:
+        original_find_browser_binary = app_module.find_browser_binary
+        original_ensure_display = app_module.ensure_scrapling_display_for_headed
+        try:
+            app_module.find_browser_binary = lambda: "/usr/bin/chromium"
+            app_module.ensure_scrapling_display_for_headed = lambda: ":99"
+            kwargs = app_module.ScraplingFetcher(
+                self.scrapling_settings(scrapling_headless=False),
+                "stealth",
+            ).browser_kwargs(75)
+        finally:
+            app_module.find_browser_binary = original_find_browser_binary
+            app_module.ensure_scrapling_display_for_headed = original_ensure_display
+
+        self.assertIs(kwargs["headless"], False)
+        self.assertIn("--window-size=1720,1120", kwargs["extra_flags"])
+        self.assertEqual(kwargs["executable_path"], "/usr/bin/chromium")
 
     def test_scrape_task_scrapling_standard_strategy_parses_stock(self) -> None:
         class FakeScraplingResponse:
@@ -4037,6 +4059,186 @@ class PortalAppTestCase(unittest.TestCase):
 
         self.assertEqual(result.stock, 1)
         self.assertEqual(client.urls, ["https://www.dmit.io/cart.php?region=hong-kong&network=premium&generation=as3"])
+
+    def test_scrapling_adaptive_uses_public_pricing_fallback_for_dmit_cart(self) -> None:
+        pricing_markdown = """
+        Pricing
+        Heads up: The LAX AS3 series is still being built out and optimized.
+        TINY
+        1 vCore
+        2GB
+        20GB SSD
+        1000GB
+        1Gbps
+        $ 10.90/Monthly
+        Order Now
+        * The products and prices in the table may not be updated in time due to adjustment, for reference only.
+        TINY
+        1 vCore
+        2GB
+        20GB SSD
+        1500GB
+        2Gbps
+        $ 10.90/Monthly
+        Order Now
+        * The products and prices in the table may not be updated in time due to adjustment, for reference only.
+        WEE
+        1 vCore
+        1GB
+        20GB SSD
+        1000GB Max (IN, OUT)
+        $ 36.90/Annually
+        Order Now
+        TINY
+        1 vCore
+        1GB
+        20GB SSD
+        2000GB Max (IN, OUT)
+        $ 6.90/Monthly
+        Order Now
+        STARTER
+        2 vCore
+        2GB
+        40GB SSD
+        4000GB Max (IN, OUT)
+        $ 12.90/Monthly
+        Order Now
+        """
+
+        class FakeScraplingResponse:
+            url = "https://www.dmit.io/cart.php?region=hong-kong&network=premium&generation=as3"
+            status = 403
+            html_content = "<html><title>Just a moment...</title><body><div>cf-turnstile</div></body></html>"
+
+        class FakeScraplingClient:
+            def __init__(self) -> None:
+                self.calls: list[str] = []
+
+            def fetch(self, mode: str, url: str, timeout_seconds: int):
+                self.calls.append(mode)
+                return FakeScraplingResponse()
+
+        class FakePublicPricingFetcher:
+            def __init__(self) -> None:
+                self.urls: list[str] = []
+
+            def fetch(self, url: str, timeout_seconds: int) -> app_module.FetchResult:
+                self.urls.append(url)
+                return app_module.FetchResult(
+                    html=pricing_markdown,
+                    final_url="https://www.dmit.io/pages/pricing",
+                    status_code=200,
+                    detail="fake public pricing",
+                )
+
+        client = FakeScraplingClient()
+        public_fetcher = FakePublicPricingFetcher()
+        engine = self.app.extensions["monitor_engine"]
+        original_selector = engine.fetcher_selector
+        try:
+            engine.fetcher_selector = app_module.FetcherSelector(
+                scrapling_client=client,
+                public_pricing_fetcher=public_fetcher,
+            )
+            result = engine.scrape_task(
+                {
+                    "name": "DMIT Hong Kong HKG.AS3.Pro.TINY",
+                    "monitor_url": "https://www.dmit.io/cart.php?region=hong-kong&network=premium&generation=as3",
+                    "target_keyword": "HKG.AS3.Pro.TINY",
+                    "fetch_strategy": "scrapling_adaptive",
+                    "source_config": "{}",
+                },
+                {"request_timeout_seconds": 25, **self.scrapling_settings()},
+                use_test_browser=True,
+            )
+        finally:
+            engine.fetcher_selector = original_selector
+
+        self.assertEqual(result.stock, 1)
+        self.assertEqual(result.backend_used, app_module.PUBLIC_PRICING_FALLBACK_BACKEND)
+        self.assertEqual(client.calls, ["standard"])
+        self.assertEqual(public_fetcher.urls, ["https://www.dmit.io/cart.php?region=hong-kong&network=premium&generation=as3"])
+        self.assertIn("DMIT 公开价格页", result.detail)
+        self.assertEqual([attempt.backend for attempt in result.fetch_attempts or []], ["scrapling_standard", app_module.PUBLIC_PRICING_FALLBACK_BACKEND])
+
+    def test_dmit_public_pricing_fallback_ignores_stale_protected_cooldown(self) -> None:
+        pricing_markdown = """
+        Pricing
+        TINY
+        1 vCore
+        2GB
+        20GB SSD
+        1000GB
+        1Gbps
+        $ 10.90/Monthly
+        Order Now
+        * The products and prices in the table may not be updated in time due to adjustment, for reference only.
+        TINY
+        1 vCore
+        2GB
+        20GB SSD
+        1500GB
+        2Gbps
+        $ 10.90/Monthly
+        Order Now
+        """
+
+        class FakeScraplingResponse:
+            url = "https://www.dmit.io/cart.php?region=hong-kong&network=premium&generation=as3"
+            status = 403
+            html_content = "<html><title>Just a moment...</title><body>cf-turnstile</body></html>"
+
+        class FakeScraplingClient:
+            def __init__(self) -> None:
+                self.calls: list[str] = []
+
+            def fetch(self, mode: str, url: str, timeout_seconds: int):
+                self.calls.append(mode)
+                return FakeScraplingResponse()
+
+        class FakePublicPricingFetcher:
+            def __init__(self) -> None:
+                self.urls: list[str] = []
+
+            def fetch(self, url: str, timeout_seconds: int) -> app_module.FetchResult:
+                self.urls.append(url)
+                return app_module.FetchResult(
+                    html=pricing_markdown,
+                    final_url="https://www.dmit.io/pages/pricing",
+                    status_code=200,
+                    detail="fake public pricing",
+                )
+
+        client = FakeScraplingClient()
+        public_fetcher = FakePublicPricingFetcher()
+        engine = self.app.extensions["monitor_engine"]
+        original_selector = engine.fetcher_selector
+        try:
+            engine.fetcher_selector = app_module.FetcherSelector(
+                scrapling_client=client,
+                public_pricing_fetcher=public_fetcher,
+            )
+            result = engine.scrape_task(
+                {
+                    "name": "DMIT Hong Kong HKG.AS3.Pro.TINY",
+                    "monitor_url": "https://www.dmit.io/cart.php?region=hong-kong&network=premium&generation=as3",
+                    "target_keyword": "HKG.AS3.Pro.TINY",
+                    "fetch_strategy": "scrapling_adaptive",
+                    "source_config": "{}",
+                    "cooldown_until": (app_module.now_utc() + app_module.timedelta(minutes=10)).isoformat(timespec="seconds"),
+                    "last_error": app_module.protected_source_cooldown_message("future"),
+                },
+                {"request_timeout_seconds": 25, **self.scrapling_settings()},
+                use_test_browser=False,
+            )
+        finally:
+            engine.fetcher_selector = original_selector
+
+        self.assertEqual(result.stock, 1)
+        self.assertFalse(result.cooldown_skip)
+        self.assertEqual(result.backend_used, app_module.PUBLIC_PRICING_FALLBACK_BACKEND)
+        self.assertEqual(client.calls, ["standard"])
+        self.assertEqual(public_fetcher.urls, ["https://www.dmit.io/cart.php?region=hong-kong&network=premium&generation=as3"])
 
     def test_scrapling_adaptive_escalates_after_cloudflare_challenge(self) -> None:
         class FakeScraplingResponse:

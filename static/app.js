@@ -99,6 +99,7 @@
         settingsScraplingUseForCatalog: document.getElementById("settings-scrapling-use-for-catalog"),
         settingsScraplingSessionReuse: document.getElementById("settings-scrapling-session-reuse"),
         settingsScraplingAdaptiveSelector: document.getElementById("settings-scrapling-adaptive-selector"),
+        settingsScraplingHeadedBrowser: document.getElementById("settings-scrapling-headed-browser"),
         settingsScraplingTimeoutStandard: document.getElementById("settings-scrapling-timeout-standard"),
         settingsScraplingTimeoutDynamic: document.getElementById("settings-scrapling-timeout-dynamic"),
         settingsScraplingTimeoutStealth: document.getElementById("settings-scrapling-timeout-stealth"),
@@ -452,6 +453,7 @@
     }
 
     function stockResultLabel(stock, state = "") {
+        if (state === "failed") return "采集失败";
         if (stock === null || stock === undefined || state === "unknown") return "未知";
         const value = Number(stock);
         if (Number.isFinite(value) && value > 0) return `有货（库存 ${value}）`;
@@ -1932,6 +1934,7 @@
         syncCheckboxValue(els.settingsScraplingUseForCatalog, settings.scrapling_use_for_catalog !== false);
         syncCheckboxValue(els.settingsScraplingSessionReuse, settings.scrapling_session_reuse !== false);
         syncCheckboxValue(els.settingsScraplingAdaptiveSelector, settings.scrapling_adaptive_selector !== false);
+        syncCheckboxValue(els.settingsScraplingHeadedBrowser, settings.scrapling_headless === false);
         syncInputValue(els.settingsScraplingTimeoutStandard, settings.scrapling_timeout_standard || 25);
         syncInputValue(els.settingsScraplingTimeoutDynamic, settings.scrapling_timeout_dynamic || 45);
         syncInputValue(els.settingsScraplingTimeoutStealth, settings.scrapling_timeout_stealth || 75);
@@ -2284,6 +2287,9 @@
 
     function statusMeta(task) {
         if (!task.enabled) return ["status-disabled", "已停用", "任务已停用"];
+        const errorKind = String(task.last_error_kind || "").toLowerCase();
+        const hasFetchFailure = Boolean(task.last_error) && errorKind && !errorKind.startsWith("telegram");
+        if (hasFetchFailure) return ["status-fetch-failed", "采集失败", "最近检测失败"];
         if (task.last_state === "in_stock") return ["status-in-stock", "有货", "库存识别：有货"];
         if (task.last_state === "sold_out") return ["status-sold-out", "售罄", "库存识别：售罄"];
         return ["status-unknown", "未知", "等待首次检测"];
@@ -4280,6 +4286,7 @@
             scrapling_use_for_catalog: Boolean(els.settingsScraplingUseForCatalog?.checked),
             scrapling_session_reuse: Boolean(els.settingsScraplingSessionReuse?.checked),
             scrapling_adaptive_selector: Boolean(els.settingsScraplingAdaptiveSelector?.checked),
+            scrapling_headless: !Boolean(els.settingsScraplingHeadedBrowser?.checked),
             scrapling_timeout_standard: Number(els.settingsScraplingTimeoutStandard?.value || 25),
             scrapling_timeout_dynamic: Number(els.settingsScraplingTimeoutDynamic?.value || 45),
             scrapling_timeout_stealth: Number(els.settingsScraplingTimeoutStealth?.value || 75),
