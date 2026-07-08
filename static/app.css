@@ -1223,6 +1223,428 @@ button:disabled,
     background: rgba(13, 19, 29, 0.82) !important;
 }
 
+.merchant-workbench {
+    display: grid;
+    max-height: min(78vh, 52rem);
+    grid-template-rows: auto auto minmax(0, 1fr);
+    overflow: hidden;
+    padding: 0;
+}
+
+.merchant-workbench-header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 1.25rem;
+    border-bottom: 1px solid var(--color-line);
+    padding: 1.25rem;
+}
+
+.merchant-workbench-copy {
+    max-width: 48rem;
+    margin-top: 0.45rem;
+    color: var(--color-muted);
+    font-size: 0.9rem;
+    line-height: 1.65;
+}
+
+.merchant-metric-strip {
+    display: grid;
+    min-width: 18rem;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 0.65rem;
+}
+
+.merchant-metric-strip div {
+    border: 1px solid var(--color-line);
+    border-radius: var(--radius);
+    background: rgba(6, 10, 17, 0.48);
+    padding: 0.75rem;
+    text-align: right;
+}
+
+.merchant-metric-strip p {
+    color: var(--color-subtle);
+    font-size: 0.72rem;
+    font-weight: 800;
+}
+
+.merchant-metric-strip strong {
+    display: block;
+    margin-top: 0.15rem;
+    color: #f8fafc;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+    font-size: 1.35rem;
+    font-weight: 900;
+}
+
+.merchant-stepper {
+    display: grid;
+    grid-template-columns: repeat(7, minmax(0, 1fr));
+    gap: 0.55rem;
+    border-bottom: 1px solid var(--color-line);
+    padding: 0.85rem 1.25rem;
+}
+
+.merchant-step-button {
+    display: grid;
+    min-height: 4.2rem;
+    min-width: 0;
+    align-content: center;
+    justify-items: start;
+    gap: 0.18rem;
+    border: 1px solid var(--color-line);
+    border-radius: var(--radius);
+    background: rgba(6, 10, 17, 0.46);
+    padding: 0.65rem 0.75rem;
+    text-align: left;
+    transition: border-color 160ms ease, background 160ms ease, transform 160ms ease;
+}
+
+.merchant-step-button:hover {
+    border-color: rgba(34, 197, 94, 0.36);
+    background: rgba(15, 23, 42, 0.78);
+}
+
+.merchant-step-button span {
+    color: #86efac;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+    font-size: 0.68rem;
+    font-weight: 900;
+}
+
+.merchant-step-button strong {
+    min-width: 0;
+    color: #f8fafc;
+    font-size: 0.88rem;
+    font-weight: 900;
+}
+
+.merchant-step-button em {
+    min-width: 0;
+    overflow: hidden;
+    color: var(--color-subtle);
+    font-size: 0.72rem;
+    font-style: normal;
+    font-weight: 700;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.merchant-step-button.merchant-step-active,
+.merchant-step-button[aria-selected="true"] {
+    border-color: rgba(34, 197, 94, 0.58);
+    background: rgba(20, 83, 45, 0.22);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06);
+}
+
+.merchant-workbench-body {
+    min-height: 0;
+    overflow: hidden;
+    padding: 1.25rem;
+}
+
+.merchant-panel-shell,
+.merchant-step-panel {
+    min-height: 0;
+}
+
+.merchant-step-panel {
+    display: grid;
+    max-height: 100%;
+    grid-template-rows: auto minmax(0, auto);
+    gap: 1rem;
+    overflow-x: hidden;
+    overflow-y: auto;
+    border: 1px solid var(--color-line);
+    border-radius: var(--radius);
+    background: rgba(6, 10, 17, 0.38);
+    padding: 1.15rem;
+}
+
+.merchant-step-panel.hidden {
+    display: none;
+}
+
+.merchant-panel-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+}
+
+.merchant-panel-header h4 {
+    color: #f8fafc;
+    font-size: 1.15rem;
+    font-weight: 900;
+}
+
+.merchant-panel-actions {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 0.55rem;
+}
+
+.merchant-field-grid {
+    display: grid;
+    gap: 1rem;
+}
+
+.merchant-field-grid.two {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.merchant-field-grid.three {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.merchant-field-grid.four {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.field-help {
+    margin-top: 0.45rem;
+    color: var(--color-subtle);
+    font-size: 0.78rem;
+    line-height: 1.55;
+}
+
+.merchant-guide-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0.8rem;
+}
+
+.merchant-guide-grid div,
+.merchant-run-box,
+.merchant-review-summary div,
+.merchant-recovery-grid p,
+.merchant-signal-box {
+    border: 1px solid var(--color-line);
+    border-radius: var(--radius);
+    background: rgba(13, 19, 29, 0.74);
+}
+
+.merchant-guide-grid div {
+    padding: 0.9rem;
+}
+
+.merchant-guide-grid strong,
+.merchant-run-box strong {
+    color: #f8fafc;
+    font-size: 0.88rem;
+    font-weight: 900;
+}
+
+.merchant-guide-grid p,
+.merchant-run-box p {
+    margin-top: 0.35rem;
+    color: var(--color-muted);
+    font-size: 0.82rem;
+    line-height: 1.65;
+}
+
+.merchant-inline-state {
+    border: 1px solid rgba(34, 197, 94, 0.2);
+    border-radius: var(--radius);
+    background: rgba(5, 46, 22, 0.16);
+    padding: 0.75rem 0.85rem;
+    color: #bbf7d0;
+    font-size: 0.82rem;
+    line-height: 1.6;
+}
+
+.merchant-check-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.75rem;
+}
+
+.merchant-review-summary {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0.75rem;
+}
+
+.merchant-review-summary div {
+    display: grid;
+    gap: 0.25rem;
+    padding: 0.8rem;
+}
+
+.merchant-review-summary span {
+    color: var(--color-subtle);
+    font-size: 0.72rem;
+    font-weight: 800;
+}
+
+.merchant-review-summary strong {
+    min-width: 0;
+    overflow-wrap: anywhere;
+    color: #f8fafc;
+    font-size: 0.9rem;
+    font-weight: 850;
+}
+
+.merchant-run-box {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+    padding: 1rem;
+}
+
+.merchant-scroll-box {
+    min-height: 18rem;
+    max-height: min(50vh, 34rem);
+    overflow-y: auto;
+    border: 1px solid var(--color-line);
+    border-radius: var(--radius);
+    background: rgba(2, 6, 23, 0.52);
+    padding: 1rem;
+}
+
+.merchant-list-stack {
+    display: grid;
+    gap: 0.85rem;
+}
+
+.merchant-filter-label {
+    color: var(--color-subtle);
+    font-size: 0.72rem;
+    font-weight: 900;
+}
+
+.merchant-count-hint {
+    color: var(--color-subtle);
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+    font-size: 0.72rem;
+    font-weight: 800;
+}
+
+.merchant-signal-box {
+    display: grid;
+    gap: 0.55rem;
+    margin-top: 0.85rem;
+    padding: 0.8rem;
+}
+
+.merchant-signal-box > div:first-child {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.75rem;
+}
+
+.merchant-signal-box span {
+    color: var(--color-subtle);
+    font-size: 0.72rem;
+    font-weight: 800;
+}
+
+.merchant-signal-box strong {
+    color: #bbf7d0;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+    font-size: 0.88rem;
+    font-weight: 900;
+}
+
+.merchant-signal-box p {
+    color: #cbd5e1;
+    font-size: 0.8rem;
+    line-height: 1.55;
+}
+
+.merchant-signal-chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.45rem;
+}
+
+.merchant-signal-chips span {
+    border: 1px solid rgba(148, 163, 184, 0.18);
+    border-radius: 999px;
+    background: rgba(15, 23, 42, 0.82);
+    padding: 0.25rem 0.55rem;
+    color: #cbd5e1;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+}
+
+.merchant-recovery-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0.75rem;
+}
+
+.merchant-recovery-grid p {
+    padding: 0.8rem;
+    color: var(--color-muted);
+    font-size: 0.82rem;
+    line-height: 1.55;
+}
+
+.merchant-recovery-grid span {
+    display: block;
+    margin-bottom: 0.35rem;
+    color: #fde68a;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+    font-size: 0.78rem;
+    font-weight: 900;
+}
+
+@media (max-width: 1180px) {
+    .merchant-stepper {
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+    }
+
+    .merchant-field-grid.four {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+}
+
+@media (max-width: 860px) {
+    .merchant-workbench {
+        max-height: none;
+    }
+
+    .merchant-workbench-header,
+    .merchant-run-box {
+        align-items: stretch;
+        flex-direction: column;
+    }
+
+    .merchant-metric-strip {
+        width: 100%;
+        min-width: 0;
+    }
+
+    .merchant-stepper,
+    .merchant-field-grid.two,
+    .merchant-field-grid.three,
+    .merchant-field-grid.four,
+    .merchant-guide-grid,
+    .merchant-review-summary,
+    .merchant-recovery-grid {
+        grid-template-columns: 1fr;
+    }
+
+    .merchant-panel-header {
+        align-items: stretch;
+        flex-direction: column;
+    }
+
+    .merchant-panel-actions {
+        justify-content: stretch;
+    }
+
+    .merchant-panel-actions > * {
+        min-width: 0;
+        flex: 1 1 auto;
+    }
+}
+
 .file-drop {
     border-radius: var(--radius) !important;
 }

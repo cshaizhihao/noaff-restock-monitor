@@ -906,6 +906,15 @@ class InstallScriptTestCase(unittest.TestCase):
         portal_html = (ROOT_DIR / "templates" / "portal.html").read_text(encoding="utf-8")
 
         for element_id in (
+            "merchant-stepper",
+            "merchant-step-source",
+            "merchant-step-strategy",
+            "merchant-step-rules",
+            "merchant-step-review",
+            "merchant-step-sources",
+            "merchant-step-items",
+            "merchant-step-recovery",
+            "merchant-review-summary",
             "merchant-source-url",
             "merchant-discovery-strategy",
             "merchant-scrape-strategy",
@@ -922,6 +931,17 @@ class InstallScriptTestCase(unittest.TestCase):
         ):
             self.assertIn(f'id="{element_id}"', portal_html)
 
+        self.assertIn('data-merchant-step-target="source"', portal_html)
+        self.assertIn('data-merchant-step-target="items"', portal_html)
+        self.assertIn('data-merchant-internal-scroll', portal_html)
+        self.assertIn(".merchant-workbench", (ROOT_DIR / "static" / "app.css").read_text(encoding="utf-8"))
+        self.assertIn(".merchant-stepper", (ROOT_DIR / "static" / "app.css").read_text(encoding="utf-8"))
+        self.assertIn(".merchant-scroll-box", (ROOT_DIR / "static" / "app.css").read_text(encoding="utf-8"))
+        self.assertIn("function setMerchantStep", app_js)
+        self.assertIn("function renderMerchantReviewSummary", app_js)
+        self.assertIn("confidence", app_js)
+        self.assertIn("include_reason", app_js)
+        self.assertIn("merchant-signal-box", app_js)
         self.assertIn("发现结果", portal_html)
         self.assertIn("商品预览", portal_html)
         self.assertIn("错误恢复建议", portal_html)
