@@ -5,48 +5,56 @@
 <h1 align="center">NOAFF Restock Monitor</h1>
 
 <p align="center">
-  公益 NOAFF IDC 补货监控应用：公开页面采集、页面解析、Telegram 状态机推送。
+  公益 NOAFF IDC 补货监控应用：公开页面采集、规则解析、Telegram 状态机推送。
 </p>
 
 <p align="center">
-  Python 3 · Flask · SQLite · DrissionPage · Telegram · Docker
+  Python 3 · Flask · SQLite · Scrapling · Telegram · Docker
 </p>
 
 ## 项目定位
 
 NOAFF Restock Monitor 用来监控 IDC、VPS、独服、WHMCS 商店等公开商品页面的补货状态，并把状态变化推送到 Telegram。
 
-很多 IDC 商品页没有官方库存 API，所以项目的主路线是：
+很多 IDC 商品页没有官方库存 API，所以项目主路线是：
 
 ```text
-公开页面采集 -> 页面适配器解析 -> 库存状态机 -> Telegram send/edit/sold-out 推送
+公开页面采集 -> 页面/规则解析 -> 库存状态机 -> Telegram send/edit/sold-out 推送
 ```
 
-项目边界很明确：
+当前版本采用 **Scrapling-first** 采集架构：
+
+- Scrapling 是默认采集引擎，适合自部署公益项目，避免 Firecrawl 高频 credits 成本。
+- Firecrawl 保留为外部兜底/诊断能力，不再作为定时监控首选。
+- 旧 `browser`、`static_http`、Firecrawl pipeline 任务会在升级时平滑迁移到 Scrapling-first。
+- `manual` / `webhook` 仍是完全受保护页面的可靠兜底方案。
+
+项目边界：
 
 - 只监控公开可访问页面。
-- 不绕过 Cloudflare / Turnstile / CAPTCHA。
+- 不实现 Cloudflare / Turnstile / CAPTCHA 绕过。
 - 不接入打码服务。
 - 不模拟真人过验证。
-- 遇到 Cloudflare challenge 会标记为受保护来源，进入冷却，不会反复重试或重建浏览器。
+- 遇到 challenge 页面时，标记为 `cloudflare_challenge` / protected source，进入冷却，不反复打站点。
 - 对无法稳定公开访问的页面，建议使用 `manual`、`webhook` 或替代公开页面。
 
-这个项目坚持 NOAFF / 无推广返利。它适合做公开、透明、低打扰的补货提醒，而不是灰色绕过工具。
+这个项目坚持 NOAFF / 无推广返利。它适合做公开、透明、低打扰的补货提醒，而不是绕过工具。
 
 ## 功能概览
 
-- 多采集策略：`browser`、`static_http`、`generic_pricing_table`、`whmcs`、`firecrawl`、fallback pipeline、`manual`、`webhook`。
+- Scrapling-first 采集：标准、增强、高兼容、自适应四类模式。
+- 可配置解析规则：自动卡片、CSS selector、XPath、正则、关键词附近文本、JSON path。
 - IDC 页面解析：围绕目标关键词查找附近 card / table / section，识别库存数字、购买入口和售罄标记。
 - WHMCS 解析：支持常见商店页、`pid`、`cart.php?gid=xx`、`configureproduct`、`Order Now`、`Out of Stock`。
-- 可选 Firecrawl 后端：用于人工触发的商品入库 Map/Scrape 更合适，实时监控默认关闭。
-- Firecrawl 连接诊断：后台可用当前表单配置测试 API URL / Key / proxy / ZDR，不保存、不泄露 Key。
-- 商品入库工作台：入口 URL -> URL 发现 -> 批量抓取 -> 解析预览 -> 批量创建任务。
+- 域名级调度：同域/同 URL 在同一轮内复用抓取结果，减少重复请求和高级模式消耗。
+- 受保护来源冷却：Cloudflare challenge 按 1 / 3 / 10 分钟递进冷却。
+- Firecrawl 外部兜底：保留连接诊断、商品入库辅助和个别复杂页面手动兜底。
+- 商品入库工作台：来源 -> 采集模式 -> 解析规则 -> 执行发现 -> 候选 URL -> 商品预览 -> 创建任务。
 - 商品入库降噪：语言切换、导航、页脚、步骤标题、无价格/无规格候选会降级到人工确认。
-- 受保护来源处理：Cloudflare challenge 统一分类为 `cloudflare_challenge`，并按 1 / 3 / 10 分钟递进冷却。
+- 分组管理：主分组、多级子分组、重命名、删除、拖拽排序、批量移动、批量删除。
 - Telegram 状态机：补货发新消息，库存变化编辑原消息，售罄覆盖原消息并清空 `message_id`。
 - Manual / Webhook 数据源：没有可抓页面时，也能用后台手动标记或外部系统推送库存。
-- 商家页面导入：从公开商品列表页发现商品，生成任务并按分组管理。
-- 管理后台：任务管理、系统设置、商家导入、活动日志、备份恢复、升级入口、管理员改密。
+- 管理后台：任务管理、商品入库、系统设置、活动日志、备份恢复、管理员改密。
 - 安全基础：浏览器 UA 校验、同源校验、CSRF、AJAX 头校验、登录限流、敏感 token 脱敏。
 
 ## 快速安装
@@ -62,7 +70,7 @@ curl -H 'Cache-Control: no-cache' -fsSL https://raw.githubusercontent.com/cshaiz
 - 部署方式：Docker 隔离或原生安装。
 - 访问方式：IP + 端口、域名直连、Cloudflare 小黄云。
 - 端口、域名、HTTPS 证书、Telegram、管理员账号。
-- 安装摘要确认和运行状态检查。
+- Python 依赖、Scrapling runtime、应用健康检查。
 
 推荐选择：
 
@@ -83,40 +91,142 @@ curl -H 'Cache-Control: no-cache' -fsSL https://raw.githubusercontent.com/cshaiz
 
 不会删除默认站点，也不会主动杀已有 nginx 进程。如果 80/443 已被占用，脚本会打印占用详情并退出。
 
-## 采集策略
+## 采集模式
 
-| 策略 | 适合场景 | 行为 |
-| --- | --- | --- |
-| `browser` | 需要前端渲染的公开页面 | 使用 DrissionPage / Chromium 获取 HTML，再按关键词解析 |
-| `static_http` | 普通静态 HTML 页面 | 使用 `requests` 和浏览器 UA 抓取，分类记录超时、403、429、5xx |
-| `generic_pricing_table` | IDC 套餐卡片、价格页、表格 | 在 `target_keyword` 附近判断库存数字、购买按钮、售罄按钮 |
-| `whmcs` | WHMCS 商店页 | 识别产品块、`pid`、购买链接、售罄标记 |
-| `firecrawl` | 已显式配置 Firecrawl 的页面 | 调用外部 Firecrawl `/v2/scrape`，成功返回 HTML 后继续走本项目解析器 |
-| `static_then_firecrawl` | 静态页面优先，失败后外部补充 | `static_http` 失败后尝试 Firecrawl |
-| `firecrawl_then_static` | 外部抓取优先，失败后本地兜底 | Firecrawl 失败后尝试 `static_http` |
-| `firecrawl_then_browser` | 外部抓取优先，限流等错误后浏览器兜底 | Firecrawl 失败后尝试本地 Chromium |
-| `adaptive` | 不确定页面 | 静态优先，必要时浏览器或已启用的 Firecrawl；不会无限 fallback |
-| `manual` | 没有稳定公开来源 | 后台手动标记有货 / 售罄，复用 Telegram 状态机 |
-| `webhook` | 外部系统知道库存 | 外部 POST 库存状态，复用 Telegram 状态机 |
+后台面向普通用户展示的是易懂模式，不需要理解底层 fetcher 名称：
 
-默认策略是 `browser`，旧任务无需手动迁移。
+| UI 模式 | 内部策略 | 适合场景 | 成本/资源 |
+| --- | --- | --- | --- |
+| 标准 | `scrapling_standard` | 普通公开 HTML、WHMCS、轻量 IDC 页面 | 低 |
+| 增强 | `scrapling_dynamic` | JS 渲染页面、按钮/内容由前端生成 | 中 |
+| 高兼容 | `scrapling_stealth` | 复杂页面、轻度反爬、需要更高兼容性 | 高，低并发 |
+| 自适应 | `scrapling_adaptive` | 默认推荐，自动 standard -> dynamic -> stealth | 按需升级 |
+| 手动 | `manual` | 没有稳定公开页面 | 不抓取 |
+| Webhook | `webhook` | 外部系统知道库存 | 不抓取 |
+| 外部兜底 | `firecrawl` | 个别页面诊断或人工触发兜底 | 消耗 Firecrawl credits |
 
-## Firecrawl 集成
+新任务默认使用 `scrapling_adaptive`。旧任务升级时会自动迁移：
 
-Firecrawl 是可选外部采集后端，不是项目硬依赖。不开启 Firecrawl 时，本项目仍可使用 `static_http`、`browser`、`generic_pricing_table`、`whmcs`、`manual` 和 `webhook`。
+| 旧策略 | 迁移后 |
+| --- | --- |
+| `browser` | `scrapling_dynamic` |
+| `static_http` | `scrapling_standard` |
+| `adaptive` | `scrapling_adaptive` |
+| `firecrawl` / Firecrawl pipeline | `scrapling_stealth` |
+| `generic_pricing_table` / `whmcs` | `scrapling_adaptive`，并保留原解析器到 `source_config.extractor` |
+| `manual` / `webhook` | 保持不变 |
+
+迁移只执行一次。迁移后如果你手动选择旧兼容策略，系统不会在下次启动时再次覆盖。
+
+## 解析规则
+
+解析优先级：
+
+1. 用户显式规则
+2. Scrapling selector / 自适应选择器
+3. 商品卡片附近解析
+4. WHMCS 规则
+5. 通用关键词规则
+6. unknown
+
+支持的 `source_config` 字段：
+
+| 字段 | 用途 |
+| --- | --- |
+| `stock_rule_type` | `auto_card` / `css_selector` / `xpath` / `regex` / `text_near_keyword` / `json_path` |
+| `target_scope_selector` | 限定目标商品卡片范围 |
+| `stock_selector` | 指向库存数字或有货文本 |
+| `soldout_selector` | 指向售罄文本或禁用按钮 |
+| `button_selector` | 指向购买/下单按钮 |
+| `disabled_selector` | 指向 disabled / sold-out 状态 |
+| `in_stock_keywords` | 自定义有货关键词 |
+| `soldout_keywords` | 自定义售罄关键词 |
+| `regex_pattern` | 正则提取库存数字 |
+| `json_path` | 从页面 JSON 数据中提取库存 |
+
+常见有货信号：
+
+```text
+Order Now, Buy Now, Configure, Available, Add to Cart, Continue, 下单, 购买, 继续
+```
+
+常见售罄信号：
+
+```text
+Out of Stock, Sold Out, Unavailable, disabled, 缺货, 售罄, 无货
+```
+
+如果同一页面有多个产品，尽量把 `target_keyword` 写成目标产品独有的完整标题，避免误判到相邻产品。
+
+## 商品入库
+
+商品入库适合 IDC 商家没有公开 API、但有公开价格页 / WHMCS 商店页 / sitemap / 商品列表页的场景。当前工作流是：
+
+```text
+来源 -> 采集模式 -> 解析规则 -> 执行发现 -> 候选 URL -> 商品预览 -> 创建任务
+```
+
+默认路径是 Scrapling-first：
+
+- discovery 默认 `local`，从入口页和链接关系发现候选 URL。
+- scrape 默认 `scrapling_adaptive`。
+- 创建任务默认 `scrapling_adaptive`。
+- Firecrawl Map/Scrape 只作为外部兜底选项，不默认消耗 credits。
+
+工作台会先发现候选 URL，再让你抓取选中 URL，最后在商品预览里确认可入库商品。默认不会把语言切换、导航、页脚、分类/步骤标题、无价格/无规格候选直接写入任务；这些内容会进入“需要人工确认 / 已过滤候选”。
+
+工作台字段：
+
+| 字段 | 说明 |
+| --- | --- |
+| 商家 URL | 入口页，例如 pricing、store、cart.php?gid=xx |
+| discovery strategy | `local` / `firecrawl_map` / `hybrid` |
+| scrape strategy | `scrapling_adaptive` / `scrapling_standard` / `scrapling_dynamic` / `scrapling_stealth` / legacy / Firecrawl |
+| extractor | `generic_pricing_table` / `whmcs` / `fallback_keyword_parser` / `firecrawl_product_hint` |
+| search keyword | Firecrawl Map 搜索词，例如 `vps`、`hk`、`pricing` |
+| target keyword | 目标商品关键词，建议用完整产品名 |
+| dedupe policy | `by_url` / `by_title_url` / `by_pid` |
+| include sold out | 是否把售罄商品也放进入库预览 |
+| auto create tasks | 是否导入后直接生成监控任务 |
+
+批量创建任务会按 `source_item_id` 去重；重复执行只会同步已有任务，不会重复创建。
+
+## 分组和移动
+
+任务页采用分层工作台：
+
+```text
+主分组 -> 子分组 -> 多级子分组 -> 当前层商品
+```
+
+支持：
+
+- 创建主分组和子分组。
+- 子分组重命名、删除、进入。
+- 当前层卡片拖拽排序。
+- 商品多选删除。
+- 商品单个或批量移动到任意主分组 / 子分组。
+- 移动到不存在的目标分组时自动创建。
+- 移动后保留库存状态、Telegram `message_id`、source metadata 和排序信息。
+
+跨层移动请使用“移动到...”弹窗；拖拽只负责当前层排序。
+
+## Firecrawl 外部兜底
+
+Firecrawl 是可选外部采集后端，不是项目硬依赖。当前项目不建议把 Firecrawl 用于高频定时监控，因为它会消耗 credits。
 
 推荐用法：
 
-- 商品入库优先：用 Firecrawl `/v2/map` 发现候选 URL，再用 `/v2/scrape` 抓取候选页，最后由本项目解析器判断库存。
-- 实时监控谨慎开启：默认 `FIRECRAWL_USE_FOR_MONITOR=false`，避免每轮监控产生外部调用成本。
+- 商品入库或人工诊断时使用。
+- 个别复杂页面可以手动选择 Firecrawl 外部兜底。
+- 实时监控默认 `FIRECRAWL_USE_FOR_MONITOR=false`。
 - 库存监控必须使用 `FIRECRAWL_MAX_AGE_MS=0` 和 `FIRECRAWL_STORE_IN_CACHE=false`，避免缓存旧库存。
-- API Key 只保存在后端，snapshot、备份、日志和前端响应不会返回明文。
-- 后台 Firecrawl 集成页提供“测试 Firecrawl 连接”，会使用当前表单里的 API URL、API Key、proxy、zeroDataRetention 做一次最小 scrape 诊断；测试不会保存 Key，响应也不会返回明文 Key。
-- 诊断会把常见错误翻译成操作建议：认证失败、额度不足、限流、ZDR 未开通、proxy 权限、返回 challenge、API URL 不正确等。
+
+API Key 只保存在后端，snapshot、备份、日志和前端响应不会返回明文。后台 Firecrawl 页面提供连接诊断，使用当前表单配置做一次最小 scrape 测试；测试不会保存 Key。
 
 Hosted Firecrawl 可能提升复杂页面成功率，但页面内容会发送给外部服务，且 enhanced / auto proxy 可能产生额外费用。Self-host Firecrawl 不包含 hosted 版 Fire-engine 等高级 IP block / robot detection 能力，不能把它当成 Cloudflare 绕过能力。
 
-边界保持一致：如果 Firecrawl 返回的是正常页面内容，本项目会继续解析；如果返回 Cloudflare / Turnstile / CAPTCHA challenge，仍会分类为 `cloudflare_challenge` 并进入受保护来源冷却。
+如果 Firecrawl 返回正常页面内容，本项目会继续解析；如果返回 Cloudflare / Turnstile / CAPTCHA challenge，仍会分类为 `cloudflare_challenge` 并进入受保护来源冷却。
 
 最小配置：
 
@@ -129,72 +239,6 @@ FIRECRAWL_STORE_IN_CACHE=false
 FIRECRAWL_USE_FOR_MONITOR=false
 FIRECRAWL_USE_FOR_CATALOG=true
 ```
-
-`FIRECRAWL_PROXY_MODE=enhanced` 或 `auto` 只有在对应 feature flag 显式开启时才会生效：
-
-```env
-FIRECRAWL_PROXY_MODE=auto
-FIRECRAWL_ALLOW_AUTO_PROXY=true
-```
-
-## 商品入库
-
-商品入库适合 IDC 商家没有公开 API、但有公开价格页 / WHMCS 商店页 / sitemap / 商品列表页的场景。当前工作流是：
-
-```text
-来源 -> 采集 -> 规则 -> 执行 -> 发现结果 -> 商品预览 -> 创建任务
-```
-
-工作台会先发现候选 URL，再让你抓取选中 URL，最后在商品预览里确认可入库商品。默认不会把语言切换、导航、页脚、分类/步骤标题、无价格/无规格候选直接写入任务；这些内容会进入“需要人工确认 / 已过滤候选”。
-
-工作台字段：
-
-| 字段 | 说明 |
-| --- | --- |
-| 商家 URL | 入口页，例如 pricing、store、cart.php?gid=xx |
-| discovery strategy | `local` / `firecrawl_map` / `hybrid` |
-| scrape strategy | `browser` / `static_http` / `firecrawl` / `adaptive` |
-| extractor | `generic_pricing_table` / `whmcs` / `firecrawl_product_hint` / `fallback_keyword_parser` |
-| search keyword | Firecrawl Map 搜索词，例如 `vps`、`hk`、`pricing` |
-| target keyword | 目标商品关键词，建议用完整产品名 |
-| dedupe policy | `by_url` / `by_title_url` / `by_pid` |
-| include sold out | 是否把售罄商品也放进入库预览 |
-| auto create tasks | 是否导入后直接生成监控任务 |
-
-发现结果和商品预览会展示 URL、来源、状态、解析器、`backend_used`、置信度、命中信号和是否可创建任务。批量创建任务会按 `source_item_id` 去重；重复执行只会同步已有任务，不会重复创建。
-
-## IDC / WHMCS 配置示例
-
-DMIT 类价格页：
-
-```text
-monitor_url: https://www.dmit.io/pages/pricing
-target_keyword: 目标套餐的完整名称或唯一关键词
-fetch_strategy: generic_pricing_table
-```
-
-WHMCS 商店页：
-
-```text
-monitor_url: https://my.rfchost.com/index.php?rp=/store/hk-tier-1-international-optimization-network
-target_keyword: 页面里对应产品的完整标题
-fetch_strategy: whmcs
-source_config: {"pid": 123}
-```
-
-常见有货信号：
-
-```text
-Order Now, Buy Now, Configure, Available, Add to Cart, 下单, 购买
-```
-
-常见售罄信号：
-
-```text
-Out of Stock, Sold Out, Unavailable, 缺货, 售罄, 无货
-```
-
-如果同一页面有多个产品，尽量把 `target_keyword` 写成目标产品独有的完整标题，避免误判到相邻产品。
 
 ## Cloudflare / CAPTCHA 处理
 
@@ -219,15 +263,16 @@ cooldown_until: 冷却截止时间
 
 - 不启动 Chromium。
 - 不请求目标站。
+- 不请求 Firecrawl。
 - 不改变库存状态。
 - 不发送 Telegram。
 
-这不是绕过失败，而是项目的设计边界。对这类站点，建议改用：
+这不是绕过失败，而是项目边界。对这类站点，建议改用：
 
 - 商家公开 RSS / 状态页 / 静态价格页。
 - `manual` 后台手动维护。
 - `webhook` 接入你自己的合法库存来源。
-- 已启用 Firecrawl 时可尝试外部抓取一次；如果仍返回 challenge，同样进入冷却。
+- 替代公开页面。
 
 ## Manual / Webhook
 
@@ -253,272 +298,111 @@ curl -X POST 'https://your-panel.example.com/api/webhooks/restock/123' \
   -d '{"status": "sold_out", "detail": "provider reports sold out"}'
 ```
 
-支持字段：
+## 环境变量
 
-| 字段 | 说明 |
-| --- | --- |
-| `stock` | 数字库存，`> 0` 表示有货，`0` 表示售罄 |
-| `status` | `in_stock` / `sold_out` / `unknown` |
-| `detail` | 本次来源说明 |
-| `checked_at` | 外部系统检测时间，ISO 8601 |
-
-## Telegram 推送状态机
-
-同一个任务只维护一个 Telegram 状态：
-
-| 状态变化 | 行为 |
-| --- | --- |
-| 首次补货 | 发送新消息，保存 `message_id` |
-| 库存数字变化 | 编辑原消息 |
-| 仍然有货且库存不变 | 不重复刷屏 |
-| 售罄 | 编辑原消息为售罄文案，清空 `message_id` |
-| 采集失败或受保护来源 | 只记录错误，不改变库存状态，不发送消息 |
-
-文案模板支持：
-
-```text
-{name}        商品名称
-{stock}       当前库存
-{url}         监控链接
-{keyword}     目标关键词
-{checked_at}  检测时间
-{status}      in_stock / sold_out / test
-```
-
-示例：
-
-```html
-<b>{name}</b>
-库存：{stock}
-链接：{url}
-检测时间：{checked_at}
-```
-
-## 管理后台
-
-后台包含：
-
-- 监控任务创建、编辑、启停、删除。
-- 主分组 / 多级子分组卡片浏览，进入后再看下一级或商品列表，避免一页瀑布流。
-- 分组重命名、删除分组、批量删除子分组、批量删除任务。
-- 采集策略选择。
-- 受保护来源提示和冷却时间展示。
-- Manual 快捷标记。
-- Webhook endpoint、token hint 和 token 重置。
-- 商家页面导入、来源同步、来源启停、商品生成任务。
-- TG 文案变量说明和当前编辑模板测试推送。
-- Telegram Bot Token 和 Chat ID 配置。
-- 数据备份 / 恢复。
-- 系统升级入口。
-- 管理员账号密码修改。
-- 活动日志和运行状态。
-
-## 常用环境变量
-
-运行时变量：
+核心配置：
 
 | 变量 | 说明 | 默认 |
 | --- | --- | --- |
-| `APP_PORT` | 应用监听端口 | `7777` |
-| `APP_HOST` | 应用绑定地址 | `127.0.0.1` |
-| `SECRET_KEY` | Flask session 密钥 | 自动生成或手动配置 |
-| `ADMIN_USERNAME` | 首次初始化管理员 | `operator` |
-| `ADMIN_PASSWORD` | 首次初始化密码 | 随机生成或手动配置 |
+| `APP_PORT` | 面板监听端口 | `7777` |
+| `APP_HOST` | 面板监听地址 | `127.0.0.1` |
+| `POLL_INTERVAL_SECONDS` | 定时轮询间隔 | `45` |
+| `REQUEST_TIMEOUT_SECONDS` | 通用请求超时 | `25` |
 | `TELEGRAM_BOT_TOKEN` | Telegram Bot Token | 空 |
-| `TELEGRAM_CHAT_ID` | 单个 Telegram Chat ID | 空 |
-| `TELEGRAM_CHAT_IDS` | 多个 Chat ID，逗号或换行分隔 | 空 |
-| `MONITOR_DEBUG_PORT` | 主监控浏览器调试端口 | `9223` |
-| `TEST_DEBUG_PORT` | 测试推送浏览器调试端口 | `9334` |
-| `CATALOG_DEBUG_PORT` | 商家导入浏览器调试端口 | `9445` |
-| `POLL_INTERVAL_SECONDS` | 任务轮询间隔 | `45` |
-| `REQUEST_TIMEOUT_SECONDS` | 页面抓取超时 | `25` |
-| `FIRECRAWL_ENABLED` | 是否启用 Firecrawl 集成 | `false` |
-| `FIRECRAWL_API_URL` | Firecrawl API 地址，hosted 或 self-host | `https://api.firecrawl.dev` |
-| `FIRECRAWL_API_KEY` | Firecrawl API Key，永不通过 snapshot 明文返回 | 空 |
-| `FIRECRAWL_TIMEOUT_SECONDS` | Firecrawl 请求超时 | `60` |
-| `FIRECRAWL_MAX_AGE_MS` | Firecrawl 缓存年龄；库存监控必须为 `0` | `0` |
-| `FIRECRAWL_STORE_IN_CACHE` | 是否允许 Firecrawl 缓存结果 | `false` |
-| `FIRECRAWL_PROXY_MODE` | `basic` / `enhanced` / `auto` | `basic` |
-| `FIRECRAWL_ALLOW_AUTO_PROXY` | 是否允许 auto proxy | `false` |
-| `FIRECRAWL_ALLOW_ENHANCED_PROXY` | 是否允许 enhanced proxy | `false` |
-| `FIRECRAWL_ZERO_DATA_RETENTION` | 请求 Firecrawl 零数据保留；hosted 账号需开通 ZDR | `false` |
-| `FIRECRAWL_USE_FOR_MONITOR` | 是否允许监控任务默认使用 Firecrawl | `false` |
-| `FIRECRAWL_USE_FOR_CATALOG` | 是否允许商品入库使用 Firecrawl | `true` |
-| `FIRECRAWL_CATALOG_LIMIT` | Firecrawl Map 单次候选 URL 上限 | `50` |
-| `CATALOG_DISCOVERY_STRATEGY` | 商品入库默认发现策略 | `local` |
-| `CATALOG_SCRAPE_STRATEGY` | 商品入库默认抓取策略 | `browser` |
-| `CATALOG_DEFAULT_FETCH_STRATEGY` | 入库后生成任务的默认采集策略 | `browser` |
-| `CATALOG_DEFAULT_EXTRACTOR` | 商品入库默认解析器 | `generic_pricing_table` |
-| `CATALOG_DEDUPE_POLICY` | 商品入库默认去重策略 | `by_url` |
-| `CATALOG_MAX_DISCOVERED_URLS` | 商品入库默认发现 URL 上限 | `50` |
-| `CATALOG_MAX_IMPORT_ITEMS` | 商品入库默认入库上限 | `50` |
-| `CATALOG_TIMEOUT_SECONDS` | 商品入库抓取超时 | `25` |
-| `CHROMIUM_HEADLESS` | Chromium 是否无头 | `true` |
-| `CHROMIUM_BINARY` | Chromium 可执行文件路径 | 自动探测 |
-| `CHROMIUM_USER_AGENT` | 覆盖浏览器和 `static_http` UA | 空 |
-| `SESSION_COOKIE_SECURE` | Cookie 是否仅 HTTPS | HTTPS 部署建议 true |
-| `LOGIN_RATE_LIMIT` | 登录限流 | `5 per minute` |
-| `GENERAL_MUTATION_LIMIT` | 写操作限流 | `40 per minute` |
-| `LIMITER_STORAGE_URI` | Flask-Limiter 存储 | 内存或 Redis |
+| `TELEGRAM_CHAT_IDS` | 多个 Chat ID，一行或逗号分隔 | 空 |
+| `LIMITER_STORAGE_URI` | 限流存储 | `redis://127.0.0.1:6379/0` |
 
-安装脚本也支持 `DEPLOY_MODE`、`ACCESS_MODE`、`FQDN`、`CERT_MODE`、`CF_API_TOKEN`、`CERTBOT_EMAIL`、`PUBLIC_APP_PORT` 等变量做无人值守安装。
+Scrapling：
 
-## 运维命令
+| 变量 | 说明 | 默认 |
+| --- | --- | --- |
+| `SCRAPLING_ENABLED` | 启用 Scrapling | `true` |
+| `SCRAPLING_DEFAULT_MODE` | 默认模式：`standard` / `dynamic` / `stealth` | `standard` |
+| `SCRAPLING_USE_FOR_MONITOR` | 用于定时监控 | `true` |
+| `SCRAPLING_USE_FOR_CATALOG` | 用于商品入库 | `true` |
+| `SCRAPLING_TIMEOUT_STANDARD` | 标准模式超时 | `25` |
+| `SCRAPLING_TIMEOUT_DYNAMIC` | 增强模式超时 | `45` |
+| `SCRAPLING_TIMEOUT_STEALTH` | 高兼容模式超时 | `75` |
+| `SCRAPLING_MAX_CONCURRENCY_STEALTH` | 高兼容并发 | `1` |
+| `SCRAPLING_SESSION_REUSE` | 复用站点会话 | `true` |
+| `SCRAPLING_ADAPTIVE_SELECTOR` | 启用自适应选择器 | `true` |
 
-快捷菜单：
+Firecrawl：
+
+| 变量 | 说明 | 默认 |
+| --- | --- | --- |
+| `FIRECRAWL_ENABLED` | 启用外部兜底 | `false` |
+| `FIRECRAWL_API_URL` | API 地址 | `https://api.firecrawl.dev` |
+| `FIRECRAWL_API_KEY` | API Key | 空 |
+| `FIRECRAWL_MAX_AGE_MS` | 缓存年龄，库存监控必须为 0 | `0` |
+| `FIRECRAWL_STORE_IN_CACHE` | 是否存入 Firecrawl 缓存 | `false` |
+| `FIRECRAWL_USE_FOR_MONITOR` | 是否允许定时监控使用 | `false` |
+| `FIRECRAWL_USE_FOR_CATALOG` | 是否允许商品入库使用 | `true` |
+
+商品入库：
+
+| 变量 | 说明 | 默认 |
+| --- | --- | --- |
+| `CATALOG_DISCOVERY_STRATEGY` | 默认发现策略 | `local` |
+| `CATALOG_SCRAPE_STRATEGY` | 默认抓取策略 | `scrapling_adaptive` |
+| `CATALOG_DEFAULT_FETCH_STRATEGY` | 创建任务默认策略 | `scrapling_adaptive` |
+| `CATALOG_DEFAULT_EXTRACTOR` | 默认解析器 | `generic_pricing_table` |
+| `CATALOG_DEDUPE_POLICY` | 默认去重策略 | `by_url` |
+
+完整配置见 `.env.example`。
+
+## 运维和升级
+
+原生安装：
 
 ```bash
-noaff
+sudo systemctl status noaff-monitor
+sudo systemctl restart noaff-monitor
+sudo journalctl -u noaff-monitor -n 100 --no-pager
 ```
 
-原生 systemd：
+如果启用了面板一键升级，后台可以直接触发 systemd upgrade service；否则后台会显示手动升级命令。
+
+升级脚本会：
+
+- `git pull --ff-only`
+- 安装 `requirements.txt`
+- 检测 Scrapling runtime
+- 重启服务
+
+如果遇到 Git `dubious ownership`，新版安装/升级脚本会自动配置 safe.directory。老版本可手动执行：
 
 ```bash
-systemctl status noaff-monitor --no-pager
-journalctl -u noaff-monitor -f
-systemctl restart noaff-monitor
-sudo systemctl start noaff-monitor-upgrade.service
+git config --global --add safe.directory /opt/noaff-monitor
 ```
 
-后台“升级”按钮默认会先判断当前 Web 进程是否有启动 systemd 服务的权限。没有权限时会显示手动命令，避免出现 `Interactive authentication required` 这类 systemd 认证错误。
+## 验证
 
-如果需要在 Web 后台直接触发一键升级，原生安装时可显式开启：
-
-```bash
-ENABLE_PANEL_UPGRADE=true bash install.sh
-```
-
-开启后安装脚本会写入最小 polkit 授权规则：仅允许 NOAFF 服务用户启动 `noaff-monitor-upgrade.service`，不会授予重启其他服务或执行任意 systemd 操作的权限。已有安装也可以重新运行安装脚本并设置 `ENABLE_PANEL_UPGRADE=true` 来补齐授权；仅手工把 `.env` 里的 `PANEL_UPGRADE_ENABLED=true` 改开不会自动创建系统授权规则。
-
-Docker：
+开发验证：
 
 ```bash
-cd /opt/noaff-monitor
-docker compose ps
-docker compose logs -f noaff
-bash install.sh --docker-upgrade
-```
-
-重置后台密码：
-
-```bash
-cd /opt/noaff-monitor
-bash install.sh --reset-password
-```
-
-静默重置：
-
-```bash
-cd /opt/noaff-monitor
-RESET_ADMIN_USERNAME=operator RESET_ADMIN_PASSWORD='NewStrongPass123' bash install.sh --reset-password
-```
-
-查看首次引导凭据：
-
-```bash
-cat /opt/noaff-monitor/data/bootstrap_admin.txt
-```
-
-首次改密后建议删除：
-
-```bash
-rm -f /opt/noaff-monitor/data/bootstrap_admin.txt
-```
-
-卸载：
-
-```bash
-bash install.sh --uninstall
-```
-
-卸载会二次确认，默认保留数据目录。
-
-## 本地开发
-
-准备环境：
-
-```bash
-python3 -m venv .venv
-. .venv/bin/activate
-pip install -r requirements.txt
-```
-
-启动 Flask 开发服务：
-
-```bash
-ADMIN_USERNAME=operator ADMIN_PASSWORD=operator-test flask --app app:app run --host 127.0.0.1 --port 7777
-```
-
-运行完整验证：
-
-```bash
-python -m unittest discover -s tests -v
-python -m py_compile app.py tests/test_app.py tests/test_install_script.py
+.venv/bin/python -m unittest discover -s tests -v
+.venv/bin/python -m py_compile app.py tests/test_app.py tests/test_install_script.py
 node --check static/app.js
 bash -n install.sh
+git diff --check
 ```
 
-当前完整回归基线：
+当前基线：
 
-- 152 tests passing
+- 177 tests passing
 - Python compile check passing
 - `static/app.js` syntax check passing
 - `install.sh` bash syntax check passing
 
-当前测试覆盖：
+## 发布检查
 
-- 登录、CSRF、同源、AJAX 头、登录限流。
-- 任务创建、编辑、分组、快照字段。
-- 数据库迁移和备份恢复。
-- `static_http`、`browser`、`generic_pricing_table`、`whmcs`。
-- Firecrawl scrape/map/fallback pipeline 和连接诊断，全部使用 mock，不依赖实时 Firecrawl。
-- Cloudflare challenge 分类、受保护来源冷却、浏览器不误 rebuild。
-- Manual / Webhook 库存写入和 Telegram 状态机。
-- 商品入库 URL 发现、Firecrawl Map、噪音过滤、商品预览、批量创建任务去重。
-- 安装脚本、Docker、Nginx、升级、卸载。
-- 前端轮询、任务卡片局部更新、UI 静态约束。
-
-## 项目结构
-
-```text
-.
-├── app.py
-├── install.sh
-├── Dockerfile
-├── docker-compose.yml
-├── requirements.txt
-├── assets/
-│   └── noaff-logo.svg
-├── docs/
-│   ├── HANDOFF.md
-│   ├── PR_DRAFT.md
-│   └── RELEASE_NOTES.md
-├── templates/
-│   └── portal.html
-├── static/
-│   ├── app.css
-│   └── app.js
-└── tests/
-    ├── test_app.py
-    └── test_install_script.py
-```
-
-## 发布检查清单
-
-- 普通 IDC / WHMCS 页面能通过合适策略监控。
-- 页面正常可访问时能识别购买入口、售罄标记和库存数字。
-- Cloudflare challenge 被识别为受保护来源，不触发浏览器 rebuild。
-- 冷却期不会持续请求目标站。
-- Firecrawl 使用 `maxAge=0`、默认不缓存，API Key 不出现在 snapshot / 日志 / 备份里。
-- `manual` / `webhook` 能触发 Telegram send/edit/sold-out 行为。
-- 快照、日志和数据库不泄露 webhook 明文 token。
-- 不添加依赖实时公网商家页面的自动化测试。
-- 本地验证命令全部通过：单元测试、Python 编译检查、`static/app.js` 语法检查、`install.sh` 语法检查。
-
-## 贡献约定
-
-- 新增商家解析逻辑时，请使用离线 HTML fixture 写测试。
-- 不要提交绕过 Cloudflare / Turnstile / CAPTCHA 的实现。
-- 不要把 live merchant 页面作为测试依赖。
-- 不要在日志、快照、API 响应里暴露 token、secret 或 webhook 明文凭据。
-- 优先保持 Flask + SQLite + DrissionPage + Telegram 的现有架构，避免不必要的大重写。
+- 新建 Scrapling 自适应任务，确认普通 IDC 页面可识别有货/售罄。
+- 用 CSS selector / XPath / 正则各创建一个规则任务，确认状态机正常。
+- 商品入库跑一次 local discovery -> Scrapling preview -> 批量创建。
+- 分组、子分组、移动、批量删除、拖拽排序各 smoke test 一次。
+- Firecrawl 设置页用有效/无效 key 各跑一次诊断，确认不泄露 key。
+- 手动任务点击有货/售罄，确认 Telegram send/edit/sold-out。
+- Webhook 任务 reset token 后 POST `stock` 和 `status=sold_out`。
+- 用 Cloudflare challenge fixture 或受保护页面确认进入 cooldown，且冷却期不请求目标站。
+- 确认 snapshot、日志、备份不包含 Firecrawl API key 或 webhook plaintext token。

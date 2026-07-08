@@ -2,203 +2,160 @@
 
 ## Title
 
-Firecrawl-assisted IDC intake and protected-source aware monitoring
+Scrapling-first IDC monitoring and grouped task management
 
 ## Summary
 
-This release completes the IDC restock monitoring path for public product pages:
+This release moves NOAFF to a Scrapling-first collection model for public IDC product pages. Scrapling is now the primary engine for realtime monitoring and product intake, while Firecrawl is kept as an optional external fallback / diagnostics path instead of a high-frequency default.
 
-- public page fetching
-- strategy-based fetchers
-- optional Firecrawl scrape/map backend
-- Firecrawl connection diagnostics in settings
-- product intake URL discovery and preview workflow
-- product intake noise filtering for navigation/locale/section text
-- IDC / WHMCS page extractors
-- protected-source cooldown for Cloudflare challenge pages
-- Telegram state machine reuse for crawler, manual, and webhook inputs
-
-The project intentionally does not bypass Cloudflare / Turnstile / CAPTCHA challenges.
-If Firecrawl returns normal page content, NOAFF can parse it. If Firecrawl returns a challenge page, NOAFF still treats it as a protected source.
+The project intentionally does not bypass Cloudflare / Turnstile / CAPTCHA challenges. Cloudflare / Turnstile / CAPTCHA challenge pages are treated as protected sources, cooled down, and reported to the user without changing inventory state or sending Telegram messages.
 
 ## Highlights
 
-- Added task fetch strategies:
-  - `browser`
-  - `static_http`
-  - `generic_pricing_table`
-  - `whmcs`
-  - `firecrawl`
-  - `firecrawl_then_static`
-  - `static_then_firecrawl`
-  - `firecrawl_then_browser`
-  - `adaptive`
+- Added Scrapling-first fetch strategies:
+  - `scrapling_standard`
+  - `scrapling_dynamic`
+  - `scrapling_stealth`
+  - `scrapling_adaptive`
   - `manual`
   - `webhook`
-- Split Cloudflare challenge handling from browser auto-heal.
-- Added `ProtectedSourceError` and `cloudflare_challenge` classification.
-- Added protected-source cooldown:
-  - first block: 1 minute
-  - second block: 3 minutes
-  - third and later: 10 minutes
-- Added fetcher abstraction:
-  - `StaticHttpFetcher`
-  - `BrowserFetcher`
-  - `FirecrawlFetcher`
-  - `ExternalInputFetcher`
-  - `FetcherSelector`
-- Added Firecrawl client/catalog integration:
-  - `/v2/scrape`
-  - `/v2/map`
-  - rawHtml/html/markdown parsing
-  - `maxAge=0`
-  - `storeInCache=false`
-  - API key masking
-  - explicit proxy feature flags for enhanced/auto
-- Added Firecrawl settings diagnostic:
-  - tests current unsaved form values
-  - reports auth, ZDR, credit, rate limit, proxy, timeout, challenge, and bad-response states
-  - does not save or expose plaintext API keys
-- Added Firecrawl-style fallback pipeline with bounded attempts and frontend attempt summaries.
-- Added IDC extractors:
-  - `generic_pricing_table`
-  - `whmcs`
-- Added product intake workbench:
-  - discovery strategy
-  - scrape strategy
-  - extractor selection
-  - target keyword mode
-  - dedupe policy
-  - discovered result list
+- Reworked the default task and product-intake strategy to `scrapling_adaptive`.
+- Added bounded adaptive escalation: standard -> dynamic -> stealth.
+- Added domain-level fetch sharing so one polling cycle can reuse page results across tasks on the same URL/domain.
+- Added domain-level cooldown so protected or failing domains are not repeatedly hit by every task in the same group.
+- Added selector/rule-driven stock parsing:
+  - CSS selector
+  - XPath
+  - regex
+  - JSON path
+  - target scope selector
+  - stock/sold-out selectors
+  - button/disabled selector
+  - custom in-stock and sold-out keyword lists
+- Upgraded product intake to a guided Scrapling-first workflow:
+  - source URL
+  - collection mode
+  - parsing rules
+  - discovery
+  - candidate URLs
   - product preview
-  - bulk task creation
-  - user-readable recovery suggestions
-- Product intake now demotes language switches, navigation/footer links, category/step headings, and no-price/no-spec candidates into manual review instead of auto-promoting them.
-- Added hierarchical task browsing:
-  - main group cards
-  - nested subgroup cards
-  - current-layer product lists
-  - drag sorting and bulk delete controls
-- Added manual stock update API and dashboard controls.
-- Added webhook ingest API with one-time plaintext token generation.
-- Webhook tokens are stored as HMAC hashes; snapshots/logs do not expose plaintext tokens.
-- Improved Telegram templates with clearer default copy, variable help, and send-test support for the current edited template.
-- Split product intake settings out of system settings.
-- Updated README, `.env.example`, release notes, and handoff documentation.
+  - task creation
+  - recovery suggestions
+- Product intake noise filtering now demotes locale switches, navigation, footers, category headings, empty titles, and no-price/no-spec candidates instead of creating junk products.
+- Added hierarchical task browsing with main groups, nested subgroups, current-layer product lists, drag sorting, bulk delete, subgroup rename/delete, and cross-group task movement.
+- Added `POST /api/tasks/move` for moving one or more products to another main group or subgroup without losing state, Telegram message IDs, or source metadata.
+- Simplified task editing so users choose human-readable modes:
+  - standard
+  - enhanced
+  - high compatibility
+  - manual
+  - webhook
+  - external fallback
+- Simplified system settings around:
+  - account and security
+  - notification and Telegram
+  - Scrapling collection engine
+  - Firecrawl external fallback
+  - backup and restore
+  - runtime logs
+- System settings entry cards are constrained to a compact 4+4 layout, avoiding waterfall/masonry layouts and oversized one-page setting stacks.
+- Added Scrapling install/runtime verification to native install, upgrade, and Docker build paths.
+- Firecrawl connection diagnostics remain available, but Firecrawl is no longer the recommended realtime monitor backend.
 
 ## Migration Notes
 
-Existing tasks continue to work. The default `fetch_strategy` is `browser`.
+The database migration is automatic. Existing tasks continue working and are mapped to Scrapling-first strategies where possible.
 
-The database migration adds these task columns:
+The default `fetch_strategy` is now:
 
-- `fetch_strategy TEXT DEFAULT 'browser'`
-- `source_config TEXT DEFAULT '{}'`
-- `blocked_count INTEGER DEFAULT 0`
-- `last_blocked_at TEXT`
-- `cooldown_until TEXT`
-- `ingest_token_hash TEXT DEFAULT ''`
-- `ingest_token_hint TEXT DEFAULT ''`
-- `last_fetch_backend TEXT DEFAULT ''`
-- `last_fetch_attempts TEXT DEFAULT ''`
-- `last_protected_source_backend TEXT DEFAULT ''`
+```text
+scrapling_adaptive
+```
 
-No manual migration is required for SQLite databases initialized by the app.
+One-time strategy migration marker:
 
-New settings defaults include Firecrawl and product intake keys:
+```text
+scrapling_fetch_strategy_migration_v1
+```
 
-- `firecrawl_enabled`
-- `firecrawl_api_url`
-- `firecrawl_api_key`
-- `firecrawl_timeout_seconds`
-- `firecrawl_max_age_ms`
-- `firecrawl_store_in_cache`
-- `firecrawl_proxy_mode`
-- `firecrawl_allow_auto_proxy`
-- `firecrawl_allow_enhanced_proxy`
-- `firecrawl_zero_data_retention`
-- `firecrawl_use_for_monitor`
-- `firecrawl_use_for_catalog`
-- `firecrawl_catalog_limit`
-- `catalog_discovery_strategy`
-- `catalog_scrape_strategy`
-- `catalog_default_fetch_strategy`
-- `catalog_default_extractor`
-- `catalog_default_group`
-- `catalog_include_sold_out`
-- `catalog_auto_create_tasks`
-- `catalog_dedupe_policy`
-- `catalog_max_discovered_urls`
-- `catalog_max_import_items`
-- `catalog_timeout_seconds`
+Strategy migration mapping:
+
+| Old strategy | New strategy | Notes |
+| --- | --- | --- |
+| `browser` | `scrapling_dynamic` | JS-rendered pages |
+| `static_http` | `scrapling_standard` | lightweight public HTML |
+| `adaptive` | `scrapling_adaptive` | bounded Scrapling escalation |
+| `firecrawl` | `scrapling_stealth` | avoids default credit consumption |
+| `firecrawl_then_browser` | `scrapling_stealth` | high-compat local path |
+| `firecrawl_then_static` | `scrapling_stealth` | high-compat local path |
+| `static_then_firecrawl` | `scrapling_standard` | lightweight local path |
+| `generic_pricing_table` | `scrapling_adaptive` | extractor preserved in `source_config.extractor` |
+| `whmcs` | `scrapling_adaptive` | extractor preserved in `source_config.extractor` |
+| `manual` | `manual` | unchanged |
+| `webhook` | `webhook` | unchanged |
+
+New or expanded task fields include:
+
+- `fetch_strategy`
+- `source_config`
+- `blocked_count`
+- `last_blocked_at`
+- `cooldown_until`
+- `ingest_token_hash`
+- `ingest_token_hint`
+- `last_fetch_backend`
+- `last_fetch_attempts`
+- `last_protected_source_backend`
+- `domain_cooldown_until`
+- `last_shared_fetch_key`
+- `last_shared_fetch_backend`
+
+Webhook tokens are stored as HMAC hashes. Plaintext webhook tokens are shown only once when reset, and snapshots/logs/backups expose only token hints.
 
 ## Behavior Changes
 
-- Cloudflare / Turnstile / CAPTCHA challenge pages are treated as protected sources.
-- Challenge pages do not trigger browser rebuild.
-- During protected-source cooldown:
-  - Chromium is not started for that task.
-  - The target site is not requested.
-  - `last_state` is not changed.
-  - Telegram messages are not sent.
+- Scrapling is the primary realtime monitor engine.
+- Product intake defaults to Scrapling, not Firecrawl.
+- Firecrawl is an optional external fallback, diagnostics, and manual recovery tool.
+- Firecrawl is not used by scheduled monitoring unless explicitly enabled.
+- Firecrawl credit or rate-limit failures enter cooldown and do not keep consuming credits every polling round.
+- Firecrawl diagnostics do not save or expose plaintext API keys, and the settings workflow does not save or expose plaintext API keys.
+- Firecrawl external fallback still uses inventory-safe settings such as `FIRECRAWL_MAX_AGE_MS=0` and cache-disabled behavior.
+- Protected-source cooldown prevents repeated local browser launches, repeated target requests, and repeated Firecrawl calls.
+- `stock=None` does not change `last_state` and does not send Telegram.
 - `manual` and `webhook` tasks do not poll target pages.
-- `source_config` strips sensitive keys such as `token`, `secret`, `webhook_token`, and `ingest_token`.
-- Firecrawl is optional and disabled for realtime monitor use by default.
-- Product intake may use Firecrawl when configured because intake is manually triggered and user-visible.
-- Firecrawl hosted enhanced/auto proxy modes are opt-in and labeled as external provider behavior, not built-in NOAFF bypass logic.
-- Product intake bulk creation dedupes existing tasks by `source_item_id`.
+- Product movement keeps existing task state, message IDs, webhook metadata, and source metadata.
+- Long error details are summarized in compact task rows and can be expanded when needed.
 
-## Firecrawl Usage
+## Firecrawl External Fallback
 
-Minimum backend configuration:
+Firecrawl external fallback remains supported for diagnostics and manual recovery:
 
 ```env
-FIRECRAWL_ENABLED=true
+FIRECRAWL_ENABLED=false
 FIRECRAWL_API_URL=https://api.firecrawl.dev
-FIRECRAWL_API_KEY=fc-...
+FIRECRAWL_API_KEY=
 FIRECRAWL_MAX_AGE_MS=0
 FIRECRAWL_STORE_IN_CACHE=false
 FIRECRAWL_USE_FOR_MONITOR=false
 FIRECRAWL_USE_FOR_CATALOG=true
 ```
 
-Recommended first use is product intake:
+Firecrawl hosted can improve some complex page captures, but it is an external provider with cost and privacy tradeoffs. It should not be the default high-frequency monitor backend for an open-source self-hosted restock monitor.
+
+## Product Intake Defaults
+
+Product intake now prefers Scrapling:
 
 ```text
-catalog_discovery_strategy: firecrawl_map
-catalog_scrape_strategy: firecrawl
-search_keyword: vps hk pricing
-default_extractor: generic_pricing_table
-default_fetch_strategy: generic_pricing_table
+CATALOG_DISCOVERY_STRATEGY=local
+CATALOG_SCRAPE_STRATEGY=scrapling_adaptive
+CATALOG_DEFAULT_FETCH_STRATEGY=scrapling_adaptive
+CATALOG_DEFAULT_EXTRACTOR=generic_pricing_table
+CATALOG_DEDUPE_POLICY=by_url
 ```
 
-Hosted Firecrawl may improve complex page success rates. Self-host Firecrawl does not include hosted Fire-engine advanced IP block / robot detection capabilities.
-
-## Webhook Usage
-
-Reset a webhook token from the dashboard or:
-
-```text
-POST /api/tasks/<task_id>/webhook-token
-```
-
-External stock write:
-
-```bash
-curl -X POST 'https://your-panel.example.com/api/webhooks/restock/123' \
-  -H 'Authorization: Bearer <ingest_token>' \
-  -H 'Content-Type: application/json' \
-  -d '{"stock": 3, "detail": "provider push"}'
-```
-
-Sold-out write:
-
-```bash
-curl -X POST 'https://your-panel.example.com/api/webhooks/restock/123' \
-  -H 'X-NOAFF-Token: <ingest_token>' \
-  -H 'Content-Type: application/json' \
-  -d '{"status": "sold_out"}'
-```
+Firecrawl map/scrape can still be exposed as an external fallback button when the operator explicitly configures it, but the normal flow is local Scrapling discovery, Scrapling scraping, extractor/rule preview, and then task creation.
 
 ## Verification
 
@@ -209,33 +166,37 @@ Run:
 .venv/bin/python -m py_compile app.py tests/test_app.py tests/test_install_script.py
 node --check static/app.js
 bash -n install.sh
+git diff --check
 ```
 
 Current baseline:
 
-- 152 tests passing
+- 177 tests passing
 - Python compile check passing
 - `static/app.js` syntax check passing
 - `install.sh` bash syntax check passing
+- `git diff --check` passing
 
 ## Manual Smoke Test Checklist
 
-- Create a `generic_pricing_table` task using a static fixture-like IDC pricing page and confirm `Order Now` is detected as in stock.
-- Create a `whmcs` task with a known product title or `pid` and confirm `Out of Stock` is detected as sold out.
-- Import one merchant page with local discovery and confirm discovered products enter preview before task creation.
-- If Firecrawl is configured, run product intake with `firecrawl_map` and confirm backend_used is displayed as Firecrawl.
-- In Firecrawl settings, run connection diagnostics with a valid key and an invalid key; confirm actionable messages and no plaintext key exposure.
-- Bulk-create preview items twice and confirm the second run syncs existing tasks rather than duplicating them.
-- Create a `manual` task and click dashboard “有货” and “售罄”; confirm Telegram send/edit behavior.
-- Create a `webhook` task, reset token, POST `stock`, then POST `status=sold_out`; confirm Telegram send/edit behavior.
-- Force a Cloudflare challenge fixture/page and confirm `cloudflare_challenge`, cooldown UI, no repeated browser rebuild.
-- Confirm dashboard snapshot does not expose webhook plaintext tokens or Firecrawl API keys.
+- Create a standard Scrapling task on a static IDC/WHMCS-like page and verify in-stock detection.
+- Create an enhanced Scrapling task on a JS-rendered page and verify page content is captured.
+- Create a high-compatibility Scrapling task and confirm it is low-concurrency and cooled down on failure.
+- Create a selector-based task using CSS/XPath/regex and verify only the target product is parsed.
+- Run product intake from a merchant URL and confirm navigation/language/footer noise is not promoted as products.
+- Create products from intake preview and confirm the default strategy is `scrapling_adaptive`.
+- Move one product from group A to group B.
+- Move multiple products from group A to group B / subgroup C.
+- Rename and delete a subgroup without losing unrelated tasks.
+- Create a `manual` task and verify in-stock / sold-out buttons update Telegram state.
+- Create a `webhook` task, reset token, POST stock and sold-out payloads, and verify Telegram state.
+- Run Firecrawl diagnostics with a valid and invalid key and confirm API keys are masked.
+- Force a Cloudflare challenge fixture/page and confirm protected-source cooldown with no repeated rebuild or Telegram send.
 
 ## Remaining Risks
 
-- IDC page extractors are heuristic; each new merchant layout should get offline HTML fixture tests.
-- Live merchant pages were not used in automated tests.
-- Sites protected by Cloudflare / Turnstile / CAPTCHA require manual/webhook/alternate public-source workflows.
-- Firecrawl hosted sends page URLs/content to an external provider; users must decide whether that is acceptable for their deployment.
-- Firecrawl API pricing/rate limits are external and should be monitored by the operator.
-- Browser-based behavior should be smoke-tested on the target VPS with the installed Chromium binary.
+- IDC pages are inconsistent; new merchant layouts should get offline HTML fixture tests.
+- Scrapling improves local collection reliability but does not guarantee access to protected sources.
+- Sites requiring CAPTCHA / Turnstile completion still need manual, webhook, or alternate public-source workflows.
+- Browser-dependent Scrapling modes should be smoke-tested on the target VPS after upgrade.
+- Firecrawl hosted remains useful as an external fallback, but scheduled monitoring through Firecrawl can consume credits quickly.
