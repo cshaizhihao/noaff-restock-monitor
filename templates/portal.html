@@ -474,7 +474,7 @@
                                                     <svg class="mr-2 h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 7h16M4 12h10M4 17h7"/>
                                                     </svg>
-                                                    <span id="merchant-import-button-label">开始发现与解析</span>
+                                                    <span id="merchant-import-button-label">发现候选 URL</span>
                                                 </button>
                                             </div>
                                         </section>
@@ -488,7 +488,8 @@
                                             </div>
                                             <div class="merchant-panel-actions">
                                                 <button type="button" class="ghost-button !min-h-10 !px-3 !py-2 text-[12px]" data-merchant-step-target="review">重新采集</button>
-                                                <button type="button" class="ghost-button !min-h-10 !px-3 !py-2 text-[12px]" data-merchant-step-target="items">看商品</button>
+                                                <button id="merchant-preview-scrape-button" type="button" class="primary-button !min-h-10 !px-3 !py-2 text-[12px]">抓取选中 URL</button>
+                                                <span id="merchant-preview-url-count" class="merchant-count-hint">0 已选</span>
                                             </div>
                                         </div>
                                         <div class="merchant-scroll-box" data-merchant-internal-scroll>
@@ -514,6 +515,9 @@
                                                 </select>
                                                 <button id="merchant-bulk-promote-button" type="button" class="ghost-button !min-h-10 !px-3 !py-2 text-[12px]" data-merchant-action="bulk-promote" disabled>
                                                     批量创建任务
+                                                </button>
+                                                <button id="merchant-preview-commit-button" type="button" class="primary-button !min-h-10 !px-3 !py-2 text-[12px]" disabled>
+                                                    写入选中商品
                                                 </button>
                                                 <span id="merchant-bulk-promote-count" class="merchant-count-hint">0 可创建</span>
                                             </div>

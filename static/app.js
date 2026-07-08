@@ -6,6 +6,7 @@
     let currentTaskGroups = [];
     let currentTaskGroupNodes = [];
     let currentMerchant = { sources: [], items: [], metrics: {} };
+    let merchantPreview = { candidateUrls: [], items: [], rejectedItems: [], failures: [] };
     let currentSettings = {};
     let currentSystem = null;
     let currentView = "tasks";
@@ -120,6 +121,9 @@
         merchantItemFilter: document.getElementById("merchant-item-filter"),
         merchantSourceList: document.getElementById("merchant-source-list"),
         merchantItemList: document.getElementById("merchant-item-list"),
+        merchantPreviewScrapeButton: document.getElementById("merchant-preview-scrape-button"),
+        merchantPreviewCommitButton: document.getElementById("merchant-preview-commit-button"),
+        merchantPreviewUrlCount: document.getElementById("merchant-preview-url-count"),
         systemVersion: document.getElementById("system-version"),
         systemBranch: document.getElementById("system-branch"),
         upgradeServiceState: document.getElementById("upgrade-service-state"),
@@ -412,6 +416,183 @@
         const currentIndex = merchantStepOrder.indexOf(merchantActiveStep);
         const nextIndex = Math.max(0, Math.min(merchantStepOrder.length - 1, currentIndex + delta));
         setMerchantStep(merchantStepOrder[nextIndex], true);
+    }
+
+    function normalizePreviewResult(result = {}) {
+        return {
+            sourceUrl: result.source_url || "",
+            sourceName: result.source_name || "",
+            groupName: result.group_name || "",
+            generatedAt: result.generated_at || "",
+            candidateUrls: Array.isArray(result.candidate_urls) ? result.candidate_urls : [],
+            items: Array.isArray(result.items) ? result.items : [],
+            rejectedItems: Array.isArray(result.rejected_items) ? result.rejected_items : [],
+            failures: Array.isArray(result.failures) ? result.failures : [],
+            counts: result.counts || {}
+        };
+    }
+
+    function hasMerchantPreviewSources() {
+        return Boolean(merchantPreview.candidateUrls?.length || merchantPreview.failures?.length);
+    }
+
+    function hasMerchantPreviewItems() {
+        return Boolean(merchantPreview.items?.length || merchantPreview.rejectedItems?.length || merchantPreview.failures?.length);
+    }
+
+    function merchantPreviewSignature() {
+        return JSON.stringify({
+            sourceUrl: merchantPreview.sourceUrl || "",
+            generatedAt: merchantPreview.generatedAt || "",
+            urls: (merchantPreview.candidateUrls || []).map((item) => [item.id, item.url, item.status, item.accepted_count, item.rejected_count, item.error_kind]),
+            items: (merchantPreview.items || []).map((item) => [item.source_item_key, item.title, item.confidence, item.include_reason]),
+            rejected: (merchantPreview.rejectedItems || []).map((item) => [item.source_item_key, item.title, item.reject_reason]),
+            failures: (merchantPreview.failures || []).map((item) => [item.url, item.error_kind, item.detail])
+        });
+    }
+
+    function previewStatusMeta(status, errorKind = "") {
+        if (status === "scraped") return ["border-emerald-500/20 bg-emerald-500/10 text-emerald-200", "已抓取"];
+        if (status === "failed" || errorKind) return ["border-rose-500/20 bg-rose-500/10 text-rose-200", "失败"];
+        if (status === "no_items") return ["border-amber-500/20 bg-amber-500/10 text-amber-200", "无商品"];
+        return ["border-slate-700 bg-slate-900/70 text-slate-300", "待抓取"];
+    }
+
+    function selectedPreviewUrls() {
+        const selectedIds = new Set(Array.from(document.querySelectorAll("[data-preview-url-select]:checked")).map((item) => item.value));
+        return (merchantPreview.candidateUrls || []).filter((item) => selectedIds.has(String(item.id)));
+    }
+
+    function selectedPreviewItems() {
+        const selectedKeys = new Set(Array.from(document.querySelectorAll("[data-preview-item-select]:checked")).map((item) => item.value));
+        return (merchantPreview.items || []).filter((item) => selectedKeys.has(String(item.source_item_key)));
+    }
+
+    function updateMerchantPreviewActions() {
+        const selectedUrls = selectedPreviewUrls();
+        const selectedItems = selectedPreviewItems();
+        if (els.merchantPreviewUrlCount) {
+            els.merchantPreviewUrlCount.textContent = `${selectedUrls.length} 已选`;
+        }
+        if (els.merchantPreviewScrapeButton) {
+            els.merchantPreviewScrapeButton.disabled = !selectedUrls.length;
+        }
+        if (els.merchantPreviewCommitButton) {
+            els.merchantPreviewCommitButton.disabled = !selectedItems.length;
+        }
+        if (els.merchantBulkPromoteButton && hasMerchantPreviewItems()) {
+            els.merchantBulkPromoteButton.disabled = true;
+        }
+        if (els.merchantBulkPromoteCount && hasMerchantPreviewItems()) {
+            els.merchantBulkPromoteCount.textContent = `${selectedItems.length} 待写入`;
+        }
+    }
+
+    function previewItemSignalHtml(item) {
+        const signals = Array.isArray(item.signals) ? item.signals.slice(0, 4) : [];
+        if (!signals.length) return '<span>暂无信号</span>';
+        return signals.map((signal) => `
+            <span title="${escapeHtml(signal.text || "")}">
+                ${escapeHtml(signal.type || "signal")} ${escapeHtml(signal.weight ?? "")}
+            </span>
+        `).join("");
+    }
+
+    function renderMerchantPreviewSources() {
+        const urls = merchantPreview.candidateUrls || [];
+        if (!urls.length) {
+            return '<p class="text-sm text-slate-500">暂无候选 URL，请先在执行步骤点击“发现候选 URL”。</p>';
+        }
+        return urls.map((candidate) => {
+            const [statusClass, statusText] = previewStatusMeta(candidate.status, candidate.error_kind);
+            const detail = candidate.detail || catalogErrorAdvice(candidate.error_kind || "");
+            return `
+                <article class="merchant-card rounded-xl border border-slate-800/80 bg-slate-950/50 p-4">
+                    <div class="flex flex-wrap items-start justify-between gap-3">
+                        <label class="flex min-w-0 flex-1 items-start gap-3">
+                            <input type="checkbox" class="mt-1 h-4 w-4 rounded border-slate-700 bg-slate-950 text-indigo-500" data-preview-url-select value="${escapeHtml(candidate.id)}" ${candidate.selected === false ? "" : "checked"}>
+                            <span class="min-w-0">
+                                <strong class="block truncate text-sm font-bold text-white">${escapeHtml(candidate.url)}</strong>
+                                <span class="mt-1 block font-mono text-[11px] text-slate-500">${escapeHtml(catalogDiscoveryLabel(candidate.source))}</span>
+                            </span>
+                        </label>
+                        <span class="rounded-full border px-2.5 py-1 font-mono text-[11px] ${statusClass}">${statusText}</span>
+                    </div>
+                    <div class="mt-3 flex flex-wrap gap-2 text-[11px] font-mono text-slate-400">
+                        <span class="rounded-full border border-slate-700 bg-slate-900/80 px-2.5 py-1">可入库 ${escapeHtml(candidate.accepted_count ?? 0)}</span>
+                        <span class="rounded-full border border-slate-700 bg-slate-900/80 px-2.5 py-1">过滤 ${escapeHtml(candidate.rejected_count ?? 0)}</span>
+                        <span class="rounded-full border border-slate-700 bg-slate-900/80 px-2.5 py-1">后端 ${escapeHtml(fetchStrategyLabel(candidate.backend_used || ""))}</span>
+                    </div>
+                    ${detail ? `<p class="mt-3 text-xs leading-5 text-slate-500">${escapeHtml(detail)}</p>` : ""}
+                </article>
+            `;
+        }).join("");
+    }
+
+    function renderMerchantPreviewItems() {
+        const items = merchantPreview.items || [];
+        const rejected = merchantPreview.rejectedItems || [];
+        const failures = merchantPreview.failures || [];
+        if (!items.length && !rejected.length && !failures.length) {
+            return '<p class="text-sm text-slate-500">暂无商品预览，请先在发现结果中抓取选中 URL。</p>';
+        }
+        const acceptedHtml = items.map((item) => {
+            const [stockClass, stockText] = merchantStockStatusMeta(item);
+            const confidence = Number(item.confidence || 0);
+            const reasonText = item.include_reason || "暂无识别依据";
+            return `
+                <article class="merchant-card rounded-xl border border-slate-800/80 bg-slate-950/50 p-4">
+                    <div class="flex flex-wrap items-start justify-between gap-3">
+                        <label class="flex min-w-0 flex-1 items-start gap-3">
+                            <input type="checkbox" class="mt-1 h-4 w-4 rounded border-slate-700 bg-slate-950 text-indigo-500" data-preview-item-select value="${escapeHtml(item.source_item_key)}" checked>
+                            <span class="min-w-0">
+                                <strong class="block truncate text-sm font-bold text-white">${escapeHtml(item.title)}</strong>
+                                <span class="mt-1 block truncate font-mono text-[11px] text-slate-500">${escapeHtml(item.item_url || item.monitor_url || "")}</span>
+                            </span>
+                        </label>
+                        <span class="rounded-full border px-2.5 py-1 font-mono text-[11px] ${stockClass}">${stockText}</span>
+                    </div>
+                    <div class="mt-3 grid gap-2 text-[11px] font-mono text-slate-400 sm:grid-cols-2">
+                        <span class="truncate rounded-lg border border-slate-800 bg-slate-900/70 px-2.5 py-1">关键词：${escapeHtml(item.keyword)}</span>
+                        <span class="truncate rounded-lg border border-slate-800 bg-slate-900/70 px-2.5 py-1">价格：${escapeHtml(item.price_hint || "-")}</span>
+                        <span class="truncate rounded-lg border border-slate-800 bg-slate-900/70 px-2.5 py-1">后端：${escapeHtml(fetchStrategyLabel(item.backend_used || ""))}</span>
+                        <span class="truncate rounded-lg border border-slate-800 bg-slate-900/70 px-2.5 py-1">解析器：${escapeHtml(extractorLabel(item.extractor))}</span>
+                    </div>
+                    <div class="merchant-signal-box">
+                        <div>
+                            <span>置信度</span>
+                            <strong>${confidence > 0 ? `${confidence}%` : "-"}</strong>
+                        </div>
+                        <p>${escapeHtml(reasonText)}</p>
+                        <div class="merchant-signal-chips">${previewItemSignalHtml(item)}</div>
+                    </div>
+                </article>
+            `;
+        }).join("");
+        const rejectedHtml = rejected.length ? `
+            <div class="merchant-preview-section-title">已过滤候选</div>
+            ${rejected.slice(0, 20).map((item) => `
+                <article class="merchant-card rounded-xl border border-amber-500/15 bg-amber-500/5 p-4">
+                    <div class="flex flex-wrap items-start justify-between gap-3">
+                        <div class="min-w-0">
+                            <h4 class="truncate text-sm font-bold text-amber-100">${escapeHtml(item.title || "未命名候选")}</h4>
+                            <p class="mt-1 text-xs leading-5 text-amber-100/70">${escapeHtml(item.reject_reason || "已过滤")}</p>
+                        </div>
+                        <span class="rounded-full border border-amber-500/20 bg-amber-500/10 px-2.5 py-1 font-mono text-[11px] text-amber-200">${escapeHtml(item.confidence || 0)}%</span>
+                    </div>
+                </article>
+            `).join("")}
+        ` : "";
+        const failureHtml = failures.length ? `
+            <div class="merchant-preview-section-title">失败项</div>
+            ${failures.slice(0, 20).map((failure) => `
+                <article class="merchant-card rounded-xl border border-rose-500/15 bg-rose-500/5 p-4">
+                    <h4 class="truncate text-sm font-bold text-rose-100">${escapeHtml(failure.url || failure.error_kind || "抓取失败")}</h4>
+                    <p class="mt-1 text-xs leading-5 text-rose-100/75">${escapeHtml(failure.detail || catalogErrorAdvice(failure.error_kind))}</p>
+                </article>
+            `).join("")}
+        ` : "";
+        return `${acceptedHtml}${rejectedHtml}${failureHtml}`;
     }
 
     function fetchAttemptMeta(task) {
@@ -1450,6 +1631,7 @@
         const nextMerchantSignature = [
             taskIdsSignature,
             filterValue,
+            merchantPreviewSignature(),
             sources.map((source) => [
                 source.id ?? "",
                 source.active ? "1" : "0",
@@ -1500,7 +1682,9 @@
         renderMerchantReviewSummary();
 
         if (els.merchantSourceList) {
-            if (!sources.length) {
+            if (hasMerchantPreviewSources()) {
+                els.merchantSourceList.innerHTML = renderMerchantPreviewSources();
+            } else if (!sources.length) {
                 els.merchantSourceList.innerHTML = '<p class="text-sm text-slate-500">暂无导入来源，先填一个商家商品页试试。</p>';
             } else {
                 els.merchantSourceList.innerHTML = sources.map((source) => {
@@ -1551,7 +1735,9 @@
         }
 
         if (els.merchantItemList) {
-            if (!filteredItems.length) {
+            if (hasMerchantPreviewItems()) {
+                els.merchantItemList.innerHTML = renderMerchantPreviewItems();
+            } else if (!filteredItems.length) {
                 els.merchantItemList.innerHTML = '<p class="text-sm text-slate-500">当前筛选条件下没有商品记录。</p>';
             } else {
                 els.merchantItemList.innerHTML = filteredItems.map((item) => {
@@ -1619,12 +1805,13 @@
         }
         if (els.merchantBulkPromoteButton) {
             const promotableItems = filteredItems.filter((item) => !item.task_id && item.item_state !== "archived");
-            els.merchantBulkPromoteButton.disabled = promotableItems.length === 0;
+            els.merchantBulkPromoteButton.disabled = hasMerchantPreviewItems() || promotableItems.length === 0;
             els.merchantBulkPromoteButton.dataset.itemIds = promotableItems.map((item) => item.id).join(",");
             if (els.merchantBulkPromoteCount) {
                 els.merchantBulkPromoteCount.textContent = `${promotableItems.length} 可创建`;
             }
         }
+        updateMerchantPreviewActions();
     }
 
     function renderLogs(logs) {
@@ -2252,6 +2439,98 @@
             include_sold_out: Boolean(els.merchantIncludeSoldOut?.checked),
             auto_promote: Boolean(els.merchantAutoPromote?.checked)
         };
+    }
+
+    function setMerchantPreviewFromResult(result) {
+        merchantPreview = normalizePreviewResult(result || {});
+        merchantSignature = null;
+        renderMerchant(currentMerchant);
+        updateMerchantPreviewActions();
+    }
+
+    async function discoverMerchantCandidateUrls(submit) {
+        if (submit) submit.disabled = true;
+        const originalLabel = els.merchantImportButtonLabel?.textContent || "";
+        if (els.merchantImportButtonLabel) {
+            els.merchantImportButtonLabel.textContent = "发现中...";
+        }
+        try {
+            const data = await apiFetch("/api/merchant/discover", {
+                method: "POST",
+                body: JSON.stringify(collectMerchantPayload())
+            });
+            setMerchantPreviewFromResult(data.result || {});
+            const count = data.result?.counts?.candidate_urls ?? data.result?.candidate_urls?.length ?? 0;
+            showToast(`已发现 ${count} 个候选 URL。`);
+            setMerchantStep("sources", true);
+        } catch (error) {
+            showToast(error.message, "error");
+        } finally {
+            if (submit) submit.disabled = false;
+            if (els.merchantImportButtonLabel) {
+                els.merchantImportButtonLabel.textContent = originalLabel || "发现候选 URL";
+            }
+        }
+    }
+
+    async function scrapeMerchantPreviewUrls() {
+        const selectedUrls = selectedPreviewUrls();
+        if (!selectedUrls.length) {
+            showToast("请先选择要抓取的候选 URL。", "error");
+            return;
+        }
+        const button = els.merchantPreviewScrapeButton;
+        if (button) button.disabled = true;
+        try {
+            const payload = collectMerchantPayload();
+            payload.source_name = merchantPreview.sourceName || payload.source_name;
+            payload.candidate_urls = selectedUrls;
+            const data = await apiFetch("/api/merchant/preview", {
+                method: "POST",
+                body: JSON.stringify(payload)
+            });
+            setMerchantPreviewFromResult(data.result || {});
+            const count = data.result?.counts?.items ?? data.result?.items?.length ?? 0;
+            showToast(`商品预览已生成：${count} 个可入库商品。`);
+            setMerchantStep("items", true);
+        } catch (error) {
+            showToast(error.message, "error");
+        } finally {
+            updateMerchantPreviewActions();
+        }
+    }
+
+    async function commitMerchantPreviewItems() {
+        const selectedItems = selectedPreviewItems();
+        if (!selectedItems.length) {
+            showToast("请先选择要写入的商品。", "error");
+            return;
+        }
+        const button = els.merchantPreviewCommitButton;
+        if (button) button.disabled = true;
+        try {
+            const payload = collectMerchantPayload();
+            const data = await apiFetch("/api/merchant/commit", {
+                method: "POST",
+                body: JSON.stringify({
+                    source_url: merchantPreview.sourceUrl || payload.source_url,
+                    source_name: merchantPreview.sourceName || payload.source_name,
+                    group_name: merchantPreview.groupName || payload.group_name,
+                    auto_promote: Boolean(els.merchantAutoPromote?.checked),
+                    items: selectedItems
+                })
+            });
+            const promoted = data.result?.promoted_count ?? 0;
+            showToast(`已写入 ${data.result?.upserted_count ?? selectedItems.length} 个商品，生成 ${promoted} 个任务。`);
+            merchantPreview = { candidateUrls: [], items: [], rejectedItems: [], failures: [] };
+            merchantSignature = null;
+            await loadSnapshot(false);
+            setMerchantStep("items", true);
+        } catch (error) {
+            showToast(error.message, "error");
+        } finally {
+            updateMerchantPreviewActions();
+        }
     }
 
     async function handleMerchantAction(button) {
@@ -3113,6 +3392,18 @@
         }
     });
 
+    els.merchantSourceList?.addEventListener("change", (event) => {
+        if (event.target.closest("[data-preview-url-select]")) {
+            updateMerchantPreviewActions();
+        }
+    });
+
+    els.merchantItemList?.addEventListener("change", (event) => {
+        if (event.target.closest("[data-preview-item-select]")) {
+            updateMerchantPreviewActions();
+        }
+    });
+
     els.merchantItemFilter?.addEventListener("change", () => {
         renderMerchant(currentMerchant);
     });
@@ -3120,6 +3411,9 @@
     els.merchantBulkPromoteButton?.addEventListener("click", () => {
         handleMerchantAction(els.merchantBulkPromoteButton);
     });
+
+    els.merchantPreviewScrapeButton?.addEventListener("click", scrapeMerchantPreviewUrls);
+    els.merchantPreviewCommitButton?.addEventListener("click", commitMerchantPreviewItems);
 
     els.merchantView?.addEventListener("click", (event) => {
         const stepTarget = event.target.closest("[data-merchant-step-target]");
@@ -3221,38 +3515,7 @@
     els.merchantForm?.addEventListener("submit", async (event) => {
         event.preventDefault();
         const submit = event.submitter || els.merchantImportButton;
-        if (submit) submit.disabled = true;
-        const originalLabel = els.merchantImportButtonLabel?.textContent || "";
-        if (els.merchantImportButtonLabel) {
-            els.merchantImportButtonLabel.textContent = "导入中...";
-        }
-        try {
-            const data = await apiFetch("/api/merchant/import", {
-                method: "POST",
-                body: JSON.stringify(collectMerchantPayload())
-            });
-            showToast(`商家页面已导入：${data.result?.scanned_count ?? 0} 个候选商品，自动生成 ${data.result?.promoted_count ?? 0} 个任务。`);
-            if (els.merchantSourceName) {
-                els.merchantSourceName.value = "";
-            }
-            if (els.merchantGroup) {
-                els.merchantGroup.value = defaultTaskGroup;
-            }
-            if (els.merchantGroupCustom) {
-                syncInputValue(els.merchantGroupCustom, "");
-            }
-            updateGroupVisibility(els.merchantGroup, els.merchantGroupCustomWrap, els.merchantGroupCustom);
-            await loadSnapshot(false);
-            const scannedCount = Number(data.result?.scanned_count ?? 0);
-            setMerchantStep(scannedCount > 0 ? "items" : "sources", true);
-        } catch (error) {
-            showToast(error.message, "error");
-        } finally {
-            if (submit) submit.disabled = false;
-            if (els.merchantImportButtonLabel) {
-                els.merchantImportButtonLabel.textContent = originalLabel || "开始发现与解析";
-            }
-        }
+        await discoverMerchantCandidateUrls(submit);
     });
 
     els.profileForm?.addEventListener("submit", async (event) => {

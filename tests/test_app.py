@@ -718,6 +718,116 @@ class PortalAppTestCase(unittest.TestCase):
         self.assertIn("CATALOG_DEBUG_PORT", payload["message"])
         self.assertEqual(fake_browser.rebuild_calls, [])
 
+    def test_merchant_preview_pipeline_discovers_scrapes_then_commits_selected_items(self) -> None:
+        _, headers = self.login()
+        engine = self.app.extensions["monitor_engine"]
+
+        class FakeCatalogBrowser:
+            def __init__(self) -> None:
+                self.calls: list[str] = []
+
+            def fetch_html(self, url: str, timeout_seconds: int) -> str:
+                self.calls.append(url)
+                if url.endswith("/store/hk-vps"):
+                    return """
+                    <html><body>
+                      <nav><a href="/en">English</a></nav>
+                      <h2>选择地区</h2>
+                      <section class="product-card">
+                        <h3>HK Preview VPS</h3>
+                        <p>$9.90 USD / month</p>
+                        <p>1 vCPU 1GB RAM 20GB SSD</p>
+                        <a href="/cart.php?a=add&pid=99">Order Now</a>
+                      </section>
+                    </body></html>
+                    """
+                return """
+                <html>
+                  <head><title>Preview Merchant</title></head>
+                  <body>
+                    <a href="/store/hk-vps">HK VPS</a>
+                    <a href="/login">Login</a>
+                  </body>
+                </html>
+                """
+
+            def rebuild(self, reason: str) -> None:
+                raise AssertionError(reason)
+
+        original_browser = engine.catalog_browser
+        fake_browser = FakeCatalogBrowser()
+        engine.catalog_browser = fake_browser
+        try:
+            discover = self.client.post(
+                f"{app_module.PORTAL_PATH}/api/merchant/discover",
+                headers=headers,
+                base_url=BASE_URL,
+                json={
+                    "source_url": "https://merchant.example.com/products",
+                    "group_name": "Preview IDC",
+                    "catalog_discovery_strategy": "local",
+                    "catalog_scrape_strategy": "browser",
+                    "default_fetch_strategy": "generic_pricing_table",
+                    "default_extractor": "generic_pricing_table",
+                },
+            )
+            self.assertEqual(discover.status_code, 200)
+            discover_payload = discover.get_json()["result"]
+            urls = discover_payload["candidate_urls"]
+            self.assertTrue(any(item["url"].endswith("/store/hk-vps") for item in urls))
+
+            with app_module.open_connection() as connection:
+                self.assertEqual(connection.execute("SELECT COUNT(*) FROM merchant_sources").fetchone()[0], 0)
+                self.assertEqual(connection.execute("SELECT COUNT(*) FROM merchant_items").fetchone()[0], 0)
+
+            preview = self.client.post(
+                f"{app_module.PORTAL_PATH}/api/merchant/preview",
+                headers=headers,
+                base_url=BASE_URL,
+                json={
+                    "source_url": "https://merchant.example.com/products",
+                    "source_name": discover_payload["source_name"],
+                    "group_name": "Preview IDC",
+                    "catalog_discovery_strategy": "local",
+                    "catalog_scrape_strategy": "browser",
+                    "default_fetch_strategy": "generic_pricing_table",
+                    "default_extractor": "generic_pricing_table",
+                    "candidate_urls": [item for item in urls if item["url"].endswith("/store/hk-vps")],
+                },
+            )
+            self.assertEqual(preview.status_code, 200)
+            preview_payload = preview.get_json()["result"]
+            self.assertEqual([item["title"] for item in preview_payload["items"]], ["HK Preview VPS"])
+            self.assertTrue(any(item["reject_reason"] for item in preview_payload["rejected_items"]))
+
+            with app_module.open_connection() as connection:
+                self.assertEqual(connection.execute("SELECT COUNT(*) FROM merchant_sources").fetchone()[0], 0)
+                self.assertEqual(connection.execute("SELECT COUNT(*) FROM merchant_items").fetchone()[0], 0)
+
+            commit = self.client.post(
+                f"{app_module.PORTAL_PATH}/api/merchant/commit",
+                headers=headers,
+                base_url=BASE_URL,
+                json={
+                    "source_url": preview_payload["source_url"],
+                    "source_name": preview_payload["source_name"],
+                    "group_name": preview_payload["group_name"],
+                    "auto_promote": False,
+                    "items": preview_payload["items"],
+                },
+            )
+            self.assertEqual(commit.status_code, 200)
+            commit_payload = commit.get_json()["result"]
+            self.assertEqual(commit_payload["upserted_count"], 1)
+            self.assertEqual(commit_payload["promoted_count"], 0)
+        finally:
+            engine.catalog_browser = original_browser
+
+        with app_module.open_connection() as connection:
+            self.assertEqual(connection.execute("SELECT COUNT(*) FROM merchant_sources").fetchone()[0], 1)
+            self.assertEqual(connection.execute("SELECT COUNT(*) FROM merchant_items").fetchone()[0], 1)
+            self.assertEqual(connection.execute("SELECT COUNT(*) FROM tasks").fetchone()[0], 0)
+
     def test_merchant_import_cloudflare_keeps_catalog_browser_stable(self) -> None:
         _, headers = self.login()
         engine = self.app.extensions["monitor_engine"]

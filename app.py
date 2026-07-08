@@ -2539,6 +2539,39 @@ class MerchantImportResult:
     items: list[dict[str, Any]]
 
 
+@dataclass
+class MerchantCatalogPreviewResult:
+    source_url: str
+    source_name: str
+    group_name: str
+    generated_at: str
+    candidate_urls: list[dict[str, Any]]
+    items: list[dict[str, Any]]
+    rejected_items: list[dict[str, Any]]
+    failures: list[dict[str, Any]]
+    options: dict[str, Any]
+
+
+def merchant_catalog_preview_payload(result: MerchantCatalogPreviewResult) -> dict[str, Any]:
+    return {
+        "source_url": result.source_url,
+        "source_name": result.source_name,
+        "group_name": result.group_name,
+        "generated_at": result.generated_at,
+        "candidate_urls": result.candidate_urls,
+        "items": result.items,
+        "rejected_items": result.rejected_items,
+        "failures": result.failures,
+        "options": result.options,
+        "counts": {
+            "candidate_urls": len(result.candidate_urls),
+            "items": len(result.items),
+            "rejected_items": len(result.rejected_items),
+            "failures": len(result.failures),
+        },
+    }
+
+
 def sanitize_telegram_error(value: str, token: str = "") -> str:
     text = str(value or "")
     if token:
@@ -3698,22 +3731,27 @@ class MonitoringEngine:
 
         return candidates[: int(options.get("max_discovered_urls") or 50)]
 
-    def import_merchant_source(
+    def catalog_source_title(self, source_url: str, source_name: str, html_text: str = "") -> str:
+        source_title = normalize_candidate_title(source_name) or extract_page_title(html_text)
+        if not source_title:
+            source_title = urlparse(source_url).hostname or source_url
+        return source_title
+
+    def discover_merchant_catalog_urls(
         self,
         source_url: str,
         source_name: str,
         group_name: str,
         settings_payload: dict[str, Any],
-        auto_promote: bool = True,
         catalog_options: dict[str, Any] | None = None,
-    ) -> MerchantImportResult:
+    ) -> MerchantCatalogPreviewResult:
         source_url = source_url.strip()
         if not source_url:
             raise RuntimeError("商家页面链接不能为空。")
         if not validate_http_url(source_url):
             raise RuntimeError("商家页面链接必须是有效的 http(s) 地址。")
 
-        options = normalize_catalog_options(catalog_options, settings_payload, group_name, auto_promote)
+        options = normalize_catalog_options(catalog_options, settings_payload, group_name, False)
         if options["catalog_discovery_strategy"] == CATALOG_DISCOVERY_FIRECRAWL_MAP:
             entry_result = FetchResult(html="", final_url=source_url, detail="firecrawl_map")
         else:
@@ -3722,45 +3760,241 @@ class MonitoringEngine:
         if not html_text and options["catalog_discovery_strategy"] != CATALOG_DISCOVERY_FIRECRAWL_MAP:
             raise CatalogBrowserConnectionError(entry_result.detail or "商家页面抓取失败。")
 
-        discovered_items: list[dict[str, Any]] = []
+        candidate_urls = self.discover_catalog_candidate_urls(source_url, html_text, settings_payload, options)
+        if not candidate_urls and options["catalog_discovery_strategy"] != CATALOG_DISCOVERY_FIRECRAWL_MAP:
+            candidate_urls = [{"url": source_url, "source": "entry"}]
+        source_title = self.catalog_source_title(source_url, source_name, html_text)
+        timestamp = now_iso()
+        payload_urls: list[dict[str, Any]] = []
+        for index, candidate in enumerate(candidate_urls[: int(options["max_discovered_urls"])], start=1):
+            candidate_url = normalize_candidate_url(source_url, str(candidate.get("url") or "")) or source_url
+            payload_urls.append(
+                {
+                    "id": hashlib.sha1(f"{source_url}|{candidate_url}|{index}".encode("utf-8", errors="ignore")).hexdigest()[:16],
+                    "url": candidate_url,
+                    "source": str(candidate.get("source") or "page_links"),
+                    "selected": True,
+                    "status": "pending",
+                }
+            )
+        return MerchantCatalogPreviewResult(
+            source_url=source_url,
+            source_name=source_title,
+            group_name=normalize_task_group(options.get("default_group") or group_name),
+            generated_at=timestamp,
+            candidate_urls=payload_urls,
+            items=[],
+            rejected_items=[],
+            failures=[],
+            options=options,
+        )
+
+    def preview_merchant_source(
+        self,
+        source_url: str,
+        source_name: str,
+        group_name: str,
+        settings_payload: dict[str, Any],
+        catalog_options: dict[str, Any] | None = None,
+        candidate_urls: list[Any] | None = None,
+    ) -> MerchantCatalogPreviewResult:
+        source_url = source_url.strip()
+        if not source_url:
+            raise RuntimeError("商家页面链接不能为空。")
+        if not validate_http_url(source_url):
+            raise RuntimeError("商家页面链接必须是有效的 http(s) 地址。")
+
+        options = normalize_catalog_options(catalog_options, settings_payload, group_name, False)
+        candidates: list[dict[str, Any]] = []
+        source_title = self.catalog_source_title(source_url, source_name)
+        entry_result_for_preview: FetchResult | None = None
+        explicit_candidate_selection = bool(candidate_urls)
+
+        def make_candidate_payload(candidate_url: str, candidate_source: str, index: int) -> dict[str, Any]:
+            normalized_url = normalize_candidate_url(source_url, candidate_url) or source_url
+            return {
+                "id": hashlib.sha1(f"{source_url}|{normalized_url}|{index}".encode("utf-8", errors="ignore")).hexdigest()[:16],
+                "url": normalized_url,
+                "source": candidate_source or "page_links",
+                "selected": True,
+                "status": "pending",
+            }
+
+        if candidate_urls:
+            selected_candidates: list[dict[str, Any]] = []
+            seen_urls: set[str] = set()
+            for index, raw_candidate in enumerate(candidate_urls[: int(options["max_discovered_urls"])], start=1):
+                if isinstance(raw_candidate, dict):
+                    raw_url = str(raw_candidate.get("url") or "")
+                    raw_source = str(raw_candidate.get("source") or "selected")
+                else:
+                    raw_url = str(raw_candidate or "")
+                    raw_source = "selected"
+                normalized_url = normalize_candidate_url(source_url, raw_url)
+                if not normalized_url or normalized_url in seen_urls:
+                    continue
+                if not is_catalog_candidate_url(source_url, normalized_url, options):
+                    continue
+                seen_urls.add(normalized_url)
+                selected_candidates.append(make_candidate_payload(normalized_url, raw_source, index))
+            candidates = selected_candidates
+        else:
+            if options["catalog_discovery_strategy"] == CATALOG_DISCOVERY_FIRECRAWL_MAP:
+                entry_html = ""
+            else:
+                entry_result_for_preview = self.fetch_catalog_entry_html(source_url, settings_payload, int(options["timeout_seconds"]))
+                entry_html = entry_result_for_preview.html
+                if not entry_html:
+                    raise CatalogBrowserConnectionError(entry_result_for_preview.detail or "商家页面抓取失败。")
+                source_title = self.catalog_source_title(source_url, source_name, entry_html)
+            discovered_urls = self.discover_catalog_candidate_urls(source_url, entry_html, settings_payload, options)
+            if not discovered_urls and options["catalog_discovery_strategy"] != CATALOG_DISCOVERY_FIRECRAWL_MAP:
+                discovered_urls = [{"url": source_url, "source": "entry"}]
+            candidates = [
+                make_candidate_payload(str(candidate.get("url") or ""), str(candidate.get("source") or "page_links"), index)
+                for index, candidate in enumerate(discovered_urls[: int(options["max_discovered_urls"])], start=1)
+            ]
+
+        items: list[dict[str, Any]] = []
+        rejected_items: list[dict[str, Any]] = []
+        failures: list[dict[str, Any]] = []
         seen_item_keys: set[str] = set()
 
-        def add_discovered_items(fetch_result: FetchResult, page_url: str, discovery_source: str, backend_used: str) -> None:
+        for candidate in candidates:
+            if len(items) >= int(options["max_import_items"]):
+                break
+            candidate_url = str(candidate.get("url") or "")
+            if not candidate_url:
+                continue
+            candidate_source = str(candidate.get("source") or "selected")
+            candidate_status = dict(candidate)
+            try:
+                if (
+                    entry_result_for_preview is not None
+                    and candidate_url.rstrip("/") == source_url.rstrip("/")
+                    and candidate_source == "entry"
+                ):
+                    fetch_result = entry_result_for_preview
+                else:
+                    fetch_result = self.scrape_catalog_candidate(candidate_url, settings_payload, options)
+            except Exception as exc:
+                error_kind = catalog_browser_error_kind(exc)
+                detail = catalog_browser_error_message(exc, settings_payload["catalog_debug_port"])
+                candidate_status.update({"status": "failed", "error_kind": error_kind, "detail": detail})
+                failures.append({"url": candidate_url, "source": candidate_source, "error_kind": error_kind, "detail": detail})
+                candidate.update(candidate_status)
+                continue
+
+            backend_used = options.get("catalog_scrape_strategy") or CATALOG_SCRAPE_BROWSER
             if fetch_result.error_kind:
-                log_activity("warning", "catalog", f"商品页抓取失败（{fetch_result.error_kind}）：{fetch_result.detail}")
-                return
-            for item in discover_catalog_items(fetch_result.html, page_url):
-                prepared = prepare_catalog_item(item, source_url, page_url, discovery_source, backend_used, options)
+                candidate_status.update(
+                    {
+                        "status": "failed",
+                        "error_kind": fetch_result.error_kind,
+                        "detail": fetch_result.detail,
+                        "final_url": fetch_result.final_url or candidate_url,
+                        "backend_used": backend_used,
+                    }
+                )
+                failures.append(
+                    {
+                        "url": candidate_url,
+                        "source": candidate_source,
+                        "error_kind": fetch_result.error_kind,
+                        "detail": fetch_result.detail,
+                        "backend_used": backend_used,
+                    }
+                )
+                candidate.update(candidate_status)
+                continue
+
+            if not source_title or source_title == (urlparse(source_url).hostname or source_url):
+                source_title = self.catalog_source_title(source_url, source_name, fetch_result.html)
+
+            all_candidates = discover_catalog_items(fetch_result.html, fetch_result.final_url or candidate_url, include_rejected=True)
+            accepted_count = 0
+            rejected_count = 0
+            for raw_item in all_candidates:
+                prepared = prepare_catalog_item(raw_item, source_url, fetch_result.final_url or candidate_url, candidate_source, backend_used, options)
+                if raw_item.get("reject_reason"):
+                    rejected_count += 1
+                    if len(rejected_items) < 120:
+                        rejected_items.append(catalog_item_response_payload(prepared, include_raw=False))
+                    continue
                 if not should_keep_catalog_item(prepared, options):
+                    rejected_count += 1
+                    rejected = dict(prepared)
+                    rejected["reject_reason"] = "已按设置排除售罄商品"
+                    if len(rejected_items) < 120:
+                        rejected_items.append(catalog_item_response_payload(rejected, include_raw=False))
                     continue
                 if prepared["source_item_key"] in seen_item_keys:
                     continue
                 seen_item_keys.add(prepared["source_item_key"])
-                discovered_items.append(prepared)
-                if len(discovered_items) >= int(options["max_import_items"]):
+                items.append(catalog_item_response_payload(prepared, include_raw=True))
+                accepted_count += 1
+                if len(items) >= int(options["max_import_items"]):
                     break
 
-        add_discovered_items(entry_result, source_url, "entry", CATALOG_SCRAPE_BROWSER)
+            candidate_status.update(
+                {
+                    "status": "scraped" if accepted_count or rejected_count else "no_items",
+                    "final_url": fetch_result.final_url or candidate_url,
+                    "backend_used": backend_used,
+                    "accepted_count": accepted_count,
+                    "rejected_count": rejected_count,
+                    "detail": "已解析商品候选" if accepted_count or rejected_count else "未发现商品候选",
+                }
+            )
+            if not accepted_count and not rejected_count:
+                failures.append(
+                    {
+                        "url": candidate_url,
+                        "source": candidate_source,
+                        "error_kind": "catalog_no_items",
+                        "detail": "该 URL 未发现商品候选。",
+                        "backend_used": backend_used,
+                    }
+                )
+            candidate.update(candidate_status)
+            if (
+                not explicit_candidate_selection
+                and options["catalog_discovery_strategy"] == CATALOG_DISCOVERY_LOCAL
+                and candidate_source == "entry"
+                and accepted_count > 0
+            ):
+                break
 
-        if not (options["catalog_discovery_strategy"] == CATALOG_DISCOVERY_LOCAL and discovered_items):
-            candidate_urls = self.discover_catalog_candidate_urls(source_url, html_text, settings_payload, options)
-            if not candidate_urls:
-                candidate_urls = [{"url": source_url, "source": "entry"}]
-            for candidate in candidate_urls:
-                if len(discovered_items) >= int(options["max_import_items"]):
-                    break
-                candidate_url = candidate["url"]
-                candidate_source = candidate["source"]
-                if candidate_url.rstrip("/") == source_url.rstrip("/") and candidate_source == "entry":
-                    continue
-                fetch_result = self.scrape_catalog_candidate(candidate_url, settings_payload, options)
-                backend_used = options.get("catalog_scrape_strategy") or CATALOG_SCRAPE_BROWSER
-                add_discovered_items(fetch_result, fetch_result.final_url or candidate_url, candidate_source, backend_used)
+        return MerchantCatalogPreviewResult(
+            source_url=source_url,
+            source_name=source_title,
+            group_name=normalize_task_group(options.get("default_group") or group_name),
+            generated_at=now_iso(),
+            candidate_urls=candidates,
+            items=items,
+            rejected_items=rejected_items,
+            failures=failures,
+            options=options,
+        )
 
-        source_title = normalize_candidate_title(source_name) or extract_page_title(html_text)
-        if not source_title:
-            source_title = urlparse(source_url).hostname or source_url
-        target_group_name = normalize_task_group(options.get("default_group") or group_name)
+    def persist_merchant_catalog_items(
+        self,
+        source_url: str,
+        source_title: str,
+        group_name: str,
+        discovered_items: list[dict[str, Any]],
+        auto_promote: bool = True,
+        archive_missing: bool = True,
+    ) -> MerchantImportResult:
+        source_url = source_url.strip()
+        if not source_url:
+            raise RuntimeError("商家页面链接不能为空。")
+        if not validate_http_url(source_url):
+            raise RuntimeError("商家页面链接必须是有效的 http(s) 地址。")
+
+        normalized_items = [normalize_preview_catalog_item(item) for item in discovered_items[:250]]
+        source_title = self.catalog_source_title(source_url, source_title)
+        target_group_name = normalize_task_group(group_name)
 
         timestamp = now_iso()
         upserted_count = 0
@@ -3779,7 +4013,7 @@ class MonitoringEngine:
                     SET source_name = ?, group_name = ?, active = 1, last_sync_at = ?, last_error = '', discovered_count = ?, updated_at = ?
                     WHERE id = ?
                     """,
-                    (source_title, target_group_name, timestamp, len(discovered_items), timestamp, source_id),
+                    (source_title, target_group_name, timestamp, len(normalized_items), timestamp, source_id),
                 )
             else:
                 cursor = connection.execute(
@@ -3788,7 +4022,7 @@ class MonitoringEngine:
                         source_url, source_name, group_name, active, discovered_count, last_sync_at, last_error, created_at, updated_at
                     ) VALUES (?, ?, ?, 1, ?, ?, '', ?, ?)
                     """,
-                    (source_url, source_title, target_group_name, len(discovered_items), timestamp, timestamp, timestamp),
+                    (source_url, source_title, target_group_name, len(normalized_items), timestamp, timestamp, timestamp),
                 )
                 source_id = int(cursor.lastrowid)
 
@@ -3801,7 +4035,7 @@ class MonitoringEngine:
                 ).fetchall()
             }
 
-            for item in discovered_items:
+            for item in normalized_items:
                 seen_keys.add(item["source_item_key"])
                 item_state = "updated" if item["source_item_key"] in existing_items else "new"
                 existing = existing_items.get(item["source_item_key"])
@@ -3917,7 +4151,7 @@ class MonitoringEngine:
                     }
                 )
 
-            if seen_keys:
+            if archive_missing and seen_keys:
                 for row in connection.execute(
                     "SELECT id, item_key, item_state FROM merchant_items WHERE source_id = ?",
                     (source_id,),
@@ -3935,12 +4169,37 @@ class MonitoringEngine:
             source_id=source_id,
             source_url=source_url,
             source_name=source_title,
-            scanned_count=len(discovered_items),
+            scanned_count=len(normalized_items),
             upserted_count=upserted_count,
             promoted_count=promoted_count,
             archived_count=archived_count,
             last_sync_at=timestamp,
             items=persisted_items,
+        )
+
+    def import_merchant_source(
+        self,
+        source_url: str,
+        source_name: str,
+        group_name: str,
+        settings_payload: dict[str, Any],
+        auto_promote: bool = True,
+        catalog_options: dict[str, Any] | None = None,
+    ) -> MerchantImportResult:
+        preview = self.preview_merchant_source(
+            source_url,
+            source_name,
+            group_name,
+            settings_payload,
+            catalog_options=catalog_options,
+        )
+        return self.persist_merchant_catalog_items(
+            preview.source_url,
+            preview.source_name,
+            preview.group_name,
+            preview.items,
+            auto_promote=auto_promote,
+            archive_missing=True,
         )
 
     def resolve_chat_ids(self, settings_payload: dict[str, Any]) -> list[str]:
@@ -5581,6 +5840,52 @@ def prepare_catalog_item(item: dict[str, Any], source_url: str, page_url: str, d
     return prepared
 
 
+def catalog_item_response_payload(item: dict[str, Any], include_raw: bool = True) -> dict[str, Any]:
+    source_config = item.get("source_config") if isinstance(item.get("source_config"), dict) else {}
+    payload = {
+        "source_item_key": str(item.get("source_item_key") or item.get("item_key") or ""),
+        "title": str(item.get("title") or ""),
+        "keyword": str(item.get("keyword") or item.get("title") or ""),
+        "monitor_url": str(item.get("monitor_url") or ""),
+        "item_url": str(item.get("item_url") or item.get("monitor_url") or ""),
+        "price_hint": str(item.get("price_hint") or ""),
+        "stock_hint": str(item.get("stock_hint") or ""),
+        "restock_hint": str(item.get("restock_hint") or ""),
+        "fetch_strategy": normalize_fetch_strategy(item.get("fetch_strategy") or FETCH_STRATEGY_BROWSER),
+        "source_config": source_config,
+        "backend_used": str(source_config.get("catalog_backend") or item.get("backend_used") or ""),
+        "discovery_source": str(source_config.get("catalog_discovery_source") or item.get("discovery_source") or ""),
+        "extractor": str(source_config.get("extractor") or item.get("extractor") or ""),
+        "confidence": int(item.get("confidence") or 0),
+        "candidate_type": str(item.get("candidate_type") or ""),
+        "include_reason": str(item.get("include_reason") or ""),
+        "reject_reason": str(item.get("reject_reason") or ""),
+        "signals": item.get("signals") if isinstance(item.get("signals"), list) else [],
+    }
+    if include_raw:
+        payload["raw_snippet"] = str(item.get("raw_snippet") or "")[:4000]
+        payload["raw_payload"] = str(item.get("raw_payload") or "")[:4000]
+    return payload
+
+
+def normalize_preview_catalog_item(item: dict[str, Any]) -> dict[str, Any]:
+    normalized = catalog_item_response_payload(item, include_raw=True)
+    if not normalized["source_item_key"]:
+        normalized["source_item_key"] = infer_source_item_key(
+            "",
+            normalized["title"],
+            normalized["monitor_url"],
+            normalized["item_url"],
+        )
+    if not normalized["title"]:
+        raise ValueError("预览商品缺少标题。")
+    if not validate_http_url(normalized["monitor_url"]):
+        raise ValueError(f"预览商品链接无效：{normalized['monitor_url']}")
+    if normalized["item_url"] and not validate_http_url(normalized["item_url"]):
+        normalized["item_url"] = normalized["monitor_url"]
+    return normalized
+
+
 def is_action_url(url: str) -> bool:
     lowered = url.lower()
     return any(part in lowered for part in ("cart.php?a=add", "/cart/add", "/checkout", "/order", "add-to-cart", "addtocart"))
@@ -6837,6 +7142,128 @@ def make_app() -> Flask:
                     "stock": stock,
                     "processed": processed,
                     "checked_at": checked_at.isoformat(timespec="seconds"),
+                },
+            }
+        )
+
+    @app.route("/api/merchant/discover", methods=["POST"])
+    @login_required
+    @limiter.limit("6 per minute")
+    def discover_merchant_source_urls():
+        payload = read_json()
+        source_url = str(payload.get("source_url", "")).strip()
+        source_name = str(payload.get("source_name", "")).strip()
+        if not source_url:
+            return jsonify({"ok": False, "message": "商家页面链接不能为空。"}), 400
+        if not validate_http_url(source_url):
+            return jsonify({"ok": False, "message": "商家页面链接必须是有效的 http(s) 地址。"}), 400
+
+        try:
+            result = app.extensions["monitor_engine"].discover_merchant_catalog_urls(
+                source_url,
+                source_name,
+                str(payload.get("group_name", "")).strip(),
+                app.extensions["monitor_engine"].get_runtime_settings(),
+                catalog_options=payload,
+            )
+        except Exception as exc:
+            error_kind = catalog_browser_error_kind(exc)
+            message = catalog_browser_error_message(exc, app.extensions["monitor_engine"].get_runtime_settings()["catalog_debug_port"])
+            log_activity("warning", "catalog", f"发现商家 URL 失败（{error_kind}）：{message}")
+            return jsonify({"ok": False, "message": message, "error_kind": error_kind}), 400
+
+        log_activity("info", "catalog", f"已发现商家来源 {result.source_name} 的 {len(result.candidate_urls)} 个候选 URL。")
+        return jsonify({"ok": True, "message": "候选 URL 已发现。", "result": merchant_catalog_preview_payload(result)})
+
+    @app.route("/api/merchant/preview", methods=["POST"])
+    @login_required
+    @limiter.limit("6 per minute")
+    def preview_merchant_source_items():
+        payload = read_json()
+        source_url = str(payload.get("source_url", "")).strip()
+        source_name = str(payload.get("source_name", "")).strip()
+        candidate_urls = payload.get("candidate_urls", [])
+        if candidate_urls is not None and not isinstance(candidate_urls, list):
+            return jsonify({"ok": False, "message": "candidate_urls 必须是数组。"}), 400
+        if not source_url:
+            return jsonify({"ok": False, "message": "商家页面链接不能为空。"}), 400
+        if not validate_http_url(source_url):
+            return jsonify({"ok": False, "message": "商家页面链接必须是有效的 http(s) 地址。"}), 400
+
+        try:
+            result = app.extensions["monitor_engine"].preview_merchant_source(
+                source_url,
+                source_name,
+                str(payload.get("group_name", "")).strip(),
+                app.extensions["monitor_engine"].get_runtime_settings(),
+                catalog_options=payload,
+                candidate_urls=candidate_urls,
+            )
+        except Exception as exc:
+            error_kind = catalog_browser_error_kind(exc)
+            message = catalog_browser_error_message(exc, app.extensions["monitor_engine"].get_runtime_settings()["catalog_debug_port"])
+            log_activity("warning", "catalog", f"预览商家商品失败（{error_kind}）：{message}")
+            return jsonify({"ok": False, "message": message, "error_kind": error_kind}), 400
+
+        log_activity(
+            "info",
+            "catalog",
+            f"已预览商家来源 {result.source_name}，可入库 {len(result.items)} 个商品，过滤 {len(result.rejected_items)} 个候选。",
+        )
+        return jsonify({"ok": True, "message": "商品预览已生成。", "result": merchant_catalog_preview_payload(result)})
+
+    @app.route("/api/merchant/commit", methods=["POST"])
+    @login_required
+    @limiter.limit("6 per minute")
+    def commit_merchant_preview_items():
+        payload = read_json()
+        source_url = str(payload.get("source_url", "")).strip()
+        source_name = str(payload.get("source_name", "")).strip()
+        group_name = str(payload.get("group_name", "")).strip()
+        auto_promote = bool(payload.get("auto_promote", False))
+        raw_items = payload.get("items", [])
+        if not isinstance(raw_items, list):
+            return jsonify({"ok": False, "message": "items 必须是数组。"}), 400
+        if not raw_items:
+            return jsonify({"ok": False, "message": "请选择要写入的预览商品。"}), 400
+        if not source_url:
+            return jsonify({"ok": False, "message": "商家页面链接不能为空。"}), 400
+        if not validate_http_url(source_url):
+            return jsonify({"ok": False, "message": "商家页面链接必须是有效的 http(s) 地址。"}), 400
+
+        try:
+            result = app.extensions["monitor_engine"].persist_merchant_catalog_items(
+                source_url,
+                source_name,
+                group_name,
+                raw_items,
+                auto_promote=auto_promote,
+                archive_missing=False,
+            )
+        except Exception as exc:
+            message = str(exc)[:300] or "预览商品写入失败。"
+            log_activity("warning", "catalog", f"写入预览商品失败：{message}")
+            return jsonify({"ok": False, "message": message, "error_kind": "catalog_commit_failed"}), 400
+
+        log_activity(
+            "info",
+            "catalog",
+            f"已写入商家来源 {result.source_name}，保存 {result.upserted_count} 个商品，自动生成 {result.promoted_count} 个任务。",
+        )
+        return jsonify(
+            {
+                "ok": True,
+                "message": "预览商品已写入。",
+                "result": {
+                    "source_id": result.source_id,
+                    "source_url": result.source_url,
+                    "source_name": result.source_name,
+                    "scanned_count": result.scanned_count,
+                    "upserted_count": result.upserted_count,
+                    "promoted_count": result.promoted_count,
+                    "archived_count": result.archived_count,
+                    "last_sync_at": result.last_sync_at,
+                    "items": result.items,
                 },
             }
         )

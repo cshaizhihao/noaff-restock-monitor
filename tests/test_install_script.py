@@ -915,6 +915,9 @@ class InstallScriptTestCase(unittest.TestCase):
             "merchant-step-items",
             "merchant-step-recovery",
             "merchant-review-summary",
+            "merchant-preview-scrape-button",
+            "merchant-preview-commit-button",
+            "merchant-preview-url-count",
             "merchant-source-url",
             "merchant-discovery-strategy",
             "merchant-scrape-strategy",
@@ -939,9 +942,17 @@ class InstallScriptTestCase(unittest.TestCase):
         self.assertIn(".merchant-scroll-box", (ROOT_DIR / "static" / "app.css").read_text(encoding="utf-8"))
         self.assertIn("function setMerchantStep", app_js)
         self.assertIn("function renderMerchantReviewSummary", app_js)
+        self.assertIn("function discoverMerchantCandidateUrls", app_js)
+        self.assertIn("function scrapeMerchantPreviewUrls", app_js)
+        self.assertIn("function commitMerchantPreviewItems", app_js)
+        self.assertIn("/api/merchant/discover", app_js)
+        self.assertIn("/api/merchant/preview", app_js)
+        self.assertIn("/api/merchant/commit", app_js)
+        self.assertNotIn("/api/merchant/import\", {", app_js)
         self.assertIn("confidence", app_js)
         self.assertIn("include_reason", app_js)
         self.assertIn("merchant-signal-box", app_js)
+        self.assertIn("merchant-preview-section-title", app_js)
         self.assertIn("发现结果", portal_html)
         self.assertIn("商品预览", portal_html)
         self.assertIn("错误恢复建议", portal_html)
