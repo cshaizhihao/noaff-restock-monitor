@@ -1001,6 +1001,17 @@ class InstallScriptTestCase(unittest.TestCase):
         self.assertIn("发现结果", portal_html)
         self.assertIn("商品预览", portal_html)
         self.assertIn("错误恢复建议", portal_html)
+        self.assertIn("按“来源 → 采集 → 规则 → 执行 → 发现结果 → 商品预览”逐步入库", portal_html)
+        self.assertIn("第一步只发现候选 URL", portal_html)
+        self.assertIn("进入“发现结果”后再抓取选中 URL", portal_html)
+        self.assertIn("语言切换、导航、步骤标题、页脚、无价格/无规格的候选", portal_html)
+        self.assertIn("导入异常时优先填写商品型号、地区或线路关键词", portal_html)
+        discovery_block = portal_html.split('id="merchant-discovery-strategy"', 1)[1].split("</select>", 1)[0]
+        scrape_block = portal_html.split('id="merchant-scrape-strategy"', 1)[1].split("</select>", 1)[0]
+        task_strategy_block = portal_html.split('id="merchant-default-fetch-strategy"', 1)[1].split("</select>", 1)[0]
+        self.assertLess(discovery_block.index('value="firecrawl_map"'), discovery_block.index('value="local"'))
+        self.assertLess(scrape_block.index('value="firecrawl"'), scrape_block.index('value="browser"'))
+        self.assertLess(task_strategy_block.index('value="firecrawl"'), task_strategy_block.index('value="browser"'))
         self.assertIn("catalog_browser_port_busy", portal_html)
         self.assertIn("firecrawl_zdr_not_enabled", portal_html)
         self.assertIn("firecrawl_credit_required", portal_html)

@@ -230,7 +230,7 @@
                                     <div>
                                         <p class="settings-kicker">Product Intake</p>
                                         <h3 class="panel-heading">商品入库工作台</h3>
-                                        <p class="merchant-workbench-copy">按步骤完成来源、采集策略、入库规则和结果确认，避免把语言、导航、页脚内容误当商品。</p>
+                                        <p class="merchant-workbench-copy">按“来源 → 采集 → 规则 → 执行 → 发现结果 → 商品预览”逐步入库，先看候选 URL，再抓取选中 URL，最后确认商品，避免把语言、导航、页脚内容误当商品。</p>
                                     </div>
                                     <div class="merchant-metric-strip" aria-label="商品入库统计">
                                         <div>
@@ -346,29 +346,29 @@
                                                 <div>
                                                     <label for="merchant-discovery-strategy" class="form-label">发现方式</label>
                                                     <select id="merchant-discovery-strategy" class="input-dark">
-                                                        <option value="local">本地页面链接</option>
                                                         <option value="firecrawl_map">Firecrawl Map</option>
                                                         <option value="hybrid">混合发现</option>
+                                                        <option value="local">本地页面链接</option>
                                                     </select>
                                                 </div>
                                                 <div>
                                                     <label for="merchant-scrape-strategy" class="form-label">抓取方式</label>
                                                     <select id="merchant-scrape-strategy" class="input-dark">
-                                                        <option value="browser">浏览器渲染</option>
-                                                        <option value="static_http">静态 HTTP</option>
                                                         <option value="firecrawl">Firecrawl Scrape</option>
                                                         <option value="adaptive">自适应 fallback</option>
+                                                        <option value="browser">浏览器渲染</option>
+                                                        <option value="static_http">静态 HTTP</option>
                                                     </select>
                                                 </div>
                                                 <div>
                                                     <label for="merchant-default-fetch-strategy" class="form-label">生成任务采集方式</label>
                                                     <select id="merchant-default-fetch-strategy" class="input-dark">
-                                                        <option value="browser">浏览器渲染</option>
-                                                        <option value="static_http">静态 HTTP</option>
-                                                        <option value="generic_pricing_table">通用价格表</option>
-                                                        <option value="whmcs">WHMCS</option>
                                                         <option value="firecrawl">Firecrawl</option>
                                                         <option value="adaptive">自适应 fallback</option>
+                                                        <option value="generic_pricing_table">通用价格表</option>
+                                                        <option value="whmcs">WHMCS</option>
+                                                        <option value="browser">浏览器渲染</option>
+                                                        <option value="static_http">静态 HTTP</option>
                                                     </select>
                                                 </div>
                                                 <div>
@@ -385,7 +385,7 @@
                                             <div class="merchant-guide-grid">
                                                 <div>
                                                     <strong>默认建议</strong>
-                                                    <p>普通公开页用本地链接 + 浏览器；已配置 Firecrawl 时，商品入库可以优先尝试 Firecrawl Map。</p>
+                                                    <p>商品入库是人工触发流程，已配置 Firecrawl 时优先用 Firecrawl Map / Scrape；未启用时系统会自动回到本地链接、浏览器或静态 HTTP。</p>
                                                 </div>
                                                 <div>
                                                     <strong>边界说明</strong>
@@ -412,7 +412,8 @@
                                                 </div>
                                                 <div>
                                                     <label for="merchant-target-keyword" class="form-label">目标关键词</label>
-                                                    <input id="merchant-target-keyword" type="text" class="input-dark" placeholder="HK / CMI / VPS">
+                                                    <input id="merchant-target-keyword" type="text" class="input-dark" placeholder="HKG.AS3 / HK / CMI / VPS">
+                                                    <p class="field-help">导入异常时优先填写商品型号、地区或线路关键词，系统会把不匹配候选放到“需要人工确认”。</p>
                                                 </div>
                                                 <div>
                                                     <label for="merchant-target-keyword-mode" class="form-label">关键词模式</label>
@@ -453,7 +454,7 @@
                                                     导入后自动创建任务
                                                 </label>
                                             </div>
-                                            <p class="field-help">建议先关闭自动创建任务，确认商品预览后再批量创建，避免误入库。</p>
+                                            <p class="field-help">建议先关闭自动创建任务，确认商品预览后再批量创建，避免误入库。语言切换、导航、步骤标题、页脚、无价格/无规格的候选会被自动降级到人工确认。</p>
                                         </section>
 
                                         <section id="merchant-step-review" class="merchant-step-panel hidden" data-merchant-step-panel="review">
@@ -468,7 +469,7 @@
                                             <div class="merchant-run-box">
                                                 <div>
                                                     <strong>开始后会做什么</strong>
-                                                    <p>发现候选 URL、抓取候选页、运行解析器、写入商品预览。只有勾选自动创建任务时才会直接生成监控任务。</p>
+                                                    <p>第一步只发现候选 URL；进入“发现结果”后再抓取选中 URL 并生成商品预览。只有勾选自动创建任务时才会直接生成监控任务。</p>
                                                 </div>
                                                 <button id="merchant-import-button" type="submit" class="primary-button">
                                                     <svg class="mr-2 h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">

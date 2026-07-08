@@ -640,6 +640,50 @@ class PortalAppTestCase(unittest.TestCase):
         self.assertIn("语言切换或导航文本", rejected["English"])
         self.assertIn("分类/步骤标题", rejected["選擇實例類型"])
 
+    def test_catalog_discovery_does_not_promote_noise_with_global_price(self) -> None:
+        html_text = """
+        <html>
+          <body>
+            <div class="hero">
+              <strong>Starting from $ 6.90 USD</strong>
+              <a href="/en">English</a>
+              <a href="/zh">中文</a>
+              <a href="/cart.php">Cart</a>
+            </div>
+            <section class="steps">
+              <h2>选择网络类型</h2>
+              <button>Premium</button>
+              <button>Tier 1</button>
+            </section>
+            <section class="pricing-products">
+              <article class="product-card">
+                <h3>HKG.AS3.T1.TINY</h3>
+                <p>$ 6.90 USD / 月繳</p>
+                <p>1 vCores</p>
+                <p>1.0GB RAM</p>
+                <p>2000GB @ 4Gbps</p>
+              </article>
+            </section>
+          </body>
+        </html>
+        """
+
+        accepted = app_module.discover_catalog_items(
+            html_text,
+            "https://example.com/cart.php?region=hong-kong&network=tier-1&generation=as3",
+        )
+        self.assertEqual([item["title"] for item in accepted], ["HKG.AS3.T1.TINY"])
+
+        all_candidates = app_module.discover_catalog_items(
+            html_text,
+            "https://example.com/cart.php?region=hong-kong&network=tier-1&generation=as3",
+            include_rejected=True,
+        )
+        rejected_titles = {item["title"] for item in all_candidates if item["reject_reason"]}
+        self.assertIn("English", rejected_titles)
+        self.assertIn("中文", rejected_titles)
+        self.assertIn("选择网络类型", rejected_titles)
+
     def test_catalog_discovery_accepts_idc_plan_cards_with_specs_without_per_card_button(self) -> None:
         html_text = """
         <main class="cart-page">

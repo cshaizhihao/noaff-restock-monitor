@@ -5999,6 +5999,8 @@ def is_likely_product_title(title: str) -> bool:
     lowered = normalize_signal_text(candidate)
     if lowered in DISCOVERY_GENERIC_TEXTS_NORMALIZED or lowered in DISCOVERY_ACTION_TEXTS_NORMALIZED:
         return False
+    if is_section_only_title(candidate) or is_locale_or_navigation_title(candidate):
+        return False
     if any(token in lowered for token in ("next", "previous", "breadcrumb", "menu", "login", "cart", "checkout")) and len(candidate) < 24:
         return False
     return bool(re.search(r"[\u4e00-\u9fffA-Za-z0-9]", candidate))
@@ -6147,7 +6149,7 @@ def discover_catalog_items(html_text: str, source_url: str, include_rejected: bo
         cleaned_snippet = clean_fragment_text(snippet)
         normalized_monitor = normalize_candidate_url(source_url, monitor_url) if monitor_url else source_url
         normalized_item = normalize_candidate_url(source_url, item_url) if item_url else normalized_monitor
-        effective_price_hint = price_hint or price_hint_global
+        effective_price_hint = price_hint
         parsed_stock_value = stock_value if isinstance(stock_value, int) else None
         evaluation = catalog_candidate_evaluation(
             normalized_title,
