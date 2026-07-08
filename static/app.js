@@ -2446,6 +2446,29 @@
             const normalizedStrategy = normalizeFetchStrategy(task.fetch_strategy);
             const attemptMeta = fetchAttemptMeta(task);
             const rowClass = animateCards ? "task-row reveal" : "task-row";
+            const modeActions = (() => {
+                if (normalizedStrategy === "manual") {
+                    return `
+                        <span class="action-group task-mode-actions" data-task-manual-actions>
+                            <button type="button" class="ghost-button task-check-button text-emerald-300" data-action="manual-in-stock">有货</button>
+                            <button type="button" class="ghost-button task-check-button text-rose-300" data-action="manual-sold-out">售罄</button>
+                        </span>
+                    `;
+                }
+                if (normalizedStrategy === "webhook") {
+                    return `
+                        <button type="button" class="ghost-button task-check-button text-cyan-300" data-action="webhook-token" data-task-webhook-action>重置 Token</button>
+                    `;
+                }
+                return `
+                    <button type="button" class="ghost-button task-check-button" data-action="check" data-task-check-action>
+                        <svg class="mr-1.5 h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8"/>
+                        </svg>
+                        检测
+                    </button>
+                `;
+            })();
             return `
                 <article class="${rowClass}" data-task-id="${task.id}" data-drag-kind="task" data-drag-id="${task.id}" draggable="true">
                     <div class="task-card-header">
@@ -2518,17 +2541,7 @@
                             </button>
                         </div>
                         <div class="action-group">
-                            <button type="button" class="ghost-button task-check-button ${["manual", "webhook"].includes(normalizedStrategy) ? "hidden" : ""}" data-action="check" data-task-check-action>
-                                <svg class="mr-1.5 h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8"/>
-                                </svg>
-                                检测
-                            </button>
-                            <div class="action-group ${normalizedStrategy === "manual" ? "" : "hidden"}" data-task-manual-actions>
-                                <button type="button" class="ghost-button task-check-button text-emerald-300" data-action="manual-in-stock">有货</button>
-                                <button type="button" class="ghost-button task-check-button text-rose-300" data-action="manual-sold-out">售罄</button>
-                            </div>
-                            <button type="button" class="ghost-button task-check-button text-cyan-300 ${normalizedStrategy === "webhook" ? "" : "hidden"}" data-action="webhook-token" data-task-webhook-action>重置 Token</button>
+                            ${modeActions}
                         </div>
                     </div>
                 </article>

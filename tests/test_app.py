@@ -3891,6 +3891,50 @@ class PortalAppTestCase(unittest.TestCase):
         self.assertEqual(result.detail, "Scrapling standard ok")
         self.assertEqual(client.calls, [("standard", "https://example.com/products", 25)])
 
+    def test_monitor_url_for_fetch_adds_idc_product_query_from_keyword(self) -> None:
+        task = {
+            "monitor_url": "https://www.dmit.io/cart.php?region=hong-kong&network=premium&generation=as3",
+            "target_keyword": "DMIT Hong Kong HKG.AS3.Pro.TINY",
+            "fetch_strategy": "scrapling_adaptive",
+        }
+
+        fetch_url = app_module.monitor_url_for_fetch(task)
+
+        self.assertIn("product=hkg.as3.pro.tiny", fetch_url)
+        self.assertIn("region=hong-kong", fetch_url)
+
+    def test_fetch_cache_key_separates_idc_cart_products(self) -> None:
+        base_url = "https://www.dmit.io/cart.php?region=hong-kong&network=premium&generation=as3"
+        tiny_key = app_module.fetch_cache_key(
+            {
+                "monitor_url": base_url,
+                "target_keyword": "HKG.AS3.Pro.TINY",
+                "fetch_strategy": "scrapling_adaptive",
+            }
+        )
+        starter_key = app_module.fetch_cache_key(
+            {
+                "monitor_url": base_url,
+                "target_keyword": "HKG.AS3.Pro.STARTER",
+                "fetch_strategy": "scrapling_adaptive",
+            }
+        )
+
+        self.assertIn("product=hkg.as3.pro.tiny", tiny_key)
+        self.assertIn("product=hkg.as3.pro.starter", starter_key)
+        self.assertNotEqual(tiny_key, starter_key)
+
+    def test_scrapling_browser_kwargs_use_system_chromium_path(self) -> None:
+        original_find_browser_binary = app_module.find_browser_binary
+        try:
+            app_module.find_browser_binary = lambda: "/usr/bin/chromium"
+            kwargs = app_module.ScraplingFetcher(self.scrapling_settings(), "stealth").browser_kwargs(75)
+        finally:
+            app_module.find_browser_binary = original_find_browser_binary
+
+        self.assertEqual(kwargs["executable_path"], "/usr/bin/chromium")
+        self.assertIn("--no-sandbox", kwargs["extra_flags"])
+
     def test_scrape_task_scrapling_standard_strategy_parses_stock(self) -> None:
         class FakeScraplingResponse:
             url = "https://example.com/products"
@@ -3921,6 +3965,43 @@ class PortalAppTestCase(unittest.TestCase):
         self.assertEqual(result.stock, 8)
         self.assertEqual(result.backend_used, "scrapling_standard")
         self.assertEqual([attempt.backend for attempt in result.fetch_attempts or []], ["scrapling_standard"])
+
+    def test_scrape_task_targets_dmit_product_url_before_scrapling_fetch(self) -> None:
+        class FakeScraplingResponse:
+            status = 200
+            html_content = "<html><body><section>HKG.AS3.Pro.TINY <a>Order Now</a></section></body></html>"
+
+            def __init__(self, url: str) -> None:
+                self.url = url
+
+        class FakeScraplingClient:
+            def __init__(self) -> None:
+                self.urls: list[str] = []
+
+            def fetch(self, mode: str, url: str, timeout_seconds: int):
+                self.urls.append(url)
+                return FakeScraplingResponse(url)
+
+        client = FakeScraplingClient()
+        engine = self.app.extensions["monitor_engine"]
+        original_selector = engine.fetcher_selector
+        try:
+            engine.fetcher_selector = app_module.FetcherSelector(scrapling_client=client)
+            result = engine.scrape_task(
+                {
+                    "name": "DMIT Hong Kong HKG.AS3.Pro.TINY",
+                    "monitor_url": "https://www.dmit.io/cart.php?region=hong-kong&network=premium&generation=as3",
+                    "target_keyword": "HKG.AS3.Pro.TINY",
+                    "fetch_strategy": "scrapling_standard",
+                },
+                {"request_timeout_seconds": 25, **self.scrapling_settings()},
+                use_test_browser=False,
+            )
+        finally:
+            engine.fetcher_selector = original_selector
+
+        self.assertEqual(result.stock, 1)
+        self.assertEqual(client.urls, ["https://www.dmit.io/cart.php?region=hong-kong&network=premium&generation=as3&product=hkg.as3.pro.tiny"])
 
     def test_scrapling_adaptive_escalates_after_cloudflare_challenge(self) -> None:
         class FakeScraplingResponse:

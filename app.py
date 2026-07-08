@@ -22,7 +22,7 @@ from functools import wraps
 from pathlib import Path
 from string import Formatter
 from typing import Any, Callable
-from urllib.parse import parse_qs, urljoin, urlparse, urldefrag
+from urllib.parse import parse_qs, urlencode, urljoin, urlparse, urldefrag
 
 import psutil
 import requests
@@ -812,10 +812,17 @@ def scrapling_runtime_status() -> dict[str, str | bool]:
             "status": "missing_fetchers",
             "detail": f"Scrapling 主包已安装，但 fetcher 依赖缺失：{', '.join(missing)}。请重新安装 requirements.txt。",
         }
+    browser_binary = find_browser_binary()
+    if not browser_binary:
+        return {
+            "available": False,
+            "status": "missing_browser",
+            "detail": "Scrapling 依赖已安装，但未找到可用 Chromium/Chrome。请重新执行安装或升级脚本安装浏览器依赖。",
+        }
     return {
         "available": True,
         "status": "available",
-        "detail": "Scrapling 采集引擎和 fetcher 依赖均可用。",
+        "detail": f"Scrapling 采集引擎可用，浏览器：{browser_binary}",
     }
 
 
@@ -981,8 +988,59 @@ def fetch_domain_for_url(url: Any) -> str:
     return (parsed.hostname or "").lower()
 
 
-def fetch_cache_key(task: Any) -> str:
+PRODUCT_CODE_CANDIDATE_RE = re.compile(r"\b[a-z0-9]{2,}(?:[._-][a-z0-9]{2,}){2,}\b", re.IGNORECASE)
+PRODUCT_SIZE_TOKENS = {
+    "nano",
+    "micro",
+    "tiny",
+    "wee",
+    "mini",
+    "starter",
+    "small",
+    "medium",
+    "large",
+    "basic",
+    "standard",
+    "premium",
+}
+
+
+def product_query_slug_from_keyword(value: Any) -> str:
+    text = str(value or "")
+    for match in PRODUCT_CODE_CANDIDATE_RE.finditer(text):
+        candidate = match.group(0).strip("._-").lower().replace("_", ".").replace("-", ".")
+        parts = [part for part in candidate.split(".") if part]
+        if len(parts) >= 3 and any(part in PRODUCT_SIZE_TOKENS for part in parts):
+            return ".".join(parts)
+    return ""
+
+
+def monitor_url_for_fetch(task: Any) -> str:
     url = str(mapping_value(task, "monitor_url", "") or "").strip()
+    try:
+        parsed = urlparse(url)
+    except Exception:
+        return url
+    if not parsed.scheme or not parsed.netloc:
+        return url
+
+    query = parse_qs(parsed.query, keep_blank_values=True)
+    query_keys = {key.lower() for key in query}
+    path = (parsed.path or "").lower()
+    if (
+        path.endswith("cart.php")
+        and "product" not in query_keys
+        and {"region", "network", "generation"}.issubset(query_keys)
+    ):
+        slug = product_query_slug_from_keyword(mapping_value(task, "target_keyword", ""))
+        if slug:
+            query["product"] = [slug]
+            return parsed._replace(query=urlencode(query, doseq=True)).geturl()
+    return url
+
+
+def fetch_cache_key(task: Any) -> str:
+    url = monitor_url_for_fetch(task)
     normalized_url, _ = urldefrag(url)
     return "|".join(
         [
@@ -3391,6 +3449,7 @@ class ScraplingFetcher:
     def browser_kwargs(self, timeout_seconds: int) -> dict[str, Any]:
         timeout_ms = max(5, int(timeout_seconds)) * 1000
         flags = ["--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu"]
+        browser_binary = find_browser_binary()
         kwargs: dict[str, Any] = {
             "headless": True,
             "disable_resources": True,
@@ -3402,6 +3461,8 @@ class ScraplingFetcher:
             "extra_flags": flags,
             "extra_headers": {"Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8"},
         }
+        if browser_binary:
+            kwargs["executable_path"] = browser_binary
         if DEFAULT_BROWSER_USER_AGENT:
             kwargs["useragent"] = DEFAULT_BROWSER_USER_AGENT
         if self.mode == "stealth":
@@ -3969,7 +4030,7 @@ class FetcherSelector:
         settings_payload: dict[str, Any],
         context: str = "monitor",
     ) -> FetchPipelineResult:
-        url = str(mapping_value(task, "monitor_url", "") or "")
+        url = monitor_url_for_fetch(task)
         strategy = task_fetch_strategy(task)
         if (
             context == "monitor"

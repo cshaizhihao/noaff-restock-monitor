@@ -1251,10 +1251,22 @@ setup_python_env() {
   .venv/bin/pip install -r requirements.txt
 }
 
+ensure_scrapling_browser_runtime() {
+  cd "$APP_DIR"
+  if ! command_exists chromium && ! command_exists chromium-browser && ! command_exists google-chrome; then
+    apt_install chromium || apt_install chromium-browser || true
+  fi
+  .venv/bin/python -m patchright install chromium >/dev/null 2>&1 \
+    || .venv/bin/python -m playwright install chromium >/dev/null 2>&1 \
+    || warn "Scrapling 浏览器缓存安装失败；将优先使用系统 Chromium。"
+}
+
 verify_scrapling_runtime() {
   cd "$APP_DIR"
   .venv/bin/python - <<'PY'
 import importlib
+import os
+import shutil
 import sys
 
 required = ["scrapling", "scrapling.fetchers", "curl_cffi", "playwright", "patchright"]
@@ -1270,7 +1282,18 @@ if missing:
     print("请重新运行安装/升级，或手动执行 .venv/bin/pip install -r requirements.txt。", file=sys.stderr)
     raise SystemExit(1)
 
-print("Scrapling 采集引擎依赖检测通过。")
+browser_binary = os.environ.get("CHROMIUM_BINARY") or ""
+if not browser_binary:
+    for name in ("chromium", "chromium-browser", "google-chrome", "google-chrome-stable"):
+        browser_binary = shutil.which(name) or ""
+        if browser_binary:
+            break
+if not browser_binary:
+    print("Scrapling 浏览器检测失败：未找到 Chromium/Chrome。", file=sys.stderr)
+    print("请重新运行安装/升级，或手动安装 chromium 后重试。", file=sys.stderr)
+    raise SystemExit(1)
+
+print(f"Scrapling 采集引擎依赖检测通过，浏览器：{browser_binary}")
 PY
 }
 
@@ -2252,8 +2275,18 @@ git checkout "$REPO_REF"
 git pull --ff-only origin "$REPO_REF"
 ${APP_DIR}/.venv/bin/python -m pip install --upgrade pip setuptools wheel
 ${APP_DIR}/.venv/bin/pip install -r requirements.txt
+if ! command -v chromium >/dev/null 2>&1 && ! command -v chromium-browser >/dev/null 2>&1 && ! command -v google-chrome >/dev/null 2>&1; then
+  export DEBIAN_FRONTEND=noninteractive
+  apt-get update
+  apt-get install -y chromium || apt-get install -y chromium-browser || true
+fi
+${APP_DIR}/.venv/bin/python -m patchright install chromium >/dev/null 2>&1 \
+  || ${APP_DIR}/.venv/bin/python -m playwright install chromium >/dev/null 2>&1 \
+  || echo "Scrapling 浏览器缓存安装失败；将优先使用系统 Chromium。"
 ${APP_DIR}/.venv/bin/python - <<'PY'
 import importlib
+import os
+import shutil
 import sys
 
 required = ["scrapling", "scrapling.fetchers", "curl_cffi", "playwright", "patchright"]
@@ -2269,7 +2302,17 @@ if missing:
     print("请重新运行安装/升级，或手动执行 .venv/bin/pip install -r requirements.txt。", file=sys.stderr)
     raise SystemExit(1)
 
-print("Scrapling 采集引擎依赖检测通过。")
+browser_binary = os.environ.get("CHROMIUM_BINARY") or ""
+if not browser_binary:
+    for name in ("chromium", "chromium-browser", "google-chrome", "google-chrome-stable"):
+        browser_binary = shutil.which(name) or ""
+        if browser_binary:
+            break
+if not browser_binary:
+    print("Scrapling 浏览器检测失败：未找到 Chromium/Chrome。", file=sys.stderr)
+    raise SystemExit(1)
+
+print(f"Scrapling 采集引擎依赖检测通过，浏览器：{browser_binary}")
 PY
 chown -R "$SERVICE_USER:$SERVICE_USER" "$APP_DIR"
 systemctl restart "$APP_NAME"
@@ -2729,6 +2772,7 @@ main() {
   run_step "安装 noaff 快捷管理命令" write_management_cli
 
   run_step "安装 Python 虚拟环境依赖" setup_python_env
+  run_step "准备 Scrapling 浏览器运行时" ensure_scrapling_browser_runtime
   run_step "验证 Scrapling 采集引擎" verify_scrapling_runtime
 
   if bool_is_true "$ENABLE_TLS"; then
