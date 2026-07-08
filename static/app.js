@@ -87,6 +87,8 @@
         settingsFirecrawlUseForMonitor: document.getElementById("settings-firecrawl-use-for-monitor"),
         settingsFirecrawlUseForCatalog: document.getElementById("settings-firecrawl-use-for-catalog"),
         settingsFirecrawlCatalogLimit: document.getElementById("settings-firecrawl-catalog-limit"),
+        settingsFirecrawlTestButton: document.getElementById("settings-firecrawl-test-button"),
+        settingsFirecrawlTestResult: document.getElementById("settings-firecrawl-test-result"),
         merchantForm: document.getElementById("merchant-form"),
         merchantSourceUrl: document.getElementById("merchant-source-url"),
         merchantSourceName: document.getElementById("merchant-source-name"),
@@ -2535,6 +2537,56 @@
         };
     }
 
+    function collectFirecrawlDiagnosticPayload() {
+        return {
+            firecrawl_enabled: Boolean(els.settingsFirecrawlEnabled?.checked),
+            firecrawl_api_url: els.settingsFirecrawlApiUrl?.value.trim() || "https://api.firecrawl.dev",
+            firecrawl_api_key: els.settingsFirecrawlApiKey?.value.trim() || "",
+            firecrawl_timeout_seconds: Number(els.settingsFirecrawlTimeout?.value || 60),
+            firecrawl_max_age_ms: Number(els.settingsFirecrawlMaxAge?.value || 0),
+            firecrawl_store_in_cache: Boolean(els.settingsFirecrawlStoreInCache?.checked),
+            firecrawl_proxy_mode: els.settingsFirecrawlProxyMode?.value || "basic",
+            firecrawl_allow_auto_proxy: Boolean(els.settingsFirecrawlAllowAutoProxy?.checked),
+            firecrawl_allow_enhanced_proxy: Boolean(els.settingsFirecrawlAllowEnhancedProxy?.checked),
+            firecrawl_zero_data_retention: Boolean(els.settingsFirecrawlZeroDataRetention?.checked)
+        };
+    }
+
+    async function testFirecrawlConnection() {
+        const button = els.settingsFirecrawlTestButton;
+        const resultBox = els.settingsFirecrawlTestResult;
+        if (!button) return;
+        button.disabled = true;
+        if (resultBox) {
+            resultBox.textContent = "正在测试 Firecrawl 连接...";
+            resultBox.className = "firecrawl-test-result is-pending";
+        }
+        try {
+            const data = await apiFetch("/api/settings/firecrawl-test", {
+                method: "POST",
+                body: JSON.stringify(collectFirecrawlDiagnosticPayload())
+            });
+            const result = data.result || {};
+            const ok = result.status === "ok";
+            const detail = ok
+                ? `${result.detail || "Firecrawl API 可用。"}${result.status_code ? ` HTTP ${result.status_code}` : ""}`
+                : `${result.detail || data.message || "测试失败。"}${result.advice ? ` 建议：${result.advice}` : ""}`;
+            if (resultBox) {
+                resultBox.textContent = detail;
+                resultBox.className = `firecrawl-test-result ${ok ? "is-ok" : "is-error"}`;
+            }
+            showToast(ok ? "Firecrawl 连接测试成功。" : "Firecrawl 连接测试失败，请查看诊断建议。", ok ? "success" : "error");
+        } catch (error) {
+            if (resultBox) {
+                resultBox.textContent = error.message || "Firecrawl 连接测试失败。";
+                resultBox.className = "firecrawl-test-result is-error";
+            }
+            showToast(error.message, "error");
+        } finally {
+            button.disabled = false;
+        }
+    }
+
     async function sendTemplateTestPush() {
         const submit = els.taskTemplateTestButton;
         if (!submit) return;
@@ -3613,6 +3665,7 @@
     });
 
     els.taskFetchStrategy?.addEventListener("change", updateTaskStrategyUi);
+    els.settingsFirecrawlTestButton?.addEventListener("click", testFirecrawlConnection);
 
     els.settingsForm?.addEventListener("submit", async (event) => {
         event.preventDefault();

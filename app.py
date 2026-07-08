@@ -3068,6 +3068,28 @@ def firecrawl_http_error_result(response: Response, url: str, api_key: str, oper
     return None
 
 
+def firecrawl_diagnostic_advice(error_kind: str) -> str:
+    if error_kind == "firecrawl_auth_error":
+        return "检查 API Key 是否完整、是否属于当前 Firecrawl 账号，或者重新生成 Key 后再测试。"
+    if error_kind == "firecrawl_zdr_not_enabled":
+        return "当前账号没有开通 zeroDataRetention，请先关闭 zeroDataRetention 再测试。"
+    if error_kind == "firecrawl_permission_error":
+        return "检查账号权限、proxy 模式和 zeroDataRetention 配置。"
+    if error_kind == "firecrawl_credit_required":
+        return "Firecrawl 额度不足，需要充值或更换有额度的 Key。"
+    if error_kind == "firecrawl_rate_limited":
+        return "请求频率受限，稍后重试或降低商品入库并发。"
+    if error_kind == "cloudflare_challenge":
+        return "Firecrawl 仍返回受保护页面；可以改用 Webhook、手动录入或替代公开页面。"
+    if error_kind == "timeout":
+        return "请求超时，检查 API URL 网络连通性，或适当提高 Firecrawl 超时时间。"
+    if error_kind == "firecrawl_bad_response":
+        return "Firecrawl 返回结构异常，确认 API URL 是否指向 Firecrawl v2 服务。"
+    if error_kind == "firecrawl_disabled":
+        return "先勾选启用 Firecrawl 外部采集后端。"
+    return "检查 Firecrawl API URL、API Key、proxy 模式和账号状态后重试。"
+
+
 class FirecrawlClient:
     def __init__(self, settings_payload: dict[str, Any], session: requests.Session | None = None) -> None:
         self.settings = settings_payload
@@ -7672,6 +7694,87 @@ def make_app() -> Flask:
         app.extensions["monitor_engine"].configure_browsers(app.extensions["monitor_engine"].get_runtime_settings())
         log_activity("info", "settings", "Telegram / 引擎配置已更新。")
         return jsonify({"ok": True, "message": "设置已保存。"})
+
+    @app.route("/api/settings/firecrawl-test", methods=["POST"])
+    @login_required
+    @limiter.limit("10 per minute")
+    def test_firecrawl_settings():
+        payload = read_json()
+        current_settings = dict(app.extensions["monitor_engine"].get_runtime_settings())
+        settings_payload = dict(current_settings)
+
+        api_url = str(payload.get("firecrawl_api_url") or current_settings.get("firecrawl_api_url") or DEFAULT_FIRECRAWL_API_URL).strip().rstrip("/")
+        if not api_url or not validate_http_url(api_url):
+            return jsonify({"ok": False, "message": "Firecrawl API URL 必须是有效的 http(s) 地址。"}), 400
+        settings_payload["firecrawl_api_url"] = api_url
+
+        if "firecrawl_api_key" in payload and str(payload.get("firecrawl_api_key") or "").strip():
+            settings_payload["firecrawl_api_key"] = str(payload.get("firecrawl_api_key") or "").strip()
+
+        for key, default_value, minimum, maximum in (
+            ("firecrawl_timeout_seconds", DEFAULT_FIRECRAWL_TIMEOUT_SECONDS, 10, 180),
+            ("firecrawl_max_age_ms", 0, 0, 604800000),
+        ):
+            if key in payload:
+                try:
+                    value = int(payload[key])
+                except (TypeError, ValueError):
+                    return jsonify({"ok": False, "message": "Firecrawl 诊断配置必须是整数。"}), 400
+                if value < minimum or value > maximum:
+                    return jsonify({"ok": False, "message": f"{key} 超出允许范围。"}), 400
+                settings_payload[key] = value
+            else:
+                settings_payload[key] = int(settings_payload.get(key) or default_value)
+
+        for key in (
+            "firecrawl_enabled",
+            "firecrawl_store_in_cache",
+            "firecrawl_zero_data_retention",
+            "firecrawl_allow_auto_proxy",
+            "firecrawl_allow_enhanced_proxy",
+        ):
+            if key in payload:
+                settings_payload[key] = parse_setting_bool(payload.get(key))
+
+        proxy_mode = str(payload.get("firecrawl_proxy_mode") or settings_payload.get("firecrawl_proxy_mode") or "basic").strip().lower()
+        if proxy_mode not in FIRECRAWL_PROXY_MODES:
+            return jsonify({"ok": False, "message": "Firecrawl proxy 模式必须是 basic / enhanced / auto。"}), 400
+        if proxy_mode == "auto" and not parse_setting_bool(settings_payload.get("firecrawl_allow_auto_proxy")):
+            return jsonify({"ok": False, "message": "使用 Firecrawl auto proxy 前必须显式开启允许 auto proxy。"}), 400
+        if proxy_mode == "enhanced" and not parse_setting_bool(settings_payload.get("firecrawl_allow_enhanced_proxy")):
+            return jsonify({"ok": False, "message": "使用 Firecrawl enhanced proxy 前必须显式开启允许 enhanced proxy。"}), 400
+        settings_payload["firecrawl_proxy_mode"] = proxy_mode
+
+        result = FirecrawlClient(settings_payload).scrape("https://example.com/")
+        if result.error_kind:
+            detail = sanitize_firecrawl_detail(result.detail, str(settings_payload.get("firecrawl_api_key") or ""))
+            return jsonify(
+                {
+                    "ok": True,
+                    "message": f"Firecrawl 连接测试失败：{detail}",
+                    "result": {
+                        "status": "failed",
+                        "error_kind": result.error_kind,
+                        "detail": detail,
+                        "advice": firecrawl_diagnostic_advice(result.error_kind),
+                        "status_code": result.status_code,
+                    },
+                }
+            ), 200
+
+        return jsonify(
+            {
+                "ok": True,
+                "message": "Firecrawl 连接测试成功。",
+                "result": {
+                    "status": "ok",
+                    "status_code": result.status_code,
+                    "backend": "firecrawl",
+                    "detail": "Firecrawl API 可用，返回内容结构正常。",
+                    "final_url": result.final_url,
+                },
+            }
+        )
 
     @app.route("/api/settings/profile", methods=["POST"])
     @login_required

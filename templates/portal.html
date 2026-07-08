@@ -742,6 +742,14 @@
                                                     </label>
                                                 </div>
                                                 <p class="settings-field-wide text-sm leading-6 text-amber-200/90">enhanced / auto 属于外部 hosted provider 能力，可能产生额外费用；页面内容会发送给 Firecrawl，这不是本项目内置的 Cloudflare 绕过。zeroDataRetention 需要 Firecrawl 账号开通 ZDR，未开通时请保持关闭。</p>
+                                                <div class="settings-field-wide firecrawl-test-box">
+                                                    <div>
+                                                        <p class="form-label">连接诊断</p>
+                                                        <p class="field-help">会使用当前表单里的 API URL、API Key、proxy、zeroDataRetention 配置发起一次最小 scrape 测试；不会保存 Key，也不会在响应里返回 Key。</p>
+                                                    </div>
+                                                    <button id="settings-firecrawl-test-button" type="button" class="ghost-button">测试 Firecrawl 连接</button>
+                                                    <p id="settings-firecrawl-test-result" class="firecrawl-test-result">尚未测试。</p>
+                                                </div>
                                             </div>
                                         </section>
                                     </form>

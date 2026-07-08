@@ -2618,6 +2618,95 @@ class PortalAppTestCase(unittest.TestCase):
         self.assertEqual(allowed.status_code, 200)
         self.assertTrue(allowed.get_json()["ok"])
 
+    def test_firecrawl_settings_diagnostic_reports_success_and_masks_key(self) -> None:
+        _, headers = self.login()
+        secret = "fc-diagnostic-secret"
+        calls: list[dict[str, object]] = []
+
+        class FakeFirecrawlClient:
+            def __init__(self, settings_payload: dict[str, object]) -> None:
+                calls.append(dict(settings_payload))
+
+            def scrape(self, url: str) -> app_module.FetchResult:
+                self_url = url
+                return app_module.FetchResult(
+                    html="<html><body>ok</body></html>",
+                    final_url=self_url,
+                    status_code=200,
+                    detail="ok",
+                )
+
+        original_client = app_module.FirecrawlClient
+        app_module.FirecrawlClient = FakeFirecrawlClient
+        try:
+            response = self.client.post(
+                f"{app_module.PORTAL_PATH}/api/settings/firecrawl-test",
+                headers=headers,
+                base_url=BASE_URL,
+                json={
+                    "firecrawl_enabled": True,
+                    "firecrawl_api_url": "https://api.firecrawl.dev/",
+                    "firecrawl_api_key": secret,
+                    "firecrawl_timeout_seconds": 33,
+                    "firecrawl_max_age_ms": 0,
+                    "firecrawl_store_in_cache": False,
+                    "firecrawl_proxy_mode": "basic",
+                    "firecrawl_zero_data_retention": False,
+                },
+            )
+        finally:
+            app_module.FirecrawlClient = original_client
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.get_json()
+        self.assertTrue(payload["ok"])
+        self.assertEqual(payload["result"]["status"], "ok")
+        self.assertEqual(calls[0]["firecrawl_api_key"], secret)
+        self.assertEqual(calls[0]["firecrawl_api_url"], "https://api.firecrawl.dev")
+        self.assertNotIn(secret, json.dumps(payload, ensure_ascii=False))
+
+    def test_firecrawl_settings_diagnostic_reports_auth_failure_without_leaking_key(self) -> None:
+        _, headers = self.login()
+        secret = "fc-bad-diagnostic-secret"
+
+        class FakeFirecrawlClient:
+            def __init__(self, settings_payload: dict[str, object]) -> None:
+                self.settings_payload = settings_payload
+
+            def scrape(self, url: str) -> app_module.FetchResult:
+                return app_module.FetchResult(
+                    html="",
+                    final_url=url,
+                    status_code=401,
+                    error_kind="firecrawl_auth_error",
+                    detail=f"Firecrawl 认证失败，请检查 API Key。{self.settings_payload['firecrawl_api_key']}",
+                )
+
+        original_client = app_module.FirecrawlClient
+        app_module.FirecrawlClient = FakeFirecrawlClient
+        try:
+            response = self.client.post(
+                f"{app_module.PORTAL_PATH}/api/settings/firecrawl-test",
+                headers=headers,
+                base_url=BASE_URL,
+                json={
+                    "firecrawl_enabled": True,
+                    "firecrawl_api_url": "https://api.firecrawl.dev",
+                    "firecrawl_api_key": secret,
+                    "firecrawl_proxy_mode": "basic",
+                },
+            )
+        finally:
+            app_module.FirecrawlClient = original_client
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.get_json()
+        self.assertTrue(payload["ok"])
+        self.assertEqual(payload["result"]["status"], "failed")
+        self.assertEqual(payload["result"]["error_kind"], "firecrawl_auth_error")
+        self.assertIn("检查 API Key", payload["result"]["advice"])
+        self.assertNotIn(secret, json.dumps(payload, ensure_ascii=False))
+
     def test_browser_fetcher_wraps_harness_success(self) -> None:
         class FakeHarness:
             def __init__(self) -> None:
