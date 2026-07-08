@@ -1543,6 +1543,8 @@
         };
         if (options.body !== undefined) {
             headers["Content-Type"] = "application/json";
+        }
+        if (method !== "GET") {
             headers["X-CSRF-Token"] = csrfToken;
         }
         const response = await fetch(path, {

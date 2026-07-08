@@ -960,6 +960,8 @@ class InstallScriptTestCase(unittest.TestCase):
         self.assertIn("function testScraplingRuntime", app_js)
         self.assertIn("/api/settings/scrapling-test", app_js)
         self.assertIn('settingsScraplingTestButton?.addEventListener("click", testScraplingRuntime)', app_js)
+        self.assertIn('if (method !== "GET")', app_js)
+        self.assertIn('headers["X-CSRF-Token"] = csrfToken', app_js)
         self.assertIn("scrapling_default_mode: els.settingsScraplingDefaultMode?.value || \"standard\"", app_js)
         self.assertIn("scrapling_timeout_stealth", app_js)
         self.assertIn('settingsFirecrawlTestButton: document.getElementById("settings-firecrawl-test-button")', app_js)
