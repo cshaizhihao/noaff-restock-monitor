@@ -1094,77 +1094,89 @@
                     </button>
                 </div>
 
-                <form id="task-form" class="grid gap-4">
+                <form id="task-form" class="task-wizard-form">
                     <input id="task-id" type="hidden">
-                    <div class="grid gap-4 lg:grid-cols-2">
-                        <div>
-                            <label for="task-name" class="form-label">商品名称</label>
-                            <input id="task-name" type="text" class="input-dark" required>
-                        </div>
-                        <div>
-                            <label for="task-url" class="form-label">监控链接</label>
-                            <input id="task-url" type="url" class="input-dark" required>
-                        </div>
+                    <div class="task-wizard-steps" aria-label="任务配置步骤">
+                        <button type="button" class="task-step-button is-active" data-task-step-target="basic">1 基础</button>
+                        <button type="button" class="task-step-button" data-task-step-target="strategy">2 采集</button>
+                        <button type="button" class="task-step-button" data-task-step-target="rules">3 解析</button>
+                        <button type="button" class="task-step-button" data-task-step-target="notify">4 推送</button>
                     </div>
-                    <div class="grid gap-4 lg:grid-cols-2">
-                        <div>
-                            <label for="task-group" class="form-label">主分组</label>
-                            <select id="task-group" class="input-dark">
-                                <option value="默认分组">默认分组</option>
-                                <option value="__custom__">新建分组…</option>
-                            </select>
+                    <section class="task-step-panel is-active" data-task-step-panel="basic">
+                        <div class="grid gap-4 lg:grid-cols-2">
+                            <div>
+                                <label for="task-name" class="form-label">商品名称</label>
+                                <input id="task-name" type="text" class="input-dark" required>
+                            </div>
+                            <div>
+                                <label for="task-url" class="form-label">监控链接</label>
+                                <input id="task-url" type="url" class="input-dark" required>
+                            </div>
                         </div>
-                        <div>
-                            <label for="task-subgroup" class="form-label">子分组</label>
-                            <select id="task-subgroup" class="input-dark">
-                                <option value="默认子分组">默认子分组</option>
-                                <option value="__custom__">新建子分组…</option>
-                            </select>
+                        <div class="grid gap-4 lg:grid-cols-2">
+                            <div>
+                                <label for="task-group" class="form-label">主分组</label>
+                                <select id="task-group" class="input-dark">
+                                    <option value="默认分组">默认分组</option>
+                                    <option value="__custom__">新建分组…</option>
+                                </select>
+                            </div>
+                            <div>
+                                <label for="task-subgroup" class="form-label">子分组</label>
+                                <select id="task-subgroup" class="input-dark">
+                                    <option value="默认子分组">默认子分组</option>
+                                    <option value="__custom__">新建子分组…</option>
+                                </select>
+                            </div>
                         </div>
-                    </div>
-                    <div class="grid gap-4 lg:grid-cols-2">
-                        <div id="task-group-custom-wrap" class="hidden">
-                            <label for="task-group-custom" class="form-label">新建主分组名称</label>
-                            <input id="task-group-custom" type="text" class="input-dark" maxlength="48" placeholder="例如 DMIT">
+                        <div class="grid gap-4 lg:grid-cols-2">
+                            <div id="task-group-custom-wrap" class="hidden">
+                                <label for="task-group-custom" class="form-label">新建主分组名称</label>
+                                <input id="task-group-custom" type="text" class="input-dark" maxlength="48" placeholder="例如 DMIT">
+                            </div>
+                            <div id="task-subgroup-custom-wrap" class="hidden">
+                                <label for="task-subgroup-custom" class="form-label">新建子分组名称</label>
+                                <input id="task-subgroup-custom" type="text" class="input-dark" maxlength="120" placeholder="例如 香港 / Premium / AS3">
+                            </div>
                         </div>
-                        <div id="task-subgroup-custom-wrap" class="hidden">
-                            <label for="task-subgroup-custom" class="form-label">新建子分组名称</label>
-                            <input id="task-subgroup-custom" type="text" class="input-dark" maxlength="120" placeholder="例如 香港 / Premium / AS3">
+                        <div class="grid gap-4 lg:grid-cols-[1fr_0.75fr]">
+                            <div>
+                                <label for="task-keyword" class="form-label">目标关键词</label>
+                                <input id="task-keyword" type="text" class="input-dark" required>
+                            </div>
+                            <div class="task-hidden-field">
+                                <label for="task-fetch-strategy" class="form-label">采集方式</label>
+                                <select id="task-fetch-strategy" class="input-dark">
+                                    <option value="scrapling_adaptive">Scrapling 自适应（推荐）</option>
+                                    <option value="scrapling_standard">Scrapling 标准</option>
+                                    <option value="scrapling_dynamic">Scrapling 增强</option>
+                                    <option value="scrapling_stealth">Scrapling 高兼容</option>
+                                    <option value="adaptive">旧版自适应低成本</option>
+                                    <option value="generic_pricing_table">通用价格页</option>
+                                    <option value="whmcs">WHMCS</option>
+                                    <option value="browser">浏览器渲染</option>
+                                    <option value="static_http">静态 HTTP</option>
+                                    <option value="manual">手动录入</option>
+                                    <option value="webhook">Webhook</option>
+                                    <option value="static_then_firecrawl">静态 HTTP → Firecrawl 外部兜底</option>
+                                    <option value="firecrawl">Firecrawl 外部兜底（消耗 credits）</option>
+                                    <option value="firecrawl_then_static">Firecrawl 外部兜底 → 静态 HTTP</option>
+                                    <option value="firecrawl_then_browser">Firecrawl 外部兜底 → 浏览器</option>
+                                </select>
+                            </div>
                         </div>
-                    </div>
-                    <div class="grid gap-4 lg:grid-cols-[1fr_0.75fr]">
-                        <div>
-                            <label for="task-keyword" class="form-label">目标关键词</label>
-                            <input id="task-keyword" type="text" class="input-dark" required>
-                        </div>
-                        <div class="task-hidden-field">
-                            <label for="task-fetch-strategy" class="form-label">采集方式</label>
-                            <select id="task-fetch-strategy" class="input-dark">
-                                <option value="scrapling_adaptive">Scrapling 自适应（推荐）</option>
-                                <option value="scrapling_standard">Scrapling 标准</option>
-                                <option value="scrapling_dynamic">Scrapling 增强</option>
-                                <option value="scrapling_stealth">Scrapling 高兼容</option>
-                                <option value="adaptive">旧版自适应低成本</option>
-                                <option value="generic_pricing_table">通用价格页</option>
-                                <option value="whmcs">WHMCS</option>
-                                <option value="browser">浏览器渲染</option>
-                                <option value="static_http">静态 HTTP</option>
-                                <option value="manual">手动录入</option>
-                                <option value="webhook">Webhook</option>
-                                <option value="static_then_firecrawl">静态 HTTP → Firecrawl 外部兜底</option>
-                                <option value="firecrawl">Firecrawl 外部兜底（消耗 credits）</option>
-                                <option value="firecrawl_then_static">Firecrawl 外部兜底 → 静态 HTTP</option>
-                                <option value="firecrawl_then_browser">Firecrawl 外部兜底 → 浏览器</option>
-                            </select>
-                        </div>
-                    </div>
-                    <section class="task-form-section">
+                        <label class="flex items-center gap-3 rounded-lg border border-slate-700/60 bg-slate-950/50 px-4 py-3 text-sm text-slate-300">
+                            <input id="task-enabled" type="checkbox" class="h-4 w-4 rounded border-slate-700 bg-slate-950 text-indigo-500" checked>
+                            启用该任务
+                        </label>
+                    </section>
+                    <section class="task-step-panel" data-task-step-panel="strategy">
+                        <section class="task-form-section">
                         <div class="task-section-heading">
                             <div>
                                 <p class="settings-kicker">Collection Mode</p>
                                 <h4>选择采集模式</h4>
                             </div>
-                            <p>普通用户只需要在这里选模式。旧版后端名保留在隐藏字段中，用于兼容老任务。</p>
                         </div>
                         <div id="task-strategy-cards" class="task-strategy-card-grid" role="radiogroup" aria-label="采集模式">
                             <button type="button" class="task-strategy-card" data-task-strategy-card="scrapling_adaptive" role="radio" aria-checked="true">
@@ -1213,17 +1225,22 @@
                                 </button>
                             </div>
                         </details>
-                    </section>
-                    <div id="task-strategy-help" class="task-strategy-help" aria-live="polite">
-                        <div>
-                            <p class="task-strategy-title">建议采集方式</p>
-                            <p id="task-strategy-summary">默认使用 Scrapling 自适应采集。Firecrawl 属于外部付费兜底，默认不参与定时监控。</p>
+                        </section>
+                        <div id="task-strategy-help" class="task-strategy-help" aria-live="polite">
+                            <div>
+                                <p class="task-strategy-title">当前模式</p>
+                                <p id="task-strategy-summary">默认使用 Scrapling 自适应采集。Firecrawl 属于外部付费兜底，默认不参与定时监控。</p>
+                            </div>
+                            <div id="task-webhook-hint" class="task-strategy-pill hidden">Webhook 模式才会显示 Token 操作</div>
                         </div>
-                        <div id="task-webhook-hint" class="task-strategy-pill hidden">Webhook 模式才会显示 Token 操作</div>
-                    </div>
-                    <details id="task-rule-details" class="task-form-section task-rule-details">
-                        <summary>解析规则（可选）</summary>
-                        <p class="task-rule-copy">默认自动识别。只有遇到“明明有货但识别不到”时，再填写 CSS / XPath / 正则等规则。</p>
+                    </section>
+                    <section id="task-rule-details" class="task-step-panel task-form-section task-rule-details" data-task-step-panel="rules">
+                        <div class="task-section-heading">
+                            <div>
+                                <p class="settings-kicker">Rules</p>
+                                <h4>解析规则</h4>
+                            </div>
+                        </div>
                         <div class="grid gap-4 lg:grid-cols-2">
                             <div>
                                 <label for="task-stock-rule-type" class="form-label">规则类型</label>
@@ -1265,12 +1282,12 @@
                                 <input id="task-soldout-keywords" type="text" class="input-dark" placeholder="Out of Stock, Sold Out, 售罄">
                             </div>
                         </div>
-                    </details>
+                    </section>
+                    <section class="task-step-panel" data-task-step-panel="notify">
                     <div class="rounded-lg border border-slate-800 bg-slate-950/45 p-4">
                         <div class="mb-4 flex flex-wrap items-start justify-between gap-3">
                             <div>
                                 <p class="form-label">TG 推送文案</p>
-                                <p class="text-sm leading-6 text-slate-500">支持 Telegram HTML 和变量占位符。</p>
                             </div>
                             <button id="task-template-help-button" type="button" class="ghost-button !min-h-9 !rounded-lg !px-3 !py-2 text-[12px]">变量说明</button>
                         </div>
@@ -1317,14 +1334,13 @@
                             <input id="task-button-2-url" type="url" class="input-dark">
                         </div>
                     </div>
-                    <label class="flex items-center gap-3 rounded-lg border border-slate-700/60 bg-slate-950/50 px-4 py-3 text-sm text-slate-300">
-                        <input id="task-enabled" type="checkbox" class="h-4 w-4 rounded border-slate-700 bg-slate-950 text-indigo-500" checked>
-                        启用该任务
-                    </label>
+                    </section>
                     <div id="task-first-check-hint" class="task-first-check-hint">
-                        保存或编辑完成后，建议点击“保存并立即检测”。这会马上抓取一次库存，让你确认“有货 / 售罄 / 未知”和错误原因，再决定是否继续调整关键词或采集方式。
+                        首次创建建议点“保存并检测”，立刻确认库存状态。
                     </div>
-                    <div class="flex flex-wrap justify-end gap-3 pt-2">
+                    <div class="task-wizard-footer">
+                        <button id="task-step-prev-button" type="button" class="ghost-button" data-task-step-prev>上一步</button>
+                        <button id="task-step-next-button" type="button" class="ghost-button" data-task-step-next>下一步</button>
                         <button id="task-cancel-button" type="button" class="ghost-button">取消</button>
                         <button id="task-save-check-button" type="submit" class="ghost-button" data-after-save="check">保存并立即检测</button>
                         <button id="task-submit-button" type="submit" class="primary-button">保存任务</button>

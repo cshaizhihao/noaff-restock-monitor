@@ -1018,7 +1018,7 @@ def domain_cooldown_until(backend: str, error_kind: str, settings_payload: dict[
 
 
 def domain_cooldown_message(domain: str, cooldown_until: str, detail: str = "") -> str:
-    base = f"{domain or '同域名'} 已进入采集冷却，冷却至 {cooldown_until}。本轮不会继续请求该域名。"
+    base = f"{domain or '同域名'} 正在同域名保护等待，至 {cooldown_until} 后恢复请求。本轮不会重复请求该域名。"
     return f"{base}{detail}" if detail else base
 
 

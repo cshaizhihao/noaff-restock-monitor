@@ -20,6 +20,7 @@
     let taskBrowserPath = { groupName: "", subgroupName: "", view: "children" };
     let taskDragState = null;
     let taskDragSuppressClickUntil = 0;
+    let taskFormStep = "basic";
 
     const els = {
         loginShell: document.getElementById("login-shell"),
@@ -199,6 +200,8 @@
         taskButton2Url: document.getElementById("task-button-2-url"),
         taskEnabled: document.getElementById("task-enabled"),
         taskCancelButton: document.getElementById("task-cancel-button"),
+        taskStepPrevButton: document.getElementById("task-step-prev-button"),
+        taskStepNextButton: document.getElementById("task-step-next-button"),
         taskSubmitButton: document.getElementById("task-submit-button"),
         taskSaveCheckButton: document.getElementById("task-save-check-button"),
         templateHelpModal: document.getElementById("template-help-modal"),
@@ -224,6 +227,8 @@
         taskMoveCancel: document.getElementById("task-move-cancel"),
         taskMoveSubmit: document.getElementById("task-move-submit")
     };
+
+    const taskStepOrder = ["basic", "strategy", "rules", "notify"];
 
     const defaultTemplates = {
         restock: "【补货提醒】\n<b>{name}</b>\n状态：有货\n库存：{stock}\n关键词：{keyword}\n链接：{url}\n时间：{checked_at}",
@@ -334,6 +339,42 @@
             els.taskFetchStrategy.value = strategy;
         }
         updateTaskStrategyUi();
+    }
+
+    function taskStepIndex(step) {
+        const index = taskStepOrder.indexOf(step);
+        return index >= 0 ? index : 0;
+    }
+
+    function setTaskFormStep(step) {
+        const nextStep = taskStepOrder.includes(step) ? step : "basic";
+        taskFormStep = nextStep;
+        const currentIndex = taskStepIndex(nextStep);
+        document.querySelectorAll("[data-task-step-target]").forEach((button) => {
+            const active = button.dataset.taskStepTarget === nextStep;
+            const buttonIndex = taskStepIndex(button.dataset.taskStepTarget);
+            button.classList.toggle("is-active", active);
+            button.classList.toggle("is-complete", buttonIndex < currentIndex);
+            button.setAttribute("aria-current", active ? "step" : "false");
+        });
+        document.querySelectorAll("[data-task-step-panel]").forEach((panel) => {
+            panel.classList.toggle("is-active", panel.dataset.taskStepPanel === nextStep);
+        });
+        if (els.taskStepPrevButton) {
+            els.taskStepPrevButton.disabled = currentIndex === 0;
+        }
+        if (els.taskStepNextButton) {
+            els.taskStepNextButton.classList.toggle("hidden", currentIndex === taskStepOrder.length - 1);
+        }
+        const saveVisible = currentIndex === taskStepOrder.length - 1;
+        els.taskSubmitButton?.classList.toggle("hidden", !saveVisible);
+        els.taskSaveCheckButton?.classList.toggle("hidden", !saveVisible);
+    }
+
+    function moveTaskFormStep(delta) {
+        const currentIndex = taskStepIndex(taskFormStep);
+        const nextIndex = Math.max(0, Math.min(taskStepOrder.length - 1, currentIndex + delta));
+        setTaskFormStep(taskStepOrder[nextIndex]);
     }
 
     function updateTaskStrategyUi() {
@@ -842,6 +883,14 @@
                 return "Firecrawl 响应异常";
             case "firecrawl_disabled":
                 return "Firecrawl 未启用";
+            case "domain_cooldown":
+                return "同域名保护等待";
+            case "scrapling_browser_failed":
+                return "Scrapling 浏览器依赖异常";
+            case "scrapling_unavailable":
+                return "Scrapling 未安装";
+            case "scrapling_disabled":
+                return "Scrapling 未启用";
             case "empty_response":
                 return "页面没有可解析内容";
             case "parse_unknown":
@@ -852,6 +901,10 @@
                 return "商品入库浏览器连接失败";
             case "timeout":
                 return "请求超时";
+            case "http_error":
+                return "目标站返回错误";
+            case "request_error":
+                return "请求失败";
             case "browser_connection":
                 return "浏览器连接异常";
             default:
@@ -862,16 +915,47 @@
     function errorKindTone(kind) {
         switch (kind) {
             case "cloudflare_challenge":
+            case "domain_cooldown":
                 return "text-amber-300";
             case "browser_connection":
+            case "scrapling_browser_failed":
                 return "text-orange-300";
             case "telegram_error":
                 return "text-sky-300";
+            case "scrapling_unavailable":
+            case "scrapling_disabled":
+            case "empty_response":
+            case "parse_unknown":
+                return "text-amber-300";
             case "timeout":
+            case "http_error":
+            case "request_error":
                 return "text-rose-300";
             default:
                 return "text-rose-300";
         }
+    }
+
+    function cleanTaskErrorDetail(kind, detail) {
+        const text = String(detail || "").trim();
+        if (!text) {
+            return "";
+        }
+        if (kind === "domain_cooldown" || text.includes("采集冷却") || text.includes("同域名保护等待")) {
+            return "同域名刚刚失败，系统会等到保护等待结束再请求；其他域名和下一轮正常继续。";
+        }
+        if (
+            kind === "scrapling_browser_failed" ||
+            text.includes("BrowserType.launch_persistent_context") ||
+            text.includes("launch_persistent_context") ||
+            text.includes("Executable doesn't exist")
+        ) {
+            return "高兼容浏览器启动失败，请在系统设置里检测 Scrapling，或先切换为标准/增强模式。";
+        }
+        if (text.includes("firecrawl_credit_required")) {
+            return "Firecrawl 额度不足，已停止继续消耗；建议把定时监控改回 Scrapling。";
+        }
+        return text;
     }
 
     function formatTaskLogLine(task, logHint) {
@@ -881,7 +965,7 @@
                 return `> ${protectedNotice}`;
             }
             const label = errorKindLabel(task.last_error_kind);
-            const detail = task.last_error_detail || task.last_error;
+            const detail = cleanTaskErrorDetail(task.last_error_kind, task.last_error_detail || task.last_error);
             return label ? `> ${label}${detail ? `：${detail}` : ""}` : `> ${detail}`;
         }
         return `> ${logHint} ${formatTime(task.last_checked_at)}`;
@@ -1394,6 +1478,10 @@
             statusBadge.className = `status-badge ${statusClass}`;
             statusBadge.textContent = statusText;
         }
+        const statusDot = card.querySelector("[data-task-status-dot]");
+        if (statusDot) {
+            statusDot.className = `task-status-dot ${statusDotClass(statusClass)}`;
+        }
 
         const title = card.querySelector("[data-task-name]");
         if (title) {
@@ -1415,7 +1503,7 @@
 
         const keyword = card.querySelector("[data-task-keyword-text]");
         if (keyword) {
-            keyword.textContent = `关键词: ${task.target_keyword || ""}`;
+            keyword.textContent = task.target_keyword || "未设置关键词";
         }
         const fetchStrategy = card.querySelector("[data-task-fetch-strategy]");
         if (fetchStrategy) {
@@ -1721,6 +1809,7 @@
             }
         }
         updateTaskStrategyUi();
+        setTaskFormStep("basic");
         els.taskModal.classList.remove("hidden");
         document.body.style.overflow = "hidden";
         window.setTimeout(() => els.taskName.focus(), 40);
@@ -1774,6 +1863,7 @@
         els.taskEnabled.checked = true;
         updateGroupVisibility(els.taskGroup, els.taskGroupCustomWrap, els.taskGroupCustom);
         updateGroupVisibility(els.taskSubgroup, els.taskSubgroupCustomWrap, els.taskSubgroupCustom);
+        setTaskFormStep("basic");
     }
 
     function renderMetrics(metrics) {
@@ -2335,6 +2425,13 @@
             `;
         }).join('<span class="text-slate-700">/</span>');
     }
+
+    function statusDotClass(statusClass) {
+        if (statusClass.includes("status-in-stock")) return "status-dot-green";
+        if (statusClass.includes("status-sold-out") || statusClass.includes("status-disabled")) return "status-dot-red";
+        return "status-dot-yellow";
+    }
+
     function renderTaskCards(tasks, animateCards) {
         return tasks.map((task) => {
             const [statusClass, statusText, logHint] = statusMeta(task);
@@ -2351,36 +2448,38 @@
             const rowClass = animateCards ? "task-row reveal" : "task-row";
             return `
                 <article class="${rowClass}" data-task-id="${task.id}" data-drag-kind="task" data-drag-id="${task.id}" draggable="true">
-                    <span class="task-drag-handle" aria-hidden="true" title="拖动排序">
-                        <svg viewBox="0 0 20 20" fill="currentColor">
-                            <path d="M7 4a1.5 1.5 0 11-3 0 1.5 1.5 0 013 0zm0 6a1.5 1.5 0 11-3 0 1.5 1.5 0 013 0zm0 6a1.5 1.5 0 11-3 0 1.5 1.5 0 013 0zm9-12a1.5 1.5 0 11-3 0 1.5 1.5 0 013 0zm0 6a1.5 1.5 0 11-3 0 1.5 1.5 0 013 0zm0 6a1.5 1.5 0 11-3 0 1.5 1.5 0 013 0z"/>
-                        </svg>
-                    </span>
-                    <div class="task-row-product">
+                    <div class="task-card-header">
+                        <span class="task-drag-handle" aria-hidden="true" title="拖动排序">
+                            <svg viewBox="0 0 20 20" fill="currentColor">
+                                <path d="M7 4a1.5 1.5 0 11-3 0 1.5 1.5 0 013 0zm0 6a1.5 1.5 0 11-3 0 1.5 1.5 0 013 0zm0 6a1.5 1.5 0 11-3 0 1.5 1.5 0 013 0zm9-12a1.5 1.5 0 11-3 0 1.5 1.5 0 013 0zm0 6a1.5 1.5 0 11-3 0 1.5 1.5 0 013 0zm0 6a1.5 1.5 0 11-3 0 1.5 1.5 0 013 0z"/>
+                            </svg>
+                        </span>
+                        <span class="task-status-dot ${statusDotClass(statusClass)}" data-task-status-dot aria-hidden="true"></span>
+                        <div class="min-w-0">
+                            <h3 class="task-row-title" title="${escapeHtml(task.name)}" data-task-name>${escapeHtml(task.name)}</h3>
+                        </div>
                         <label class="task-select-pill" title="选择任务">
                             <input type="checkbox" value="${task.id}" data-task-select aria-label="选择任务 ${escapeHtml(task.name)}">
                             <span></span>
                         </label>
-                        <span class="status-badge ${statusClass}" data-task-status>${statusText}</span>
-                        <div class="min-w-0">
-                            <h3 class="task-row-title" title="${escapeHtml(task.name)}" data-task-name>${escapeHtml(task.name)}</h3>
-                            <p class="task-row-url font-mono" title="${escapeHtml(task.monitor_url)}" data-task-url>${escapeHtml(task.monitor_url)}</p>
-                            ${task.source_source_name ? `<p class="task-row-source font-mono" data-task-source>来源：${escapeHtml(task.source_source_name)}${task.source_item_url ? ` · ${escapeHtml(task.source_item_url)}` : ""}</p>` : '<p class="task-row-source hidden font-mono" data-task-source></p>'}
-                        </div>
                     </div>
 
-                    <div class="task-row-signal">
-                        <div class="keyword-chip" data-task-keyword>
+                    <p class="task-row-url font-mono" title="${escapeHtml(task.monitor_url)}" data-task-url>${escapeHtml(task.monitor_url)}</p>
+                    ${task.source_source_name ? `<p class="task-row-source font-mono" data-task-source>来源：${escapeHtml(task.source_source_name)}${task.source_item_url ? ` · ${escapeHtml(task.source_item_url)}` : ""}</p>` : '<p class="task-row-source hidden font-mono" data-task-source></p>'}
+
+                    <div class="task-card-tags">
+                        <span class="status-badge ${statusClass}" data-task-status>${statusText}</span>
+                        <span class="task-tag keyword-chip" data-task-keyword>
                             <svg class="mr-1.5 h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/>
                             </svg>
-                            <span data-task-keyword-text>关键词: ${escapeHtml(task.target_keyword)}</span>
-                            <span class="ml-2 rounded border border-slate-700/70 bg-slate-950/70 px-2 py-0.5 text-[10px] text-slate-400" data-task-fetch-strategy>${escapeHtml(fetchStrategyLabel(task.fetch_strategy))}</span>
-                        </div>
-                        <div class="task-row-stock font-mono">
-                            <span>库存</span>
+                            <span data-task-keyword-text>${escapeHtml(task.target_keyword || "未设置关键词")}</span>
+                        </span>
+                        <span class="task-tag" data-task-fetch-strategy>${escapeHtml(fetchStrategyLabel(task.fetch_strategy))}</span>
+                        <span class="task-tag task-row-stock font-mono">
+                            库存:
                             <strong class="${task.last_stock > 0 ? "text-emerald-400" : "text-slate-300"} font-bold" data-task-stock>${escapeHtml(stockText)}</strong>
-                        </div>
+                        </span>
                     </div>
 
                     <div class="task-row-log terminal-box ${task.last_error ? "" : "opacity-95"}" data-task-terminal>
@@ -2395,21 +2494,8 @@
                         </details>
                     </div>
 
-                    <div class="task-actions flex flex-col gap-2">
-                        <div class="flex flex-wrap items-center gap-2">
-                            <button type="button" class="ghost-button !min-h-9 !rounded-lg !px-3 !py-2 text-[12px] font-bold text-indigo-300 ${["manual", "webhook"].includes(normalizedStrategy) ? "hidden" : ""}" data-action="check" data-task-check-action>
-                                <svg class="mr-1.5 h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8"/>
-                                </svg>
-                                检测
-                            </button>
-                            <div class="flex gap-1 ${normalizedStrategy === "manual" ? "" : "hidden"}" data-task-manual-actions>
-                                <button type="button" class="ghost-button !min-h-9 !rounded-lg !px-3 !py-2 text-[12px] text-emerald-300" data-action="manual-in-stock">有货</button>
-                                <button type="button" class="ghost-button !min-h-9 !rounded-lg !px-3 !py-2 text-[12px] text-rose-300" data-action="manual-sold-out">售罄</button>
-                            </div>
-                            <button type="button" class="ghost-button !min-h-9 !rounded-lg !px-3 !py-2 text-[12px] text-cyan-300 ${normalizedStrategy === "webhook" ? "" : "hidden"}" data-action="webhook-token" data-task-webhook-action>重置 Token</button>
-                        </div>
-                        <div class="flex space-x-1">
+                    <div class="task-actions">
+                        <div class="action-group">
                             <button type="button" class="icon-button !h-9 !w-9" title="${escapeHtml(actionLabel)}" aria-label="${escapeHtml(actionLabel)}" data-action="toggle" data-task-toggle>
                                 <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>
@@ -2430,6 +2516,19 @@
                                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/>
                                 </svg>
                             </button>
+                        </div>
+                        <div class="action-group">
+                            <button type="button" class="ghost-button task-check-button ${["manual", "webhook"].includes(normalizedStrategy) ? "hidden" : ""}" data-action="check" data-task-check-action>
+                                <svg class="mr-1.5 h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8"/>
+                                </svg>
+                                检测
+                            </button>
+                            <div class="action-group ${normalizedStrategy === "manual" ? "" : "hidden"}" data-task-manual-actions>
+                                <button type="button" class="ghost-button task-check-button text-emerald-300" data-action="manual-in-stock">有货</button>
+                                <button type="button" class="ghost-button task-check-button text-rose-300" data-action="manual-sold-out">售罄</button>
+                            </div>
+                            <button type="button" class="ghost-button task-check-button text-cyan-300 ${normalizedStrategy === "webhook" ? "" : "hidden"}" data-action="webhook-token" data-task-webhook-action>重置 Token</button>
                         </div>
                     </div>
                 </article>
@@ -3438,13 +3537,45 @@
     }
 
     function cleanupTaskDragClasses() {
-        els.tasksGrid?.querySelectorAll(".is-dragging, .is-drop-target, .is-drag-active").forEach((element) => {
-            element.classList.remove("is-dragging", "is-drop-target", "is-drag-active");
+        document.body.style.cursor = "";
+        els.tasksGrid?.querySelectorAll(".is-dragging, .is-drop-target, .is-drag-active, .sortable-drag, .sortable-ghost").forEach((element) => {
+            element.classList.remove("is-dragging", "is-drop-target", "is-drag-active", "sortable-drag", "sortable-ghost");
         });
     }
 
     function draggableCardFromEvent(event) {
         return event.target.closest("[data-drag-kind][data-drag-id]");
+    }
+
+    function dragItemsForContainer(container, kind) {
+        return Array.from(container.querySelectorAll(`[data-drag-kind="${kind}"][data-drag-id]`));
+    }
+
+    function captureDragLayout(container, kind) {
+        const positions = new Map();
+        dragItemsForContainer(container, kind).forEach((element) => {
+            positions.set(element.dataset.dragId, element.getBoundingClientRect());
+        });
+        return positions;
+    }
+
+    function animateDragLayout(container, kind, previousPositions) {
+        if (!previousPositions || window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+        dragItemsForContainer(container, kind).forEach((element) => {
+            const previous = previousPositions.get(element.dataset.dragId);
+            if (!previous || element.classList.contains("is-dragging")) return;
+            const next = element.getBoundingClientRect();
+            const deltaX = previous.left - next.left;
+            const deltaY = previous.top - next.top;
+            if (Math.abs(deltaX) < 1 && Math.abs(deltaY) < 1) return;
+            element.animate(
+                [
+                    { transform: `translate(${deltaX}px, ${deltaY}px)` },
+                    { transform: "translate(0, 0)" }
+                ],
+                { duration: 300, easing: "cubic-bezier(0.25, 1, 0.5, 1)" }
+            );
+        });
     }
 
     function handleTaskDragStart(event) {
@@ -3467,8 +3598,9 @@
             container,
             moved: false
         };
-        card.classList.add("is-dragging");
+        card.classList.add("is-dragging", "sortable-drag");
         container.classList.add("is-drag-active");
+        document.body.style.cursor = "grabbing";
         event.dataTransfer.effectAllowed = "move";
         event.dataTransfer.setData("text/plain", `${kind}:${card.dataset.dragId}`);
     }
@@ -3492,10 +3624,12 @@
             return;
         }
         event.preventDefault();
-        container.querySelectorAll(".is-drop-target").forEach((element) => element.classList.remove("is-drop-target"));
-        target.classList.add("is-drop-target");
+        container.querySelectorAll(".is-drop-target, .sortable-ghost").forEach((element) => element.classList.remove("is-drop-target", "sortable-ghost"));
+        target.classList.add("is-drop-target", "sortable-ghost");
+        const previousPositions = captureDragLayout(container, taskDragState.kind);
         const after = shouldPlaceAfter(target, event);
         container.insertBefore(dragging, after ? target.nextElementSibling : target);
+        animateDragLayout(container, taskDragState.kind, previousPositions);
         taskDragState.moved = true;
     }
 
@@ -4081,6 +4215,20 @@
     });
 
     els.taskFetchStrategy?.addEventListener("change", updateTaskStrategyUi);
+    els.taskForm?.addEventListener("click", (event) => {
+        const stepTarget = event.target.closest("[data-task-step-target]");
+        if (stepTarget && els.taskForm.contains(stepTarget)) {
+            setTaskFormStep(stepTarget.dataset.taskStepTarget);
+            return;
+        }
+        if (event.target.closest("[data-task-step-prev]")) {
+            moveTaskFormStep(-1);
+            return;
+        }
+        if (event.target.closest("[data-task-step-next]")) {
+            moveTaskFormStep(1);
+        }
+    });
     els.settingsFirecrawlTestButton?.addEventListener("click", testFirecrawlConnection);
     els.settingsScraplingTestButton?.addEventListener("click", testScraplingRuntime);
 

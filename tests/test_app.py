@@ -4442,7 +4442,8 @@ class PortalAppTestCase(unittest.TestCase):
         self.assertEqual(second.error_kind, "cloudflare_challenge")
         self.assertTrue(second.cooldown_skip)
         self.assertEqual(second.shared_fetch_backend, "scrapling_stealth")
-        self.assertIn("本轮不会继续请求该域名", second.detail)
+        self.assertIn("同域名保护等待", second.detail)
+        self.assertIn("本轮不会重复请求该域名", second.detail)
 
     def test_generic_pricing_table_extractor_handles_order_and_soldout_buttons(self) -> None:
         fetch_result = app_module.FetchResult(html="", final_url="https://example.com/pricing")
