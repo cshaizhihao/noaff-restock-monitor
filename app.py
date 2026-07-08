@@ -1017,6 +1017,14 @@ def product_query_slug_from_keyword(value: Any) -> str:
 
 def monitor_url_for_fetch(task: Any) -> str:
     url = str(mapping_value(task, "monitor_url", "") or "").strip()
+    source_config = task_source_config(task)
+    if not parse_setting_bool(source_config.get("enable_product_query"), False):
+        return url
+    if parse_setting_bool(source_config.get("disable_product_query"), False) or parse_setting_bool(
+        source_config.get("disable_auto_product_query"),
+        False,
+    ):
+        return url
     try:
         parsed = urlparse(url)
     except Exception:
@@ -3450,18 +3458,19 @@ class ScraplingFetcher:
 
     def browser_kwargs(self, timeout_seconds: int) -> dict[str, Any]:
         timeout_ms = max(5, int(timeout_seconds)) * 1000
-        flags = ["--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu"]
+        flags = ["--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu", "--start-maximized"]
         browser_binary = find_browser_binary()
+        stealth_mode = self.mode == "stealth"
         kwargs: dict[str, Any] = {
             "headless": True,
-            "disable_resources": True,
-            "block_ads": True,
+            "disable_resources": not stealth_mode,
+            "block_ads": not stealth_mode,
             "load_dom": True,
             "network_idle": self.mode != "standard",
             "timeout": timeout_ms,
-            "wait": 900 if self.mode == "stealth" else 300,
+            "wait": 8000 if stealth_mode else 300,
             "extra_flags": flags,
-            "extra_headers": {"Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8"},
+            "extra_headers": {"Accept-Language": "en-US,en;q=0.9" if stealth_mode else "zh-CN,zh;q=0.9,en;q=0.8"},
         }
         if browser_binary:
             kwargs["executable_path"] = browser_binary
@@ -3470,6 +3479,8 @@ class ScraplingFetcher:
         if self.mode == "stealth":
             kwargs.update(
                 {
+                    "real_chrome": True,
+                    "locale": "en-US",
                     "hide_canvas": True,
                     "block_webrtc": True,
                     "allow_webgl": True,
@@ -3543,7 +3554,7 @@ class ScraplingFetcher:
                     final_url=final_url,
                     status_code=status_code,
                     error_kind="scrapling_challenge_failed",
-                    detail="Scrapling 高兼容已启用 Cloudflare 处理，但本次仍未拿到可解析页面；下轮会继续尝试。",
+                    detail="Scrapling 高兼容已尝试处理 Cloudflare managed challenge，但本次仍未拿到商品页。",
                 )
             return FetchResult(
                 html="",
@@ -4275,7 +4286,7 @@ class MonitoringEngine:
     ) -> ScrapeResult:
         fetch_domain = fetch_domain_for_url(mapping_value(task, "monitor_url", ""))
         shared_key = fetch_cache_key(task)
-        if is_task_in_protected_cooldown(task):
+        if not use_test_browser and is_task_in_protected_cooldown(task):
             cooldown_until = str(mapping_value(task, "cooldown_until", "") or "")
             if last_error_looks_like_firecrawl_cost(task):
                 return ScrapeResult(
@@ -4301,7 +4312,7 @@ class MonitoringEngine:
                 domain_cooldown_until=cooldown_until,
             )
 
-        if cycle_context and fetch_domain:
+        if cycle_context and fetch_domain and not use_test_browser:
             domain_cooldown = cycle_context.domain_cooldowns.get(fetch_domain)
             cooldown_at = parse_iso_datetime(domain_cooldown.until) if domain_cooldown else None
             if domain_cooldown and cooldown_at and cooldown_at > now_utc():
@@ -5072,6 +5083,7 @@ class MonitoringEngine:
                             last_shared_fetch_key = ?,
                             last_shared_fetch_backend = ?,
                             last_protected_source_backend = '',
+                            cooldown_until = NULL,
                             updated_at = ?
                         WHERE id = ?
                         """,
@@ -5161,6 +5173,34 @@ class MonitoringEngine:
                             task["id"],
                         ),
                     )
+                elif result.cooldown_skip:
+                    connection.execute(
+                        """
+                        UPDATE tasks
+                        SET last_checked_at = ?,
+                            last_error = ?,
+                            last_fetch_backend = ?,
+                            last_fetch_attempts = ?,
+                            last_fetch_domain = ?,
+                            domain_cooldown_until = ?,
+                            last_shared_fetch_key = ?,
+                            last_shared_fetch_backend = ?,
+                            updated_at = ?
+                        WHERE id = ?
+                        """,
+                        (
+                            timestamp,
+                            result.detail[:1000],
+                            fetch_backend,
+                            fetch_attempts_text,
+                            fetch_domain,
+                            result.domain_cooldown_until or None,
+                            shared_fetch_key,
+                            shared_fetch_backend,
+                            timestamp,
+                            task["id"],
+                        ),
+                    )
                 else:
                     connection.execute(
                         """
@@ -5174,6 +5214,7 @@ class MonitoringEngine:
                             last_shared_fetch_key = ?,
                             last_shared_fetch_backend = ?,
                             last_protected_source_backend = '',
+                            cooldown_until = NULL,
                             updated_at = ?
                         WHERE id = ?
                         """,

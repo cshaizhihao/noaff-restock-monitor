@@ -3891,7 +3891,7 @@ class PortalAppTestCase(unittest.TestCase):
         self.assertEqual(result.detail, "Scrapling standard ok")
         self.assertEqual(client.calls, [("standard", "https://example.com/products", 25)])
 
-    def test_monitor_url_for_fetch_adds_idc_product_query_from_keyword(self) -> None:
+    def test_monitor_url_for_fetch_keeps_idc_cart_category_url_by_default(self) -> None:
         task = {
             "monitor_url": "https://www.dmit.io/cart.php?region=hong-kong&network=premium&generation=as3",
             "target_keyword": "DMIT Hong Kong HKG.AS3.Pro.TINY",
@@ -3900,10 +3900,22 @@ class PortalAppTestCase(unittest.TestCase):
 
         fetch_url = app_module.monitor_url_for_fetch(task)
 
+        self.assertEqual(fetch_url, task["monitor_url"])
+
+    def test_monitor_url_for_fetch_adds_idc_product_query_when_enabled(self) -> None:
+        task = {
+            "monitor_url": "https://www.dmit.io/cart.php?region=hong-kong&network=premium&generation=as3",
+            "target_keyword": "DMIT Hong Kong HKG.AS3.Pro.TINY",
+            "fetch_strategy": "scrapling_adaptive",
+            "source_config": {"enable_product_query": True},
+        }
+
+        fetch_url = app_module.monitor_url_for_fetch(task)
+
         self.assertIn("product=hkg.as3.pro.tiny", fetch_url)
         self.assertIn("region=hong-kong", fetch_url)
 
-    def test_fetch_cache_key_separates_idc_cart_products(self) -> None:
+    def test_fetch_cache_key_preserves_idc_cart_category_url_by_default(self) -> None:
         base_url = "https://www.dmit.io/cart.php?region=hong-kong&network=premium&generation=as3"
         tiny_key = app_module.fetch_cache_key(
             {
@@ -3917,6 +3929,28 @@ class PortalAppTestCase(unittest.TestCase):
                 "monitor_url": base_url,
                 "target_keyword": "HKG.AS3.Pro.STARTER",
                 "fetch_strategy": "scrapling_adaptive",
+            }
+        )
+
+        self.assertEqual(tiny_key, f"scrapling_adaptive|{base_url}")
+        self.assertEqual(starter_key, f"scrapling_adaptive|{base_url}")
+
+    def test_fetch_cache_key_separates_idc_cart_products_when_query_enabled(self) -> None:
+        base_url = "https://www.dmit.io/cart.php?region=hong-kong&network=premium&generation=as3"
+        tiny_key = app_module.fetch_cache_key(
+            {
+                "monitor_url": base_url,
+                "target_keyword": "HKG.AS3.Pro.TINY",
+                "fetch_strategy": "scrapling_adaptive",
+                "source_config": {"enable_product_query": True},
+            }
+        )
+        starter_key = app_module.fetch_cache_key(
+            {
+                "monitor_url": base_url,
+                "target_keyword": "HKG.AS3.Pro.STARTER",
+                "fetch_strategy": "scrapling_adaptive",
+                "source_config": {"enable_product_query": True},
             }
         )
 
@@ -3967,7 +4001,7 @@ class PortalAppTestCase(unittest.TestCase):
         self.assertEqual(result.backend_used, "scrapling_standard")
         self.assertEqual([attempt.backend for attempt in result.fetch_attempts or []], ["scrapling_standard"])
 
-    def test_scrape_task_targets_dmit_product_url_before_scrapling_fetch(self) -> None:
+    def test_scrape_task_keeps_dmit_category_url_before_scrapling_fetch(self) -> None:
         class FakeScraplingResponse:
             status = 200
             html_content = "<html><body><section>HKG.AS3.Pro.TINY <a>Order Now</a></section></body></html>"
@@ -4002,7 +4036,7 @@ class PortalAppTestCase(unittest.TestCase):
             engine.fetcher_selector = original_selector
 
         self.assertEqual(result.stock, 1)
-        self.assertEqual(client.urls, ["https://www.dmit.io/cart.php?region=hong-kong&network=premium&generation=as3&product=hkg.as3.pro.tiny"])
+        self.assertEqual(client.urls, ["https://www.dmit.io/cart.php?region=hong-kong&network=premium&generation=as3"])
 
     def test_scrapling_adaptive_escalates_after_cloudflare_challenge(self) -> None:
         class FakeScraplingResponse:
@@ -4061,7 +4095,7 @@ class PortalAppTestCase(unittest.TestCase):
         )
 
         self.assertEqual(result.error_kind, "scrapling_challenge_failed")
-        self.assertIn("Scrapling 高兼容已启用 Cloudflare 处理", result.detail)
+        self.assertIn("Scrapling 高兼容已尝试处理 Cloudflare managed challenge", result.detail)
         self.assertEqual(
             app_module.scrapling_domain_cooldown_seconds("scrapling_stealth", result.error_kind, self.scrapling_settings()),
             0,
@@ -4531,7 +4565,7 @@ class PortalAppTestCase(unittest.TestCase):
         self.assertEqual(second.error_kind, "scrapling_challenge_failed")
         self.assertFalse(second.cooldown_skip)
         self.assertEqual(second.domain_cooldown_until, "")
-        self.assertIn("Scrapling 高兼容已启用 Cloudflare 处理", second.detail)
+        self.assertIn("Scrapling 高兼容已尝试处理 Cloudflare managed challenge", second.detail)
         self.assertNotIn("同域名保护等待", second.detail)
 
     def test_generic_pricing_table_extractor_handles_order_and_soldout_buttons(self) -> None:
@@ -4711,6 +4745,59 @@ class PortalAppTestCase(unittest.TestCase):
 
         self.assertEqual(result.stock, 1)
         self.assertIn("HKG.AS3.T1.WEE", result.fragment)
+        self.assertIn("按有货处理", result.detail)
+
+    def test_generic_pricing_table_handles_dmit_premium_category_page(self) -> None:
+        fetch_result = app_module.FetchResult(
+            html="",
+            final_url="https://www.dmit.io/cart.php?region=hong-kong&network=premium&generation=as3",
+        )
+        html_text = """
+        <main>
+          <section>
+            <h2>選擇網絡類型</h2>
+            <button>Premium</button>
+            <button>Eyeball</button>
+            <button>Tier 1</button>
+          </section>
+          <section>
+            <h2>選擇實例類型</h2>
+            <article class="product-card">
+              <h3>HKG.AS3.Pro.STARTER</h3>
+              <p>$ 12.90 USD / 月繳</p>
+              <p>1 vCores</p>
+              <p>2.0GB RAM</p>
+              <p>40GB SSD</p>
+              <p>4000GB @ 10Gbps</p>
+            </article>
+            <article class="product-card selected">
+              <h3>HKG.AS3.Pro.TINY</h3>
+              <p>$ 6.90 USD / 月繳</p>
+              <p>1 vCores</p>
+              <p>1.0GB RAM</p>
+              <p>20GB SSD</p>
+              <p>2000GB @ 4Gbps</p>
+            </article>
+          </section>
+          <footer class="cart-summary">
+            <button type="button">繼續</button>
+          </footer>
+        </main>
+        """
+
+        result = app_module.extract_stock_for_strategy(
+            "generic_pricing_table",
+            html_text,
+            "HKG.AS3.Pro.TINY",
+            {
+                "fetch_strategy": "scrapling_adaptive",
+                "monitor_url": "https://www.dmit.io/cart.php?region=hong-kong&network=premium&generation=as3",
+            },
+            fetch_result,
+        )
+
+        self.assertEqual(result.stock, 1)
+        self.assertIn("HKG.AS3.Pro.TINY", result.fragment)
         self.assertIn("按有货处理", result.detail)
 
     def test_generic_pricing_table_does_not_override_target_soldout_with_continue_button(self) -> None:
