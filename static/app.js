@@ -155,6 +155,8 @@
         taskUrl: document.getElementById("task-url"),
         taskKeyword: document.getElementById("task-keyword"),
         taskFetchStrategy: document.getElementById("task-fetch-strategy"),
+        taskStrategySummary: document.getElementById("task-strategy-summary"),
+        taskWebhookHint: document.getElementById("task-webhook-hint"),
         taskRestock: document.getElementById("task-restock"),
         taskSoldout: document.getElementById("task-soldout"),
         taskTemplateHelpButton: document.getElementById("task-template-help-button"),
@@ -207,13 +209,52 @@
             case "firecrawl_then_browser":
                 return "Firecrawl → 浏览器";
             case "adaptive":
-                return "自适应";
+                return "自适应 fallback";
             case "manual":
                 return "手动录入";
             case "webhook":
                 return "Webhook";
             default:
                 return "浏览器渲染";
+        }
+    }
+
+    function fetchStrategyHelp(value) {
+        switch (normalizeFetchStrategy(value)) {
+            case "firecrawl":
+                return "推荐用于复杂 IDC 商品页。需要先在系统设置启用 Firecrawl 并保存 API Key；库存监控会使用 maxAge=0，避免缓存库存。";
+            case "firecrawl_then_static":
+                return "先用 Firecrawl 抓取，失败后回退到静态 HTTP。适合公开页面结构稳定、但偶尔本地抓取失败的页面。";
+            case "firecrawl_then_browser":
+                return "先用 Firecrawl，遇到限流或可回退错误时再尝试本地浏览器。适合需要渲染但不想默认启动浏览器的页面。";
+            case "static_then_firecrawl":
+                return "先用本地静态 HTTP，失败后再调用 Firecrawl。适合成本敏感、但希望保留外部后端兜底的监控。";
+            case "adaptive":
+                return "自动按静态 HTTP、浏览器、Firecrawl 可用性做有限 fallback，不会无限重试；适合不确定页面类型的任务。";
+            case "generic_pricing_table":
+                return "通用 IDC 价格卡片/表格解析器。会围绕目标关键词判断购买入口、售罄标记和库存数字。";
+            case "whmcs":
+                return "WHMCS 商城页面专用解析器，适合 cart.php、store、configureproduct 等常见 IDC 购物车页面。";
+            case "browser":
+                return "本地 Chromium 渲染后解析。适合必须执行 JS 的公开页面；Cloudflare challenge 不会触发反复重建。";
+            case "static_http":
+                return "本地 requests 抓取 HTML。速度快、成本低，适合无需 JS 渲染的公开页面。";
+            case "manual":
+                return "手动维护库存状态，不访问目标页面；适合受保护页面或暂时需要人工确认的商品。";
+            case "webhook":
+                return "由外部系统通过 Webhook 推送库存状态。只有 Webhook 任务才会显示 Token 重置操作。";
+            default:
+                return "选择一种采集方式后，系统会按该策略抓取并交给解析器判断库存。";
+        }
+    }
+
+    function updateTaskStrategyUi() {
+        const strategy = normalizeFetchStrategy(els.taskFetchStrategy?.value);
+        if (els.taskStrategySummary) {
+            els.taskStrategySummary.textContent = fetchStrategyHelp(strategy);
+        }
+        if (els.taskWebhookHint) {
+            els.taskWebhookHint.classList.toggle("hidden", strategy !== "webhook");
         }
     }
 
@@ -637,6 +678,24 @@
                 return "Firecrawl 参数错误";
             case "firecrawl_auth_error":
                 return "Firecrawl 认证失败";
+            case "firecrawl_credit_required":
+                return "Firecrawl 额度不足";
+            case "firecrawl_rate_limited":
+                return "Firecrawl 频率受限";
+            case "firecrawl_upstream_error":
+                return "Firecrawl 服务异常";
+            case "firecrawl_bad_response":
+                return "Firecrawl 响应异常";
+            case "firecrawl_disabled":
+                return "Firecrawl 未启用";
+            case "empty_response":
+                return "页面没有可解析内容";
+            case "parse_unknown":
+                return "解析器无法判断库存";
+            case "catalog_browser_port_busy":
+                return "商品入库浏览器端口被占用";
+            case "catalog_browser_connection_failed":
+                return "商品入库浏览器连接失败";
             case "timeout":
                 return "请求超时";
             case "browser_connection":
@@ -1424,6 +1483,7 @@
                 els.taskSaveCheckButton.textContent = "保存并立即检测";
             }
         }
+        updateTaskStrategyUi();
         els.taskModal.classList.remove("hidden");
         document.body.style.overflow = "hidden";
         window.setTimeout(() => els.taskName.focus(), 40);
@@ -1475,6 +1535,7 @@
         els.taskEnabled.checked = true;
         updateGroupVisibility(els.taskGroup, els.taskGroupCustomWrap, els.taskGroupCustom);
         updateGroupVisibility(els.taskSubgroup, els.taskSubgroupCustomWrap, els.taskSubgroupCustom);
+        updateTaskStrategyUi();
     }
 
     function renderMetrics(metrics) {
@@ -3066,14 +3127,16 @@
         taskDragState = null;
     }
 
-    async function runTaskStockCheck(taskId) {
+    async function runTaskStockCheck(taskId, options = {}) {
         const data = await apiFetch(`/api/tasks/${taskId}/check`, {
             method: "POST",
             body: JSON.stringify({})
         });
         const result = data.result || {};
         const backend = result.backend_used ? ` · ${fetchStrategyLabel(result.backend_used)}` : "";
-        showToast(`库存检测完成：${stockResultLabel(result.stock, result.state)}${backend}`);
+        if (options.showToast !== false) {
+            showToast(`库存检测完成：${stockResultLabel(result.stock, result.state)}${backend}`);
+        }
         return result;
     }
 
@@ -3533,7 +3596,9 @@
             });
             const savedTaskId = data.task_id || taskId;
             if (runCheckAfterSave && savedTaskId) {
-                await runTaskStockCheck(savedTaskId);
+                const result = await runTaskStockCheck(savedTaskId, { showToast: false });
+                const backend = result.backend_used ? ` · ${fetchStrategyLabel(result.backend_used)}` : "";
+                showToast(`${taskId ? "节点已更新" : "节点已创建"}，检测结果：${stockResultLabel(result.stock, result.state)}${backend}`);
             } else {
                 showToast(taskId ? "任务已更新。" : "任务已创建。");
             }
@@ -3546,6 +3611,8 @@
             submit.disabled = false;
         }
     });
+
+    els.taskFetchStrategy?.addEventListener("change", updateTaskStrategyUi);
 
     els.settingsForm?.addEventListener("submit", async (event) => {
         event.preventDefault();

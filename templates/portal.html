@@ -995,11 +995,11 @@
                         <div>
                             <label for="task-fetch-strategy" class="form-label">采集方式</label>
                             <select id="task-fetch-strategy" class="input-dark">
-                                <option value="firecrawl">Firecrawl</option>
+                                <option value="firecrawl">Firecrawl（推荐，可选外部后端）</option>
                                 <option value="firecrawl_then_static">Firecrawl → 静态 HTTP</option>
                                 <option value="firecrawl_then_browser">Firecrawl → 浏览器</option>
                                 <option value="static_then_firecrawl">静态 HTTP → Firecrawl</option>
-                                <option value="adaptive">自适应</option>
+                                <option value="adaptive">自适应 fallback</option>
                                 <option value="generic_pricing_table">通用价格页</option>
                                 <option value="whmcs">WHMCS</option>
                                 <option value="browser">浏览器渲染</option>
@@ -1008,6 +1008,13 @@
                                 <option value="webhook">Webhook</option>
                             </select>
                         </div>
+                    </div>
+                    <div id="task-strategy-help" class="task-strategy-help" aria-live="polite">
+                        <div>
+                            <p class="task-strategy-title">建议采集方式</p>
+                            <p id="task-strategy-summary">优先使用 Firecrawl；如果没有启用 Firecrawl，可改用自适应或本地浏览器渲染。</p>
+                        </div>
+                        <div id="task-webhook-hint" class="task-strategy-pill hidden">Webhook 模式才会显示 Token 操作</div>
                     </div>
                     <div class="rounded-lg border border-slate-800 bg-slate-950/45 p-4">
                         <div class="mb-4 flex flex-wrap items-start justify-between gap-3">
@@ -1064,6 +1071,9 @@
                         <input id="task-enabled" type="checkbox" class="h-4 w-4 rounded border-slate-700 bg-slate-950 text-indigo-500" checked>
                         启用该任务
                     </label>
+                    <div id="task-first-check-hint" class="task-first-check-hint">
+                        保存或编辑完成后，建议点击“保存并立即检测”。这会马上抓取一次库存，让你确认“有货 / 售罄 / 未知”和错误原因，再决定是否继续调整关键词或采集方式。
+                    </div>
                     <div class="flex flex-wrap justify-end gap-3 pt-2">
                         <button id="task-cancel-button" type="button" class="ghost-button">取消</button>
                         <button id="task-save-check-button" type="submit" class="ghost-button" data-after-save="check">保存并立即检测</button>
