@@ -14,7 +14,7 @@ Add Firecrawl-assisted intake and protected-source aware IDC monitoring
 
 This PR completes the public-page IDC restock monitoring path without implementing Cloudflare / Turnstile / CAPTCHA bypasses.
 
-It adds strategy-based fetching, optional Firecrawl scrape/map support, IDC/WHMCS extractors, protected-source cooldown, product intake discovery/preview, and external inventory inputs through manual updates and webhook ingest. Telegram send/edit/sold-out behavior is reused through one state machine for crawler, manual, and webhook sources.
+It adds strategy-based fetching, optional Firecrawl scrape/map support, IDC/WHMCS extractors, protected-source cooldown, guided product intake discovery/preview, and external inventory inputs through manual updates and webhook ingest. Telegram send/edit/sold-out behavior is reused through one state machine for crawler, manual, and webhook sources.
 
 ## What Changed
 
@@ -44,6 +44,7 @@ It adds strategy-based fetching, optional Firecrawl scrape/map support, IDC/WHMC
   - `storeInCache=false`
   - API key masking
   - explicit enhanced/auto proxy flags
+  - non-persistent settings diagnostic that tests the current form values without saving or exposing the API key
 - Split Cloudflare challenge handling from browser auto-heal:
   - challenge pages return `cloudflare_challenge`
   - challenge pages do not trigger browser rebuild
@@ -52,6 +53,7 @@ It adds strategy-based fetching, optional Firecrawl scrape/map support, IDC/WHMC
   - `generic_pricing_table`
   - `whmcs`
 - Added product intake workbench:
+  - guided source -> strategy -> rules -> discovery -> preview -> create flow
   - discovery strategy
   - scrape strategy
   - extractor selection
@@ -59,11 +61,13 @@ It adds strategy-based fetching, optional Firecrawl scrape/map support, IDC/WHMC
   - dedupe policy
   - preview result state
   - bulk task creation
+  - noise filtering for locale switches, navigation, footers, section titles, and no-price/no-spec candidates
 - Added manual stock update API and dashboard controls.
 - Added webhook ingest API with one-time plaintext token reset.
 - Store webhook tokens as HMAC hashes; expose only token hints in snapshots.
 - Added Telegram template variable help and send-test support for the currently edited template.
 - Added dashboard display for fetch strategy, protected-source notices, manual actions, and webhook metadata.
+- Added hierarchical task browsing with main-group cards, nested subgroup cards, current-layer product lists, drag sorting, subgroup rename/delete, and bulk task deletion.
 - Updated README, `.env.example`, handoff notes, release notes, and PR draft.
 
 ## Database Migration
@@ -110,7 +114,7 @@ bash -n install.sh
 
 Current result:
 
-- 135 tests passing
+- 152 tests passing
 - Python compile check passing
 - `static/app.js` syntax check passing
 - `install.sh` syntax check passing
@@ -121,7 +125,9 @@ Current result:
 - Create a `whmcs` task and verify `Out of Stock` maps to sold out.
 - Import one merchant page and verify discovered products enter preview before task creation.
 - If Firecrawl is configured, run product intake with `firecrawl_map` and verify backend_used is shown.
+- In Firecrawl settings, run the connection diagnostic with valid and invalid credentials and verify no plaintext API key is returned.
 - Bulk-create preview items twice and verify the second run syncs existing tasks instead of duplicating them.
+- Create main groups/subgroups, drag-sort task cards, rename/delete subgroups, and bulk-delete selected tasks.
 - Create a `manual` task, click “有货” and “售罄”, and verify Telegram state transitions.
 - Create a `webhook` task, reset token, POST `stock`, then POST `status=sold_out`.
 - Verify webhook plaintext token and Firecrawl API key do not appear in snapshot/log output.
