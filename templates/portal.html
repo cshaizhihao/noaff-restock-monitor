@@ -1108,7 +1108,7 @@
                             <label for="task-keyword" class="form-label">目标关键词</label>
                             <input id="task-keyword" type="text" class="input-dark" required>
                         </div>
-                        <div>
+                        <div class="task-hidden-field">
                             <label for="task-fetch-strategy" class="form-label">采集方式</label>
                             <select id="task-fetch-strategy" class="input-dark">
                                 <option value="scrapling_adaptive">Scrapling 自适应（推荐）</option>
@@ -1129,6 +1129,62 @@
                             </select>
                         </div>
                     </div>
+                    <section class="task-form-section">
+                        <div class="task-section-heading">
+                            <div>
+                                <p class="settings-kicker">Collection Mode</p>
+                                <h4>选择采集模式</h4>
+                            </div>
+                            <p>普通用户只需要在这里选模式。旧版后端名保留在隐藏字段中，用于兼容老任务。</p>
+                        </div>
+                        <div id="task-strategy-cards" class="task-strategy-card-grid" role="radiogroup" aria-label="采集模式">
+                            <button type="button" class="task-strategy-card" data-task-strategy-card="scrapling_adaptive" role="radio" aria-checked="true">
+                                <span>推荐</span>
+                                <strong>标准</strong>
+                                <em>普通 IDC / WHMCS 首选，自动逐步尝试。</em>
+                            </button>
+                            <button type="button" class="task-strategy-card" data-task-strategy-card="scrapling_dynamic" role="radio" aria-checked="false">
+                                <span>JS</span>
+                                <strong>增强</strong>
+                                <em>适合需要渲染的页面，资源消耗中等。</em>
+                            </button>
+                            <button type="button" class="task-strategy-card" data-task-strategy-card="scrapling_stealth" role="radio" aria-checked="false">
+                                <span>兼容</span>
+                                <strong>高兼容</strong>
+                                <em>复杂页面备用，低并发、长冷却。</em>
+                            </button>
+                            <button type="button" class="task-strategy-card" data-task-strategy-card="manual" role="radio" aria-checked="false">
+                                <span>人工</span>
+                                <strong>手动</strong>
+                                <em>不访问目标站，后台手动写库存。</em>
+                            </button>
+                            <button type="button" class="task-strategy-card" data-task-strategy-card="webhook" role="radio" aria-checked="false">
+                                <span>推送</span>
+                                <strong>Webhook</strong>
+                                <em>外部系统主动上报库存，才显示 Token。</em>
+                            </button>
+                        </div>
+                        <details class="task-external-fallback">
+                            <summary>外部兜底 / 旧版采集方式</summary>
+                            <div class="task-strategy-card-grid compact">
+                                <button type="button" class="task-strategy-card" data-task-strategy-card="static_http" role="radio" aria-checked="false">
+                                    <span>旧版</span>
+                                    <strong>静态 HTTP</strong>
+                                    <em>低成本，仅适合静态公开 HTML。</em>
+                                </button>
+                                <button type="button" class="task-strategy-card" data-task-strategy-card="browser" role="radio" aria-checked="false">
+                                    <span>旧版</span>
+                                    <strong>浏览器渲染</strong>
+                                    <em>保留兼容，不再作为首选。</em>
+                                </button>
+                                <button type="button" class="task-strategy-card is-external" data-task-strategy-card="firecrawl" role="radio" aria-checked="false">
+                                    <span>付费</span>
+                                    <strong>Firecrawl</strong>
+                                    <em>外部服务，会消耗 credits。</em>
+                                </button>
+                            </div>
+                        </details>
+                    </section>
                     <div id="task-strategy-help" class="task-strategy-help" aria-live="polite">
                         <div>
                             <p class="task-strategy-title">建议采集方式</p>
@@ -1136,6 +1192,51 @@
                         </div>
                         <div id="task-webhook-hint" class="task-strategy-pill hidden">Webhook 模式才会显示 Token 操作</div>
                     </div>
+                    <details id="task-rule-details" class="task-form-section task-rule-details">
+                        <summary>解析规则（可选）</summary>
+                        <p class="task-rule-copy">默认自动识别。只有遇到“明明有货但识别不到”时，再填写 CSS / XPath / 正则等规则。</p>
+                        <div class="grid gap-4 lg:grid-cols-2">
+                            <div>
+                                <label for="task-stock-rule-type" class="form-label">规则类型</label>
+                                <select id="task-stock-rule-type" class="input-dark">
+                                    <option value="">自动识别</option>
+                                    <option value="css_selector">CSS selector</option>
+                                    <option value="xpath">XPath</option>
+                                    <option value="regex">正则</option>
+                                    <option value="text_near_keyword">关键词附近文本</option>
+                                    <option value="json_path">JSON path</option>
+                                </select>
+                            </div>
+                            <div>
+                                <label for="task-target-scope-selector" class="form-label">商品范围 selector</label>
+                                <input id="task-target-scope-selector" type="text" class="input-dark" placeholder=".product-card">
+                            </div>
+                            <div>
+                                <label for="task-stock-selector" class="form-label">有货 / 库存 selector</label>
+                                <input id="task-stock-selector" type="text" class="input-dark" placeholder=".stock, .inventory">
+                            </div>
+                            <div>
+                                <label for="task-soldout-selector" class="form-label">售罄 selector</label>
+                                <input id="task-soldout-selector" type="text" class="input-dark" placeholder=".sold-out, button[disabled]">
+                            </div>
+                            <div>
+                                <label for="task-regex-pattern" class="form-label">正则表达式</label>
+                                <input id="task-regex-pattern" type="text" class="input-dark" placeholder="stock_count:\\s*(?P<stock>\\d+)">
+                            </div>
+                            <div>
+                                <label for="task-json-path" class="form-label">JSON path</label>
+                                <input id="task-json-path" type="text" class="input-dark" placeholder="$.products[0].availability">
+                            </div>
+                            <div>
+                                <label for="task-in-stock-keywords" class="form-label">有货关键词</label>
+                                <input id="task-in-stock-keywords" type="text" class="input-dark" placeholder="Order Now, Available, 购买">
+                            </div>
+                            <div>
+                                <label for="task-soldout-keywords" class="form-label">售罄关键词</label>
+                                <input id="task-soldout-keywords" type="text" class="input-dark" placeholder="Out of Stock, Sold Out, 售罄">
+                            </div>
+                        </div>
+                    </details>
                     <div class="rounded-lg border border-slate-800 bg-slate-950/45 p-4">
                         <div class="mb-4 flex flex-wrap items-start justify-between gap-3">
                             <div>

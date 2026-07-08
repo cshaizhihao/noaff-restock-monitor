@@ -174,8 +174,18 @@
         taskUrl: document.getElementById("task-url"),
         taskKeyword: document.getElementById("task-keyword"),
         taskFetchStrategy: document.getElementById("task-fetch-strategy"),
+        taskStrategyCards: document.getElementById("task-strategy-cards"),
         taskStrategySummary: document.getElementById("task-strategy-summary"),
         taskWebhookHint: document.getElementById("task-webhook-hint"),
+        taskRuleDetails: document.getElementById("task-rule-details"),
+        taskStockRuleType: document.getElementById("task-stock-rule-type"),
+        taskTargetScopeSelector: document.getElementById("task-target-scope-selector"),
+        taskStockSelector: document.getElementById("task-stock-selector"),
+        taskSoldoutSelector: document.getElementById("task-soldout-selector"),
+        taskRegexPattern: document.getElementById("task-regex-pattern"),
+        taskJsonPath: document.getElementById("task-json-path"),
+        taskInStockKeywords: document.getElementById("task-in-stock-keywords"),
+        taskSoldoutKeywords: document.getElementById("task-soldout-keywords"),
         taskRestock: document.getElementById("task-restock"),
         taskSoldout: document.getElementById("task-soldout"),
         taskTemplateHelpButton: document.getElementById("task-template-help-button"),
@@ -205,6 +215,16 @@
         restock: "【补货提醒】\n<b>{name}</b>\n状态：有货\n库存：{stock}\n关键词：{keyword}\n链接：{url}\n时间：{checked_at}",
         soldout: "【售罄提醒】\n<b>{name}</b>\n状态：已售罄\n最后库存：{stock}\n关键词：{keyword}\n链接：{url}\n时间：{checked_at}"
     };
+    const stockRuleConfigKeys = [
+        "stock_rule_type",
+        "target_scope_selector",
+        "stock_selector",
+        "soldout_selector",
+        "regex_pattern",
+        "json_path",
+        "in_stock_keywords",
+        "soldout_keywords"
+    ];
 
     function normalizeFetchStrategy(value) {
         const strategy = String(value || "").trim().toLowerCase().replaceAll("-", "_");
@@ -283,6 +303,25 @@
         }
     }
 
+    function parseTaskSourceConfig(value) {
+        if (!value) return {};
+        if (typeof value === "object") return { ...value };
+        try {
+            const parsed = JSON.parse(String(value));
+            return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
+        } catch (error) {
+            return {};
+        }
+    }
+
+    function setTaskStrategy(value) {
+        const strategy = normalizeFetchStrategy(value || preferredTaskFetchStrategy());
+        if (els.taskFetchStrategy) {
+            els.taskFetchStrategy.value = strategy;
+        }
+        updateTaskStrategyUi();
+    }
+
     function updateTaskStrategyUi() {
         const strategy = normalizeFetchStrategy(els.taskFetchStrategy?.value);
         if (els.taskStrategySummary) {
@@ -291,6 +330,66 @@
         if (els.taskWebhookHint) {
             els.taskWebhookHint.classList.toggle("hidden", strategy !== "webhook");
         }
+        document.querySelectorAll("[data-task-strategy-card]").forEach((card) => {
+            const active = normalizeFetchStrategy(card.dataset.taskStrategyCard) === strategy;
+            card.classList.toggle("is-active", active);
+            card.setAttribute("aria-checked", active ? "true" : "false");
+        });
+    }
+
+    function setTaskRuleFields(config) {
+        const sourceConfig = parseTaskSourceConfig(config);
+        if (els.taskStockRuleType) els.taskStockRuleType.value = sourceConfig.stock_rule_type || "";
+        if (els.taskTargetScopeSelector) els.taskTargetScopeSelector.value = sourceConfig.target_scope_selector || "";
+        if (els.taskStockSelector) els.taskStockSelector.value = sourceConfig.stock_selector || "";
+        if (els.taskSoldoutSelector) els.taskSoldoutSelector.value = sourceConfig.soldout_selector || "";
+        if (els.taskRegexPattern) els.taskRegexPattern.value = sourceConfig.regex_pattern || "";
+        if (els.taskJsonPath) els.taskJsonPath.value = sourceConfig.json_path || "";
+        if (els.taskInStockKeywords) {
+            els.taskInStockKeywords.value = Array.isArray(sourceConfig.in_stock_keywords)
+                ? sourceConfig.in_stock_keywords.join(", ")
+                : sourceConfig.in_stock_keywords || "";
+        }
+        if (els.taskSoldoutKeywords) {
+            els.taskSoldoutKeywords.value = Array.isArray(sourceConfig.soldout_keywords)
+                ? sourceConfig.soldout_keywords.join(", ")
+                : sourceConfig.soldout_keywords || "";
+        }
+        if (els.taskRuleDetails) {
+            els.taskRuleDetails.open = stockRuleConfigKeys.some((key) => Boolean(sourceConfig[key]));
+        }
+    }
+
+    function splitRuleKeywords(value) {
+        return String(value || "")
+            .split(/[\n,，]+/)
+            .map((item) => item.trim())
+            .filter(Boolean);
+    }
+
+    function collectTaskSourceConfig() {
+        const sourceConfig = parseTaskSourceConfig(els.taskForm?.dataset.sourceConfig || "{}");
+        stockRuleConfigKeys.forEach((key) => delete sourceConfig[key]);
+        const ruleType = els.taskStockRuleType?.value || "";
+        if (ruleType) {
+            sourceConfig.stock_rule_type = ruleType;
+        }
+        const textFields = {
+            target_scope_selector: els.taskTargetScopeSelector?.value,
+            stock_selector: els.taskStockSelector?.value,
+            soldout_selector: els.taskSoldoutSelector?.value,
+            regex_pattern: els.taskRegexPattern?.value,
+            json_path: els.taskJsonPath?.value
+        };
+        Object.entries(textFields).forEach(([key, value]) => {
+            const text = String(value || "").trim();
+            if (text) sourceConfig[key] = text;
+        });
+        const inStockKeywords = splitRuleKeywords(els.taskInStockKeywords?.value);
+        const soldoutKeywords = splitRuleKeywords(els.taskSoldoutKeywords?.value);
+        if (inStockKeywords.length) sourceConfig.in_stock_keywords = inStockKeywords;
+        if (soldoutKeywords.length) sourceConfig.soldout_keywords = soldoutKeywords;
+        return sourceConfig;
     }
 
     function preferredTaskFetchStrategy() {
@@ -1500,7 +1599,9 @@
             setTaskSubgroupSelection(task.group_name, task.subgroup_name, [task.subgroup_name]);
             els.taskUrl.value = task.monitor_url || "";
             els.taskKeyword.value = task.target_keyword || "";
-            els.taskFetchStrategy.value = normalizeFetchStrategy(task.fetch_strategy);
+            els.taskForm.dataset.sourceConfig = JSON.stringify(parseTaskSourceConfig(task.source_config));
+            setTaskRuleFields(task.source_config);
+            setTaskStrategy(task.fetch_strategy);
             els.taskRestock.value = task.restock_template || defaultTemplates.restock;
             els.taskSoldout.value = task.soldout_template || defaultTemplates.soldout;
             els.taskButton1Text.value = task.button_1_text || "";
@@ -1551,6 +1652,7 @@
     function resetTaskForm() {
         els.taskForm.reset();
         els.taskId.value = "";
+        els.taskForm.dataset.sourceConfig = "{}";
         if (els.taskGroup) {
             els.taskGroup.value = defaultTaskGroup;
         }
@@ -1572,11 +1674,11 @@
         if (els.taskTemplateTestChatIds) {
             els.taskTemplateTestChatIds.value = "";
         }
-        els.taskFetchStrategy.value = preferredTaskFetchStrategy();
+        setTaskRuleFields({});
+        setTaskStrategy(preferredTaskFetchStrategy());
         els.taskEnabled.checked = true;
         updateGroupVisibility(els.taskGroup, els.taskGroupCustomWrap, els.taskGroupCustom);
         updateGroupVisibility(els.taskSubgroup, els.taskSubgroupCustomWrap, els.taskSubgroupCustom);
-        updateTaskStrategyUi();
     }
 
     function renderMetrics(metrics) {
@@ -2575,7 +2677,7 @@
             monitor_url: els.taskUrl.value.trim(),
             target_keyword: els.taskKeyword.value.trim(),
             fetch_strategy: normalizeFetchStrategy(els.taskFetchStrategy.value),
-            source_config: {},
+            source_config: collectTaskSourceConfig(),
             restock_template: els.taskRestock.value.trim(),
             soldout_template: els.taskSoldout.value.trim(),
             button_1_text: els.taskButton1Text.value.trim(),
@@ -3699,6 +3801,13 @@
     els.groupRenameForm?.addEventListener("submit", submitTaskGroupRename);
     els.groupRenameCancel?.addEventListener("click", closeTaskGroupRenameModal);
     els.groupRenameClose?.addEventListener("click", closeTaskGroupRenameModal);
+
+    els.taskForm?.addEventListener("click", (event) => {
+        const strategyCard = event.target.closest("[data-task-strategy-card]");
+        if (strategyCard && els.taskForm.contains(strategyCard)) {
+            setTaskStrategy(strategyCard.dataset.taskStrategyCard);
+        }
+    });
 
     els.taskForm?.addEventListener("submit", async (event) => {
         event.preventDefault();
