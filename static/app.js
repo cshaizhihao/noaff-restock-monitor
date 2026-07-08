@@ -17,7 +17,7 @@
     let merchantSignature = null;
     let merchantActiveStep = "source";
     let firecrawlGuideIndex = 0;
-    let taskBrowserPath = { groupName: "", subgroupName: "" };
+    let taskBrowserPath = { groupName: "", subgroupName: "", view: "children" };
     let taskDragState = null;
     let taskDragSuppressClickUntil = 0;
 
@@ -1931,6 +1931,22 @@
         )).sort(compareTasksByOrder);
     }
 
+    function taskBrowserView() {
+        return taskBrowserPath.view === "products" ? "products" : "children";
+    }
+
+    function setTaskBrowserPath(groupName = "", subgroupName = "", view = "children") {
+        const hasGroup = String(groupName || "").trim() !== "";
+        const normalizedSubgroup = String(subgroupName || "").trim()
+            ? normalizeTaskSubgroup(subgroupName)
+            : "";
+        taskBrowserPath = {
+            groupName: hasGroup ? normalizeTaskGroup(groupName) : "",
+            subgroupName: normalizedSubgroup === defaultTaskSubgroup ? "" : normalizedSubgroup,
+            view: hasGroup && view === "products" ? "products" : "children"
+        };
+    }
+
     function taskBrowserPathExists(tasks) {
         if (!taskBrowserPath.groupName) {
             return true;
@@ -2140,7 +2156,30 @@
         return `<div class="task-browser-grid" data-drag-scope="group">${groupCards || empty}</div>`;
     }
 
-    function renderTaskSubgroupCards(children, animateCards) {
+    function renderCurrentLayerProductsCard(directTasks, animateCards) {
+        if (!directTasks.length) {
+            return "";
+        }
+        const errorCount = taskErrorCount(directTasks);
+        const stockCount = directTasks.filter((task) => task.last_state === "in_stock").length;
+        const cardClass = animateCards ? "task-browser-card task-browser-card-products reveal" : "task-browser-card task-browser-card-products";
+        return `
+            <article class="${cardClass}" data-task-products-section>
+                <button type="button" class="task-browser-card-main" data-task-products-open>
+                    <span class="task-browser-kicker">PRODUCTS</span>
+                    <strong>当前层商品</strong>
+                    <span class="task-browser-meta">
+                        <span>${directTasks.length} 个任务</span>
+                        <span>${stockCount} 有货</span>
+                        <span class="${errorCount ? "" : "hidden"}">${errorCount} 错误</span>
+                    </span>
+                    <span class="task-browser-card-note">直属于当前层级，单独进入后可多选删除和拖拽排序。</span>
+                </button>
+            </article>
+        `;
+    }
+
+    function renderTaskSubgroupCards(children, animateCards, directTasks = []) {
         if (!children.length) {
             return "";
         }
@@ -2154,6 +2193,7 @@
                     <button type="button" class="ghost-button !min-h-9 !rounded-lg !px-3 !py-2 text-[12px]" data-subgroup-action="bulk-delete" disabled>删除选中子分组</button>
                 </div>
                 <div class="task-browser-grid" data-drag-scope="subgroup">
+                    ${renderCurrentLayerProductsCard(directTasks, animateCards)}
                     ${children.map((child) => {
                         const errorCount = taskErrorCount(child.tasks);
                         const cardClass = animateCards ? "task-browser-card reveal" : "task-browser-card";
@@ -2196,14 +2236,40 @@
         `;
     }
 
+    function renderTaskProductList(directTasks, animateCards, hasChildren) {
+        const title = taskBrowserPath.subgroupName ? "当前子分组商品" : "默认层级商品";
+        const empty = `
+            <div class="task-empty-state">
+                <p class="font-bold text-slate-200">当前层级还没有商品</p>
+                <p class="text-sm text-slate-500">可以新增任务并归入这里，或返回继续创建子分组。</p>
+            </div>
+        `;
+        return `
+            <section class="task-browser-section task-products-panel">
+                <div class="task-browser-section-head">
+                    <div>
+                        <p class="task-browser-kicker">PRODUCTS</p>
+                        <h3>${escapeHtml(title)}</h3>
+                    </div>
+                    <div class="task-browser-head-actions">
+                        ${hasChildren ? '<button type="button" class="ghost-button !min-h-9 !rounded-lg !px-3 !py-2 text-[12px]" data-task-products-back>返回子分组</button>' : ""}
+                        <button type="button" class="ghost-button !min-h-9 !rounded-lg !px-3 !py-2 text-[12px]" data-group-action="bulk-delete" disabled>删除选中商品</button>
+                    </div>
+                </div>
+                ${directTasks.length ? `<div class="task-list-stack mt-3" data-drag-scope="task">${renderTaskCards(directTasks, animateCards)}</div>` : empty}
+            </section>
+        `;
+    }
+
     function renderTaskBrowserToolbar() {
         const inGroup = Boolean(taskBrowserPath.groupName);
+        const inProducts = taskBrowserView() === "products";
         return `
             <div class="task-browser-toolbar">
                 <div class="task-breadcrumbs">${renderTaskBrowserBreadcrumbs()}</div>
                 <div class="flex flex-wrap justify-end gap-2">
-                    ${inGroup ? '<button type="button" class="ghost-button !min-h-9 !rounded-lg !px-3 !py-2 text-[12px]" data-task-browser-back>返回上级</button>' : ""}
-                    ${inGroup ? '<button type="button" class="ghost-button !min-h-9 !rounded-lg !px-3 !py-2 text-[12px]" data-subgroup-action="create">创建子分组</button>' : ""}
+                    ${inGroup ? `<button type="button" class="ghost-button !min-h-9 !rounded-lg !px-3 !py-2 text-[12px]" data-task-browser-back>${inProducts ? "返回子分组" : "返回上级"}</button>` : ""}
+                    ${inGroup && !inProducts ? '<button type="button" class="ghost-button !min-h-9 !rounded-lg !px-3 !py-2 text-[12px]" data-subgroup-action="create">创建子分组</button>' : ""}
                 </div>
             </div>
         `;
@@ -2241,7 +2307,7 @@
                 task.webhook_endpoint || "",
                 task.ingest_token_hint || ""
             ].join(":"))
-            .join("|") + `::groups:${groupSignature}::nodes:${nodeSignature}::path:${taskBrowserPath.groupName}:${taskBrowserPath.subgroupName}`;
+            .join("|") + `::groups:${groupSignature}::nodes:${nodeSignature}::path:${taskBrowserPath.groupName}:${taskBrowserPath.subgroupName}::view:${taskBrowserView()}`;
         const nextTaskStateSignature = tasks
             .map((task) => [
                 String(task.id),
@@ -2270,7 +2336,7 @@
         }
 
         if (!taskBrowserPathExists(tasks)) {
-            taskBrowserPath = { groupName: "", subgroupName: "" };
+            setTaskBrowserPath();
         }
 
         const toolbar = renderTaskBrowserToolbar();
@@ -2288,18 +2354,8 @@
 
         const children = collectChildSubgroups(tasks, taskBrowserPath.groupName, taskBrowserPath.subgroupName);
         const directTasks = tasksAtBrowserPath(tasks, taskBrowserPath.groupName, taskBrowserPath.subgroupName);
-        const taskList = directTasks.length ? `
-            <section class="task-browser-section">
-                <div class="task-browser-section-head">
-                    <div>
-                        <p class="task-browser-kicker">PRODUCTS</p>
-                        <h3>当前层级商品</h3>
-                    </div>
-                    <button type="button" class="ghost-button !min-h-9 !rounded-lg !px-3 !py-2 text-[12px]" data-group-action="bulk-delete" disabled>删除选中商品</button>
-                </div>
-                <div class="task-list-stack mt-3" data-drag-scope="task">${renderTaskCards(directTasks, animateCards)}</div>
-            </section>
-        ` : "";
+        const showProductList = taskBrowserView() === "products" || !children.length;
+        const productList = showProductList ? renderTaskProductList(directTasks, animateCards, children.length > 0) : "";
         const empty = !children.length && !directTasks.length ? `
             <div class="task-empty-state">
                 <p class="font-bold text-slate-200">当前层级还没有子分组或商品</p>
@@ -2309,9 +2365,8 @@
         els.tasksGrid.innerHTML = `
             <section class="task-browser-shell">
                 ${toolbar}
-                ${renderTaskSubgroupCards(children, animateCards)}
-                ${taskList}
-                ${empty}
+                ${showProductList ? productList : renderTaskSubgroupCards(children, animateCards, directTasks)}
+                ${showProductList ? "" : empty}
             </section>
             ${addRow}
         `;
@@ -2827,7 +2882,7 @@
             });
             const renamedPath = data.result?.new_subgroup_name || currentPath;
             if (isSameSubgroupPath(taskBrowserPath.subgroupName, currentPath) || isSubgroupDescendant(taskBrowserPath.subgroupName, currentPath)) {
-                taskBrowserPath = { groupName, subgroupName: renamedPath };
+                setTaskBrowserPath(groupName, renamedPath, taskBrowserView());
             }
             showToast(data.message || "子分组已重命名。");
             await loadSnapshot(false);
@@ -3322,39 +3377,46 @@
         }
         const crumb = event.target.closest("[data-task-crumb-group]");
         if (crumb) {
-            taskBrowserPath = {
-                groupName: crumb.dataset.taskCrumbGroup || "",
-                subgroupName: crumb.dataset.taskCrumbSubgroup || ""
-            };
+            setTaskBrowserPath(crumb.dataset.taskCrumbGroup || "", crumb.dataset.taskCrumbSubgroup || "", "children");
             renderTasks(Array.from(currentTasks.values()), false, true);
             return;
         }
         const back = event.target.closest("[data-task-browser-back]");
         if (back) {
-            if (taskBrowserPath.subgroupName) {
+            const tasks = Array.from(currentTasks.values());
+            const hasChildren = collectChildSubgroups(tasks, taskBrowserPath.groupName, taskBrowserPath.subgroupName).length > 0;
+            if (taskBrowserView() === "products" && hasChildren) {
+                setTaskBrowserPath(taskBrowserPath.groupName, taskBrowserPath.subgroupName, "children");
+            } else if (taskBrowserPath.subgroupName) {
                 const parts = splitTaskSubgroupPath(taskBrowserPath.subgroupName);
-                taskBrowserPath = {
-                    groupName: taskBrowserPath.groupName,
-                    subgroupName: joinTaskSubgroupPath(parts.slice(0, -1))
-                };
+                setTaskBrowserPath(taskBrowserPath.groupName, joinTaskSubgroupPath(parts.slice(0, -1)), "children");
             } else {
-                taskBrowserPath = { groupName: "", subgroupName: "" };
+                setTaskBrowserPath();
             }
-            renderTasks(Array.from(currentTasks.values()), false, true);
+            renderTasks(tasks, false, true);
             return;
         }
         const groupOpen = event.target.closest("[data-group-open]");
         if (groupOpen) {
-            taskBrowserPath = { groupName: normalizeTaskGroup(groupOpen.dataset.groupOpen), subgroupName: "" };
+            setTaskBrowserPath(groupOpen.dataset.groupOpen, "", "children");
             renderTasks(Array.from(currentTasks.values()), false, true);
             return;
         }
         const subgroupOpen = event.target.closest("[data-subgroup-open]");
         if (subgroupOpen) {
-            taskBrowserPath = {
-                groupName: normalizeTaskGroup(taskBrowserPath.groupName),
-                subgroupName: normalizeTaskSubgroup(subgroupOpen.dataset.subgroupOpen)
-            };
+            setTaskBrowserPath(taskBrowserPath.groupName, subgroupOpen.dataset.subgroupOpen, "children");
+            renderTasks(Array.from(currentTasks.values()), false, true);
+            return;
+        }
+        const productsOpen = event.target.closest("[data-task-products-open]");
+        if (productsOpen) {
+            setTaskBrowserPath(taskBrowserPath.groupName, taskBrowserPath.subgroupName, "products");
+            renderTasks(Array.from(currentTasks.values()), false, true);
+            return;
+        }
+        const productsBack = event.target.closest("[data-task-products-back]");
+        if (productsBack) {
+            setTaskBrowserPath(taskBrowserPath.groupName, taskBrowserPath.subgroupName, "children");
             renderTasks(Array.from(currentTasks.values()), false, true);
             return;
         }

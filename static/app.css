@@ -847,6 +847,22 @@ button:disabled,
     line-height: 1.25;
 }
 
+.task-browser-card-products {
+    padding-left: 1rem;
+    cursor: pointer;
+}
+
+.task-browser-card-products .task-browser-card-main {
+    min-height: 100%;
+    cursor: pointer;
+}
+
+.task-browser-card-note {
+    color: #94a3b8;
+    font-size: 0.78rem;
+    line-height: 1.55;
+}
+
 .task-browser-kicker {
     color: var(--color-subtle);
     font-size: 0.64rem;
@@ -896,6 +912,21 @@ button:disabled,
     color: #f8fafc;
     font-size: 0.98rem;
     font-weight: 900;
+}
+
+.task-browser-head-actions {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    gap: 0.5rem;
+}
+
+.task-products-panel {
+    min-height: min(64vh, 44rem);
+}
+
+.task-products-panel .task-list-stack {
+    max-height: min(58vh, 40rem);
 }
 
 .task-empty-state {
