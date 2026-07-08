@@ -1562,6 +1562,49 @@ button:disabled,
     padding: 0.8rem;
 }
 
+.merchant-preview-summary {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 0.75rem;
+}
+
+.merchant-preview-summary div {
+    border: 1px solid var(--color-line);
+    border-radius: var(--radius);
+    background: rgba(13, 19, 29, 0.74);
+    padding: 0.85rem;
+}
+
+.merchant-preview-summary span {
+    color: var(--color-subtle);
+    font-size: 0.72rem;
+    font-weight: 900;
+}
+
+.merchant-preview-summary strong {
+    display: block;
+    margin-top: 0.2rem;
+    color: #f8fafc;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+    font-size: 1.45rem;
+    font-weight: 900;
+}
+
+.merchant-preview-summary p,
+.merchant-preview-help {
+    color: var(--color-muted);
+    font-size: 0.78rem;
+    line-height: 1.6;
+}
+
+.merchant-preview-summary p {
+    margin-top: 0.25rem;
+}
+
+.merchant-preview-help {
+    margin-top: -0.2rem;
+}
+
 .merchant-signal-box > div:first-child {
     display: flex;
     align-items: center;

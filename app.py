@@ -3921,10 +3921,11 @@ class MonitoringEngine:
                     if len(rejected_items) < 120:
                         rejected_items.append(catalog_item_response_payload(prepared, include_raw=False))
                     continue
-                if not should_keep_catalog_item(prepared, options):
+                reject_reason = catalog_item_filter_reject_reason(prepared, options)
+                if reject_reason:
                     rejected_count += 1
                     rejected = dict(prepared)
-                    rejected["reject_reason"] = "已按设置排除售罄商品"
+                    rejected["reject_reason"] = reject_reason
                     if len(rejected_items) < 120:
                         rejected_items.append(catalog_item_response_payload(rejected, include_raw=False))
                     continue
@@ -3943,7 +3944,13 @@ class MonitoringEngine:
                     "backend_used": backend_used,
                     "accepted_count": accepted_count,
                     "rejected_count": rejected_count,
-                    "detail": "已解析商品候选" if accepted_count or rejected_count else "未发现商品候选",
+                    "detail": (
+                        "已解析商品候选"
+                        if accepted_count
+                        else "仅发现低置信或被过滤候选，查看商品预览中的过滤原因。"
+                        if rejected_count
+                        else "未发现商品候选"
+                    ),
                 }
             )
             if not accepted_count and not rejected_count:
@@ -5065,10 +5072,23 @@ def normalized_product_token(value: Any) -> str:
     return re.sub(r"[^a-z0-9]+", "", str(value or "").lower())
 
 
-def target_selected_by_url(task: Any, fetch_result: FetchResult, target_keyword: str) -> bool:
-    target_token = normalized_product_token(target_keyword)
-    if not target_token:
-        return False
+def product_token_aliases(value: Any) -> set[str]:
+    token = normalized_product_token(value)
+    if not token:
+        return set()
+    aliases = {token}
+    compact = token
+    for removable in ("pro", "premium", "tier1", "t1"):
+        compact = compact.replace(removable, "")
+    if compact:
+        aliases.add(compact)
+    aliases.add(token.replace("tier1", "t1"))
+    aliases.add(token.replace("t1", "tier1"))
+    return {alias for alias in aliases if alias}
+
+
+def product_query_values(task: Any, fetch_result: FetchResult) -> list[str]:
+    values: list[str] = []
     urls = [
         mapping_value(task, "monitor_url", ""),
         getattr(fetch_result, "final_url", ""),
@@ -5081,9 +5101,44 @@ def target_selected_by_url(task: Any, fetch_result: FetchResult, target_keyword:
         query = parse_qs(parsed.query)
         for key in ("product", "pid", "plan", "sku", "package", "service"):
             for value in query.get(key, []):
-                if normalized_product_token(value) == target_token:
-                    return True
+                if str(value or "").strip():
+                    values.append(str(value).strip())
+    return list(dict.fromkeys(values))
+
+
+def product_tokens_match(left: Any, right: Any) -> bool:
+    left_tokens = product_token_aliases(left)
+    right_tokens = product_token_aliases(right)
+    if not left_tokens or not right_tokens:
+        return False
+    if left_tokens & right_tokens:
+        return True
+    return any(
+        left_token.endswith(right_token) or right_token.endswith(left_token)
+        for left_token in left_tokens
+        for right_token in right_tokens
+    )
+
+
+def target_selected_by_url(task: Any, fetch_result: FetchResult, target_keyword: str) -> bool:
+    if not product_token_aliases(target_keyword):
+        return False
+    for value in product_query_values(task, fetch_result):
+        if product_tokens_match(target_keyword, value):
+            return True
     return False
+
+
+def find_product_query_position(html_text: str, task: Any, fetch_result: FetchResult) -> int:
+    for value in product_query_values(task, fetch_result):
+        parts = re.findall(r"[A-Za-z0-9]+", str(value or ""))
+        if not parts:
+            continue
+        flexible = r"[\s._-]*".join(re.escape(part) for part in parts)
+        match = re.search(flexible, html_text or "", re.IGNORECASE)
+        if match:
+            return match.start()
+    return -1
 
 
 def page_has_enabled_orderable_control(html_text: str) -> bool:
@@ -5112,16 +5167,19 @@ def page_level_orderable_for_target(
     fetch_result: FetchResult,
     fragment: str,
 ) -> bool:
-    if find_html_text_position(fragment, target_keyword) < 0 and find_html_text_position(html_text, target_keyword) < 0:
+    target_in_fragment = find_html_text_position(fragment, target_keyword) >= 0
+    target_in_page = find_html_text_position(html_text, target_keyword) >= 0
+    selected_by_url = target_selected_by_url(task, fetch_result, target_keyword)
+    if not target_in_fragment and not target_in_page and not selected_by_url:
         return False
     if has_generic_sold_out_marker(fragment, clean_fragment_text(fragment)):
         return False
     page_cleaned = clean_fragment_text(html_text)
-    if has_generic_sold_out_marker(html_text, page_cleaned) and not target_selected_by_url(task, fetch_result, target_keyword):
+    if has_generic_sold_out_marker(html_text, page_cleaned) and not selected_by_url:
         return False
     if not page_has_enabled_orderable_control(html_text):
         return False
-    return target_selected_by_url(task, fetch_result, target_keyword) or has_generic_orderable_marker(html_text, page_cleaned)
+    return selected_by_url or has_generic_orderable_marker(html_text, page_cleaned)
 
 
 def has_generic_pricing_signal(fragment: str) -> bool:
@@ -5130,6 +5188,13 @@ def has_generic_pricing_signal(fragment: str) -> bool:
         return True
     cleaned = clean_fragment_text(fragment)
     return has_generic_sold_out_marker(fragment, cleaned) or has_generic_orderable_marker(fragment, cleaned)
+
+
+def has_idc_product_card_signal(fragment: str) -> bool:
+    if has_generic_pricing_signal(fragment):
+        return True
+    cleaned = clean_fragment_text(fragment)
+    return bool(extract_price_hint(fragment) or has_resource_spec_signal(cleaned))
 
 
 def has_whmcs_orderable_marker(fragment: str, cleaned_text: str) -> bool:
@@ -5233,6 +5298,10 @@ def generic_pricing_table_extractor(
     fetch_result: FetchResult,
 ) -> ExtractorResult:
     fragment = locate_product_fragment(html_text, target_keyword, has_generic_pricing_signal)
+    if not fragment and target_selected_by_url(task, fetch_result, target_keyword):
+        query_position = find_product_query_position(html_text, task, fetch_result)
+        if query_position >= 0:
+            fragment = locate_html_fragment_around_position(html_text, query_position, has_idc_product_card_signal)
     stock, detail = parse_stock(fragment)
     if stock is not None:
         return ExtractorResult(stock=stock, fragment=fragment, detail=extractor_detail("generic_pricing_table", detail))
@@ -5801,14 +5870,46 @@ def parse_firecrawl_map_links(result: FetchResult) -> list[str]:
     return [str(link).strip() for link in links if str(link).strip()]
 
 
-def should_keep_catalog_item(item: dict[str, Any], options: dict[str, Any]) -> bool:
-    if options.get("include_sold_out", True):
+def catalog_item_matches_target_keyword(item: dict[str, Any], options: dict[str, Any]) -> bool:
+    target_keyword = str(options.get("target_keyword") or "").strip()
+    if not target_keyword:
         return True
+    mode = str(options.get("target_keyword_mode") or "contains").strip().lower()
+    title = str(item.get("title") or item.get("keyword") or "")
+    searchable_text = " ".join(
+        str(item.get(key) or "")
+        for key in ("title", "keyword", "price_hint", "stock_hint")
+    )
+    normalized_target = normalize_signal_text(target_keyword)
+    normalized_title = normalize_signal_text(title)
+    normalized_searchable = normalize_signal_text(searchable_text)
+    if mode == "exact":
+        return normalized_title == normalized_target or product_tokens_match(title, target_keyword)
+    if mode == "fuzzy":
+        target_parts = [part for part in re.findall(r"[A-Za-z0-9\u4e00-\u9fff]+", target_keyword.lower()) if len(part) >= 2]
+        if target_parts and all(normalize_signal_text(part) in normalized_searchable for part in target_parts):
+            return True
+        return product_tokens_match(title, target_keyword)
+    return normalized_target in normalized_searchable or product_tokens_match(title, target_keyword)
+
+
+def catalog_item_filter_reject_reason(item: dict[str, Any], options: dict[str, Any]) -> str:
+    target_keyword = str(options.get("target_keyword") or "").strip()
+    if target_keyword and not catalog_item_matches_target_keyword(item, options):
+        return f"目标关键词不匹配：{target_keyword}"
+    if options.get("include_sold_out", True):
+        return ""
     stock_hint = normalize_signal_text(item.get("stock_hint", ""))
     text = normalize_signal_text(f"{item.get('raw_snippet', '')} {item.get('raw_payload', '')}")
     if stock_hint in {"0", "outofstock", "soldout", "unavailable"}:
-        return False
-    return not any(normalize_signal_text(marker) in text for marker in SOLD_OUT_MARKERS)
+        return "已按设置排除售罄商品"
+    if any(normalize_signal_text(marker) in text for marker in SOLD_OUT_MARKERS):
+        return "已按设置排除售罄商品"
+    return ""
+
+
+def should_keep_catalog_item(item: dict[str, Any], options: dict[str, Any]) -> bool:
+    return not catalog_item_filter_reject_reason(item, options)
 
 
 def prepare_catalog_item(item: dict[str, Any], source_url: str, page_url: str, discovery_source: str, backend_used: str, options: dict[str, Any]) -> dict[str, Any]:

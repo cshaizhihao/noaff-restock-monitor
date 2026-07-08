@@ -536,6 +536,25 @@
         if (!items.length && !rejected.length && !failures.length) {
             return '<p class="text-sm text-slate-500">暂无商品预览，请先在发现结果中抓取选中 URL。</p>';
         }
+        const summaryHtml = `
+            <div class="merchant-preview-summary">
+                <div>
+                    <span>可入库</span>
+                    <strong>${items.length}</strong>
+                    <p>高置信商品会默认勾选，确认后可写入商品库。</p>
+                </div>
+                <div>
+                    <span>需要人工确认</span>
+                    <strong>${rejected.length}</strong>
+                    <p>低置信、关键词不匹配、语言/导航/步骤标题会留在这里。</p>
+                </div>
+                <div>
+                    <span>抓取失败</span>
+                    <strong>${failures.length}</strong>
+                    <p>失败项会给出恢复建议，不会自动创建任务。</p>
+                </div>
+            </div>
+        `;
         const acceptedHtml = items.map((item) => {
             const [stockClass, stockText] = merchantStockStatusMeta(item);
             const confidence = Number(item.confidence || 0);
@@ -570,7 +589,8 @@
             `;
         }).join("");
         const rejectedHtml = rejected.length ? `
-            <div class="merchant-preview-section-title">已过滤候选</div>
+            <div class="merchant-preview-section-title">需要人工确认 / 已过滤候选</div>
+            <p class="merchant-preview-help">这些候选不会写入商品库。常见原因是目标关键词不匹配、置信度过低、语言切换、导航、页脚或步骤标题。</p>
             ${rejected.slice(0, 20).map((item) => `
                 <article class="merchant-card rounded-xl border border-amber-500/15 bg-amber-500/5 p-4">
                     <div class="flex flex-wrap items-start justify-between gap-3">
@@ -584,7 +604,8 @@
             `).join("")}
         ` : "";
         const failureHtml = failures.length ? `
-            <div class="merchant-preview-section-title">失败项</div>
+            <div class="merchant-preview-section-title">抓取失败项</div>
+            <p class="merchant-preview-help">失败项不会进入商品库。按错误提示调整抓取方式、Firecrawl 配置、目标关键词或替代公开页面后再重试。</p>
             ${failures.slice(0, 20).map((failure) => `
                 <article class="merchant-card rounded-xl border border-rose-500/15 bg-rose-500/5 p-4">
                     <h4 class="truncate text-sm font-bold text-rose-100">${escapeHtml(failure.url || failure.error_kind || "抓取失败")}</h4>
@@ -592,7 +613,7 @@
                 </article>
             `).join("")}
         ` : "";
-        return `${acceptedHtml}${rejectedHtml}${failureHtml}`;
+        return `${summaryHtml}${acceptedHtml}${rejectedHtml}${failureHtml}`;
     }
 
     function fetchAttemptMeta(task) {

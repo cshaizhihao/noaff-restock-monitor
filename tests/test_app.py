@@ -739,6 +739,12 @@ class PortalAppTestCase(unittest.TestCase):
                         <p>1 vCPU 1GB RAM 20GB SSD</p>
                         <a href="/cart.php?a=add&pid=99">Order Now</a>
                       </section>
+                      <section class="product-card">
+                        <h3>Tokyo Preview VPS</h3>
+                        <p>$8.90 USD / month</p>
+                        <p>1 vCPU 1GB RAM 20GB SSD</p>
+                        <a href="/cart.php?a=add&pid=100">Order Now</a>
+                      </section>
                     </body></html>
                     """
                 return """
@@ -792,6 +798,8 @@ class PortalAppTestCase(unittest.TestCase):
                     "catalog_scrape_strategy": "browser",
                     "default_fetch_strategy": "generic_pricing_table",
                     "default_extractor": "generic_pricing_table",
+                    "target_keyword": "HK",
+                    "target_keyword_mode": "contains",
                     "candidate_urls": [item for item in urls if item["url"].endswith("/store/hk-vps")],
                 },
             )
@@ -799,6 +807,9 @@ class PortalAppTestCase(unittest.TestCase):
             preview_payload = preview.get_json()["result"]
             self.assertEqual([item["title"] for item in preview_payload["items"]], ["HK Preview VPS"])
             self.assertTrue(any(item["reject_reason"] for item in preview_payload["rejected_items"]))
+            rejected_reasons = {item["title"]: item["reject_reason"] for item in preview_payload["rejected_items"]}
+            self.assertIn("Tokyo Preview VPS", rejected_reasons)
+            self.assertIn("目标关键词不匹配", rejected_reasons["Tokyo Preview VPS"])
 
             with app_module.open_connection() as connection:
                 self.assertEqual(connection.execute("SELECT COUNT(*) FROM merchant_sources").fetchone()[0], 0)
@@ -3546,6 +3557,99 @@ class PortalAppTestCase(unittest.TestCase):
         self.assertEqual(result.stock, 1)
         self.assertIn("HKG.AS3.T1.WEE", result.fragment)
         self.assertIn("可继续下单页面", result.detail)
+
+    def test_generic_pricing_table_handles_dmit_tier1_selected_product_url(self) -> None:
+        fetch_result = app_module.FetchResult(
+            html="",
+            final_url="https://www.dmit.io/cart.php?region=hong-kong&network=tier-1&generation=as3&product=hkg.as3.t1.wee",
+        )
+        html_text = """
+        <main>
+          <section>
+            <h2>選擇網絡類型</h2>
+            <button>Premium</button>
+            <button>Tier 1</button>
+          </section>
+          <section>
+            <h2>選擇實例類型</h2>
+            <article class="product-card selected">
+              <h3>HKG.AS3.T1.WEE</h3>
+              <p>$ 36.90 USD / 年繳</p>
+              <p>1 vCores</p>
+              <p>1.0GB RAM</p>
+              <p>20GB SSD</p>
+              <p>1000GB @ 4Gbps</p>
+            </article>
+            <article class="product-card">
+              <h3>HKG.AS3.T1.TINY</h3>
+              <p>$ 6.90 USD / 月繳</p>
+              <p>1 vCores</p>
+              <p>1.0GB RAM</p>
+              <p>20GB SSD</p>
+              <p>2000GB @ 4Gbps</p>
+            </article>
+          </section>
+          <footer class="cart-summary">
+            <button type="button">繼續</button>
+          </footer>
+        </main>
+        """
+
+        result = app_module.extract_stock_for_strategy(
+            "generic_pricing_table",
+            html_text,
+            "Dmit HKG.AS3.T1.WEE",
+            {
+                "fetch_strategy": "firecrawl",
+                "monitor_url": "https://www.dmit.io/cart.php?region=hong-kong&network=tier-1&generation=as3&product=hkg.as3.t1.wee",
+            },
+            fetch_result,
+        )
+
+        self.assertEqual(result.stock, 1)
+        self.assertIn("HKG.AS3.T1.WEE", result.fragment)
+        self.assertIn("按有货处理", result.detail)
+
+    def test_generic_pricing_table_does_not_override_target_soldout_with_continue_button(self) -> None:
+        fetch_result = app_module.FetchResult(
+            html="",
+            final_url="https://www.dmit.io/cart.php?region=los-angeles&network=premium&generation=as3&product=lax.as3.pro.tiny",
+        )
+        html_text = """
+        <main>
+          <section>
+            <h2>選擇實例類型</h2>
+            <article class="product-card">
+              <h3>HKG.AS3.Pro.TINY</h3>
+              <p>$ 6.90 USD / 月繳</p>
+              <p>1 vCores 1.0GB RAM 20GB SSD</p>
+            </article>
+            <article class="product-card selected">
+              <h3>LAX.AS3.Pro.TINY</h3>
+              <p>$ 6.90 USD / 月繳</p>
+              <button disabled>Out of Stock</button>
+            </article>
+          </section>
+          <footer class="cart-summary">
+            <button type="button">繼續</button>
+          </footer>
+        </main>
+        """
+
+        result = app_module.extract_stock_for_strategy(
+            "generic_pricing_table",
+            html_text,
+            "Dmit LAX.AS3.Pro.TINY",
+            {
+                "fetch_strategy": "firecrawl",
+                "monitor_url": "https://www.dmit.io/cart.php?region=los-angeles&network=premium&generation=as3&product=lax.as3.pro.tiny",
+            },
+            fetch_result,
+        )
+
+        self.assertEqual(result.stock, 0)
+        self.assertIn("LAX.AS3.Pro.TINY", result.fragment)
+        self.assertIn("售罄", result.detail)
 
     def test_generic_pricing_table_unknown_detail_explains_missing_signal_or_target(self) -> None:
         fetch_result = app_module.FetchResult(html="", final_url="https://example.com/pricing")
