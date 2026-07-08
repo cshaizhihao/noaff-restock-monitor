@@ -1011,11 +1011,12 @@ button:disabled,
 }
 
 .task-products-panel {
-    min-height: min(64vh, 44rem);
+    min-height: 0;
+    padding: 0.85rem;
 }
 
 .task-products-panel .task-list-stack {
-    max-height: min(58vh, 40rem);
+    max-height: min(58vh, 34rem);
 }
 
 .task-empty-state {
@@ -1089,12 +1090,16 @@ button:disabled,
     max-height: min(54vh, 40rem);
     overflow-y: auto;
     display: grid;
+    align-content: start;
+    align-items: start;
     gap: 0.75rem;
+    grid-auto-rows: min-content;
     padding-right: 0.25rem;
 }
 
 .task-row {
     position: relative;
+    align-self: start;
     border: 1px solid rgba(31, 41, 55, 0.92);
     border-radius: var(--radius);
     background: rgba(13, 19, 29, 0.72);
