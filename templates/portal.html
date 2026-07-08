@@ -567,11 +567,18 @@
                                                 <small>Telegram 与轮询</small>
                                             </span>
                                         </button>
-                                        <button type="button" class="settings-nav-item settings-entry settings-entry-top" data-settings-target="settings-browser-runtime">
+                                        <button type="button" class="settings-nav-item settings-entry settings-entry-bottom" data-settings-target="settings-browser-runtime">
                                             <span class="settings-entry-icon">BR</span>
                                             <span class="settings-entry-copy">
                                                 <strong>浏览器运行时</strong>
                                                 <small>Chromium 端口</small>
+                                            </span>
+                                        </button>
+                                        <button type="button" class="settings-nav-item settings-entry settings-entry-top" data-settings-target="settings-scrapling">
+                                            <span class="settings-entry-icon">SC</span>
+                                            <span class="settings-entry-copy">
+                                                <strong>Scrapling 采集引擎</strong>
+                                                <small>主采集后端</small>
                                             </span>
                                         </button>
                                         <button type="button" class="settings-nav-item settings-entry settings-entry-top" data-settings-target="settings-firecrawl">
@@ -667,6 +674,98 @@
                                                     <label for="settings-catalog-port" class="form-label">商品入库浏览器端口</label>
                                                     <input id="settings-catalog-port" type="number" min="1024" max="65535" class="input-dark">
                                                 </div>
+                                            </div>
+                                        </section>
+
+                                        <section id="settings-scrapling" class="settings-section settings-page hidden" data-settings-panel>
+                                            <div class="settings-section-heading">
+                                                <div>
+                                                    <p class="settings-kicker">Scrapling</p>
+                                                    <h3 class="panel-heading">Scrapling 采集引擎</h3>
+                                                </div>
+                                                <div class="settings-section-actions">
+                                                    <button type="button" class="ghost-button settings-back-button" data-settings-back>返回</button>
+                                                    <button type="submit" class="primary-button">保存 Scrapling</button>
+                                                </div>
+                                            </div>
+                                            <div class="settings-grid settings-scrapling-grid">
+                                                <div class="settings-field settings-field-wide scrapling-status-box">
+                                                    <div>
+                                                        <p class="form-label">当前状态</p>
+                                                        <p id="settings-scrapling-status" class="field-help">等待系统状态。</p>
+                                                    </div>
+                                                    <span id="settings-scrapling-status-pill" class="rounded-full border border-slate-700 bg-slate-950/70 px-3 py-1 text-xs font-bold text-slate-400">未检测</span>
+                                                </div>
+                                                <label class="settings-check">
+                                                    <input id="settings-scrapling-enabled" type="checkbox" class="h-4 w-4 rounded border-slate-700 bg-slate-950 text-indigo-500">
+                                                    启用 Scrapling
+                                                </label>
+                                                <label class="settings-check">
+                                                    <input id="settings-scrapling-use-for-monitor" type="checkbox" class="h-4 w-4 rounded border-slate-700 bg-slate-950 text-indigo-500">
+                                                    用于定时监控
+                                                </label>
+                                                <label class="settings-check">
+                                                    <input id="settings-scrapling-use-for-catalog" type="checkbox" class="h-4 w-4 rounded border-slate-700 bg-slate-950 text-indigo-500">
+                                                    用于商品入库
+                                                </label>
+                                                <label class="settings-check">
+                                                    <input id="settings-scrapling-session-reuse" type="checkbox" class="h-4 w-4 rounded border-slate-700 bg-slate-950 text-indigo-500">
+                                                    复用站点会话
+                                                </label>
+                                                <label class="settings-check">
+                                                    <input id="settings-scrapling-adaptive-selector" type="checkbox" class="h-4 w-4 rounded border-slate-700 bg-slate-950 text-indigo-500">
+                                                    启用自适应选择器
+                                                </label>
+                                                <div class="settings-field">
+                                                    <label for="settings-scrapling-default-mode" class="form-label">默认采集模式</label>
+                                                    <select id="settings-scrapling-default-mode" class="input-dark">
+                                                        <option value="standard">标准：普通公开页面</option>
+                                                        <option value="dynamic">增强：JS 渲染页面</option>
+                                                        <option value="stealth">高兼容：复杂页面，低并发</option>
+                                                    </select>
+                                                </div>
+                                                <details class="settings-field-wide settings-advanced-block">
+                                                    <summary>高级参数</summary>
+                                                    <div class="settings-grid settings-grid-three mt-4">
+                                                        <div class="settings-field">
+                                                            <label for="settings-scrapling-timeout-standard" class="form-label">标准超时秒数</label>
+                                                            <input id="settings-scrapling-timeout-standard" type="number" min="5" max="180" class="input-dark">
+                                                        </div>
+                                                        <div class="settings-field">
+                                                            <label for="settings-scrapling-timeout-dynamic" class="form-label">增强超时秒数</label>
+                                                            <input id="settings-scrapling-timeout-dynamic" type="number" min="10" max="240" class="input-dark">
+                                                        </div>
+                                                        <div class="settings-field">
+                                                            <label for="settings-scrapling-timeout-stealth" class="form-label">高兼容超时秒数</label>
+                                                            <input id="settings-scrapling-timeout-stealth" type="number" min="15" max="300" class="input-dark">
+                                                        </div>
+                                                        <div class="settings-field">
+                                                            <label for="settings-scrapling-cooldown-standard" class="form-label">标准域名冷却秒数</label>
+                                                            <input id="settings-scrapling-cooldown-standard" type="number" min="0" max="3600" class="input-dark">
+                                                        </div>
+                                                        <div class="settings-field">
+                                                            <label for="settings-scrapling-cooldown-dynamic" class="form-label">增强域名冷却秒数</label>
+                                                            <input id="settings-scrapling-cooldown-dynamic" type="number" min="0" max="7200" class="input-dark">
+                                                        </div>
+                                                        <div class="settings-field">
+                                                            <label for="settings-scrapling-cooldown-stealth" class="form-label">高兼容域名冷却秒数</label>
+                                                            <input id="settings-scrapling-cooldown-stealth" type="number" min="0" max="14400" class="input-dark">
+                                                        </div>
+                                                        <div class="settings-field">
+                                                            <label for="settings-scrapling-concurrency-standard" class="form-label">标准并发</label>
+                                                            <input id="settings-scrapling-concurrency-standard" type="number" min="1" max="10" class="input-dark">
+                                                        </div>
+                                                        <div class="settings-field">
+                                                            <label for="settings-scrapling-concurrency-dynamic" class="form-label">增强并发</label>
+                                                            <input id="settings-scrapling-concurrency-dynamic" type="number" min="1" max="5" class="input-dark">
+                                                        </div>
+                                                        <div class="settings-field">
+                                                            <label for="settings-scrapling-concurrency-stealth" class="form-label">高兼容并发</label>
+                                                            <input id="settings-scrapling-concurrency-stealth" type="number" min="1" max="3" class="input-dark">
+                                                        </div>
+                                                    </div>
+                                                </details>
+                                                <p class="settings-field-wide text-sm leading-6 text-slate-400">Scrapling 将作为后续主采集引擎。普通用户只需要选择默认模式；高级参数会在后续采集链路接入时用于限流、冷却和会话复用。</p>
                                             </div>
                                         </section>
 

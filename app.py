@@ -1,6 +1,7 @@
 import hashlib
 import hmac
 import html as html_module
+import importlib.util
 import ipaddress
 import json
 import logging
@@ -127,6 +128,21 @@ DEFAULT_FIRECRAWL_ZERO_DATA_RETENTION = env_bool("FIRECRAWL_ZERO_DATA_RETENTION"
 DEFAULT_FIRECRAWL_USE_FOR_MONITOR = env_bool("FIRECRAWL_USE_FOR_MONITOR", False)
 DEFAULT_FIRECRAWL_USE_FOR_CATALOG = env_bool("FIRECRAWL_USE_FOR_CATALOG", True)
 DEFAULT_FIRECRAWL_CATALOG_LIMIT = int(os.getenv("FIRECRAWL_CATALOG_LIMIT", "50"))
+DEFAULT_SCRAPLING_ENABLED = env_bool("SCRAPLING_ENABLED", True)
+DEFAULT_SCRAPLING_DEFAULT_MODE = os.getenv("SCRAPLING_DEFAULT_MODE", "standard").strip().lower() or "standard"
+DEFAULT_SCRAPLING_USE_FOR_MONITOR = env_bool("SCRAPLING_USE_FOR_MONITOR", True)
+DEFAULT_SCRAPLING_USE_FOR_CATALOG = env_bool("SCRAPLING_USE_FOR_CATALOG", True)
+DEFAULT_SCRAPLING_TIMEOUT_STANDARD = int(os.getenv("SCRAPLING_TIMEOUT_STANDARD", "25"))
+DEFAULT_SCRAPLING_TIMEOUT_DYNAMIC = int(os.getenv("SCRAPLING_TIMEOUT_DYNAMIC", "45"))
+DEFAULT_SCRAPLING_TIMEOUT_STEALTH = int(os.getenv("SCRAPLING_TIMEOUT_STEALTH", "75"))
+DEFAULT_SCRAPLING_DOMAIN_COOLDOWN_STANDARD = int(os.getenv("SCRAPLING_DOMAIN_COOLDOWN_STANDARD", "0"))
+DEFAULT_SCRAPLING_DOMAIN_COOLDOWN_DYNAMIC = int(os.getenv("SCRAPLING_DOMAIN_COOLDOWN_DYNAMIC", "60"))
+DEFAULT_SCRAPLING_DOMAIN_COOLDOWN_STEALTH = int(os.getenv("SCRAPLING_DOMAIN_COOLDOWN_STEALTH", "300"))
+DEFAULT_SCRAPLING_MAX_CONCURRENCY_STANDARD = int(os.getenv("SCRAPLING_MAX_CONCURRENCY_STANDARD", "3"))
+DEFAULT_SCRAPLING_MAX_CONCURRENCY_DYNAMIC = int(os.getenv("SCRAPLING_MAX_CONCURRENCY_DYNAMIC", "2"))
+DEFAULT_SCRAPLING_MAX_CONCURRENCY_STEALTH = int(os.getenv("SCRAPLING_MAX_CONCURRENCY_STEALTH", "1"))
+DEFAULT_SCRAPLING_SESSION_REUSE = env_bool("SCRAPLING_SESSION_REUSE", True)
+DEFAULT_SCRAPLING_ADAPTIVE_SELECTOR = env_bool("SCRAPLING_ADAPTIVE_SELECTOR", True)
 DEFAULT_CATALOG_DISCOVERY_STRATEGY = os.getenv("CATALOG_DISCOVERY_STRATEGY", "local").strip().lower() or "local"
 DEFAULT_CATALOG_SCRAPE_STRATEGY = os.getenv("CATALOG_SCRAPE_STRATEGY", "browser").strip().lower() or "browser"
 DEFAULT_CATALOG_FETCH_STRATEGY = os.getenv("CATALOG_DEFAULT_FETCH_STRATEGY", "browser").strip().lower() or "browser"
@@ -252,6 +268,21 @@ SETTINGS_DEFAULTS = {
     "firecrawl_use_for_monitor": settings_bool_text(DEFAULT_FIRECRAWL_USE_FOR_MONITOR),
     "firecrawl_use_for_catalog": settings_bool_text(DEFAULT_FIRECRAWL_USE_FOR_CATALOG),
     "firecrawl_catalog_limit": str(DEFAULT_FIRECRAWL_CATALOG_LIMIT),
+    "scrapling_enabled": settings_bool_text(DEFAULT_SCRAPLING_ENABLED),
+    "scrapling_default_mode": DEFAULT_SCRAPLING_DEFAULT_MODE,
+    "scrapling_use_for_monitor": settings_bool_text(DEFAULT_SCRAPLING_USE_FOR_MONITOR),
+    "scrapling_use_for_catalog": settings_bool_text(DEFAULT_SCRAPLING_USE_FOR_CATALOG),
+    "scrapling_timeout_standard": str(DEFAULT_SCRAPLING_TIMEOUT_STANDARD),
+    "scrapling_timeout_dynamic": str(DEFAULT_SCRAPLING_TIMEOUT_DYNAMIC),
+    "scrapling_timeout_stealth": str(DEFAULT_SCRAPLING_TIMEOUT_STEALTH),
+    "scrapling_domain_cooldown_standard": str(DEFAULT_SCRAPLING_DOMAIN_COOLDOWN_STANDARD),
+    "scrapling_domain_cooldown_dynamic": str(DEFAULT_SCRAPLING_DOMAIN_COOLDOWN_DYNAMIC),
+    "scrapling_domain_cooldown_stealth": str(DEFAULT_SCRAPLING_DOMAIN_COOLDOWN_STEALTH),
+    "scrapling_max_concurrency_standard": str(DEFAULT_SCRAPLING_MAX_CONCURRENCY_STANDARD),
+    "scrapling_max_concurrency_dynamic": str(DEFAULT_SCRAPLING_MAX_CONCURRENCY_DYNAMIC),
+    "scrapling_max_concurrency_stealth": str(DEFAULT_SCRAPLING_MAX_CONCURRENCY_STEALTH),
+    "scrapling_session_reuse": settings_bool_text(DEFAULT_SCRAPLING_SESSION_REUSE),
+    "scrapling_adaptive_selector": settings_bool_text(DEFAULT_SCRAPLING_ADAPTIVE_SELECTOR),
     "catalog_discovery_strategy": DEFAULT_CATALOG_DISCOVERY_STRATEGY,
     "catalog_scrape_strategy": DEFAULT_CATALOG_SCRAPE_STRATEGY,
     "catalog_default_fetch_strategy": DEFAULT_CATALOG_FETCH_STRATEGY,
@@ -336,6 +367,7 @@ CATALOG_EXTRACTORS = {
     CATALOG_EXTRACTOR_FALLBACK,
 }
 CATALOG_DEDUPE_POLICIES = {"by_url", "by_title_url", "by_pid"}
+SCRAPLING_MODES = {"standard", "dynamic", "stealth"}
 CATALOG_TARGET_KEYWORD_MODES = {"exact", "contains", "fuzzy"}
 CATALOG_URL_KEEP_MARKERS = (
     "store",
@@ -676,6 +708,53 @@ def task_fetch_strategy(task: Any) -> str:
 def normalize_catalog_choice(value: Any, allowed: set[str], default: str) -> str:
     normalized = str(value or "").strip().lower().replace("-", "_")
     return normalized if normalized in allowed else default
+
+
+def normalize_scrapling_mode(value: Any) -> str:
+    mode = str(value or DEFAULT_SCRAPLING_DEFAULT_MODE).strip().lower().replace("-", "_")
+    return mode if mode in SCRAPLING_MODES else "standard"
+
+
+def bounded_setting_int(value: Any, default: int, minimum: int, maximum: int) -> int:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        parsed = default
+    return max(minimum, min(maximum, parsed))
+
+
+def normalize_scrapling_settings(raw: dict[str, str]) -> dict[str, Any]:
+    return {
+        "scrapling_enabled": parse_setting_bool(raw.get("scrapling_enabled"), DEFAULT_SCRAPLING_ENABLED),
+        "scrapling_default_mode": normalize_scrapling_mode(raw.get("scrapling_default_mode")),
+        "scrapling_use_for_monitor": parse_setting_bool(raw.get("scrapling_use_for_monitor"), DEFAULT_SCRAPLING_USE_FOR_MONITOR),
+        "scrapling_use_for_catalog": parse_setting_bool(raw.get("scrapling_use_for_catalog"), DEFAULT_SCRAPLING_USE_FOR_CATALOG),
+        "scrapling_timeout_standard": bounded_setting_int(raw.get("scrapling_timeout_standard"), DEFAULT_SCRAPLING_TIMEOUT_STANDARD, 5, 180),
+        "scrapling_timeout_dynamic": bounded_setting_int(raw.get("scrapling_timeout_dynamic"), DEFAULT_SCRAPLING_TIMEOUT_DYNAMIC, 10, 240),
+        "scrapling_timeout_stealth": bounded_setting_int(raw.get("scrapling_timeout_stealth"), DEFAULT_SCRAPLING_TIMEOUT_STEALTH, 15, 300),
+        "scrapling_domain_cooldown_standard": bounded_setting_int(raw.get("scrapling_domain_cooldown_standard"), DEFAULT_SCRAPLING_DOMAIN_COOLDOWN_STANDARD, 0, 3600),
+        "scrapling_domain_cooldown_dynamic": bounded_setting_int(raw.get("scrapling_domain_cooldown_dynamic"), DEFAULT_SCRAPLING_DOMAIN_COOLDOWN_DYNAMIC, 0, 7200),
+        "scrapling_domain_cooldown_stealth": bounded_setting_int(raw.get("scrapling_domain_cooldown_stealth"), DEFAULT_SCRAPLING_DOMAIN_COOLDOWN_STEALTH, 0, 14400),
+        "scrapling_max_concurrency_standard": bounded_setting_int(raw.get("scrapling_max_concurrency_standard"), DEFAULT_SCRAPLING_MAX_CONCURRENCY_STANDARD, 1, 10),
+        "scrapling_max_concurrency_dynamic": bounded_setting_int(raw.get("scrapling_max_concurrency_dynamic"), DEFAULT_SCRAPLING_MAX_CONCURRENCY_DYNAMIC, 1, 5),
+        "scrapling_max_concurrency_stealth": bounded_setting_int(raw.get("scrapling_max_concurrency_stealth"), DEFAULT_SCRAPLING_MAX_CONCURRENCY_STEALTH, 1, 3),
+        "scrapling_session_reuse": parse_setting_bool(raw.get("scrapling_session_reuse"), DEFAULT_SCRAPLING_SESSION_REUSE),
+        "scrapling_adaptive_selector": parse_setting_bool(raw.get("scrapling_adaptive_selector"), DEFAULT_SCRAPLING_ADAPTIVE_SELECTOR),
+    }
+
+
+def scrapling_runtime_status() -> dict[str, str | bool]:
+    if importlib.util.find_spec("scrapling") is None:
+        return {
+            "available": False,
+            "status": "unavailable",
+            "detail": "Scrapling 未安装或当前运行环境无法导入；安装依赖后即可启用。",
+        }
+    return {
+        "available": True,
+        "status": "available",
+        "detail": "Scrapling 已安装，配置骨架可用。",
+    }
 
 
 def catalog_option_int(value: Any, default: int, minimum: int = 1, maximum: int = 250) -> int:
@@ -1565,7 +1644,7 @@ def normalize_settings(raw: dict[str, str]) -> dict[str, Any]:
         CATALOG_EXTRACTORS,
         DEFAULT_CATALOG_EXTRACTOR,
     )
-    return {
+    payload = {
         "telegram_bot_token": raw.get("telegram_bot_token", "").strip(),
         "telegram_chat_id": legacy_chat_id,
         "telegram_chat_ids": chat_ids,
@@ -1615,6 +1694,8 @@ def normalize_settings(raw: dict[str, str]) -> dict[str, Any]:
         "catalog_max_import_items": max(1, min(250, int(raw.get("catalog_max_import_items") or 50))),
         "catalog_timeout_seconds": max(10, min(180, int(raw.get("catalog_timeout_seconds") or timeout_seconds))),
     }
+    payload.update(normalize_scrapling_settings(raw))
+    return payload
 
 
 def load_settings(connection: sqlite3.Connection) -> dict[str, str]:
@@ -6723,6 +6804,22 @@ def make_app() -> Flask:
                     "firecrawl_use_for_monitor": settings_payload["firecrawl_use_for_monitor"],
                     "firecrawl_use_for_catalog": settings_payload["firecrawl_use_for_catalog"],
                     "firecrawl_catalog_limit": settings_payload["firecrawl_catalog_limit"],
+                    "scrapling_status": scrapling_runtime_status(),
+                    "scrapling_enabled": settings_payload["scrapling_enabled"],
+                    "scrapling_default_mode": settings_payload["scrapling_default_mode"],
+                    "scrapling_use_for_monitor": settings_payload["scrapling_use_for_monitor"],
+                    "scrapling_use_for_catalog": settings_payload["scrapling_use_for_catalog"],
+                    "scrapling_timeout_standard": settings_payload["scrapling_timeout_standard"],
+                    "scrapling_timeout_dynamic": settings_payload["scrapling_timeout_dynamic"],
+                    "scrapling_timeout_stealth": settings_payload["scrapling_timeout_stealth"],
+                    "scrapling_domain_cooldown_standard": settings_payload["scrapling_domain_cooldown_standard"],
+                    "scrapling_domain_cooldown_dynamic": settings_payload["scrapling_domain_cooldown_dynamic"],
+                    "scrapling_domain_cooldown_stealth": settings_payload["scrapling_domain_cooldown_stealth"],
+                    "scrapling_max_concurrency_standard": settings_payload["scrapling_max_concurrency_standard"],
+                    "scrapling_max_concurrency_dynamic": settings_payload["scrapling_max_concurrency_dynamic"],
+                    "scrapling_max_concurrency_stealth": settings_payload["scrapling_max_concurrency_stealth"],
+                    "scrapling_session_reuse": settings_payload["scrapling_session_reuse"],
+                    "scrapling_adaptive_selector": settings_payload["scrapling_adaptive_selector"],
                     "catalog_discovery_strategy": settings_payload["catalog_discovery_strategy"],
                     "catalog_scrape_strategy": settings_payload["catalog_scrape_strategy"],
                     "catalog_default_fetch_strategy": settings_payload["catalog_default_fetch_strategy"],
@@ -7753,6 +7850,15 @@ def make_app() -> Flask:
             ("firecrawl_timeout_seconds", 10, 180),
             ("firecrawl_max_age_ms", 0, 604800000),
             ("firecrawl_catalog_limit", 1, 250),
+            ("scrapling_timeout_standard", 5, 180),
+            ("scrapling_timeout_dynamic", 10, 240),
+            ("scrapling_timeout_stealth", 15, 300),
+            ("scrapling_domain_cooldown_standard", 0, 3600),
+            ("scrapling_domain_cooldown_dynamic", 0, 7200),
+            ("scrapling_domain_cooldown_stealth", 0, 14400),
+            ("scrapling_max_concurrency_standard", 1, 10),
+            ("scrapling_max_concurrency_dynamic", 1, 5),
+            ("scrapling_max_concurrency_stealth", 1, 3),
         ):
             if key in payload:
                 try:
@@ -7771,9 +7877,18 @@ def make_app() -> Flask:
             "firecrawl_zero_data_retention",
             "firecrawl_use_for_monitor",
             "firecrawl_use_for_catalog",
+            "scrapling_enabled",
+            "scrapling_use_for_monitor",
+            "scrapling_use_for_catalog",
+            "scrapling_session_reuse",
+            "scrapling_adaptive_selector",
         ):
             if key in payload:
                 updates[key] = settings_bool_text(parse_setting_bool(payload.get(key)))
+
+        if "scrapling_default_mode" in payload:
+            mode = normalize_scrapling_mode(payload.get("scrapling_default_mode"))
+            updates["scrapling_default_mode"] = mode
 
         if "firecrawl_api_url" in payload:
             api_url = str(payload.get("firecrawl_api_url", "")).strip().rstrip("/")

@@ -555,6 +555,10 @@ button:disabled,
     grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
+.settings-scrapling-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
 .settings-field {
     min-width: 0;
 }
@@ -572,6 +576,31 @@ button:disabled,
     border-radius: var(--radius);
     background: rgba(5, 150, 105, 0.08);
     padding: 1rem;
+}
+
+.scrapling-status-box {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+    border: 1px solid rgba(34, 197, 94, 0.18);
+    border-radius: var(--radius);
+    background: rgba(5, 150, 105, 0.08);
+    padding: 1rem;
+}
+
+.settings-advanced-block {
+    border: 1px solid var(--color-line-strong);
+    border-radius: var(--radius);
+    background: rgba(6, 10, 17, 0.62);
+    padding: 0.9rem;
+}
+
+.settings-advanced-block summary {
+    cursor: pointer;
+    color: #e2e8f0;
+    font-size: 0.86rem;
+    font-weight: 800;
 }
 
 .firecrawl-test-result {
@@ -749,8 +778,14 @@ button:disabled,
     .settings-entry-list,
     .settings-grid,
     .settings-grid-three,
-    .settings-firecrawl-grid {
+    .settings-firecrawl-grid,
+    .settings-scrapling-grid {
         grid-template-columns: 1fr;
+    }
+
+    .scrapling-status-box {
+        align-items: flex-start;
+        flex-direction: column;
     }
 
     .firecrawl-guide-panel {

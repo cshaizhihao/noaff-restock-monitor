@@ -2597,6 +2597,77 @@ class PortalAppTestCase(unittest.TestCase):
         self.assertEqual(payload["settings"]["firecrawl_timeout_seconds"], 61)
         self.assertEqual(payload["settings"]["firecrawl_catalog_limit"], 51)
 
+    def test_scrapling_settings_save_and_snapshot(self) -> None:
+        _, headers = self.login()
+
+        response = self.client.post(
+            f"{app_module.PORTAL_PATH}/api/settings/telegram",
+            headers=headers,
+            base_url=BASE_URL,
+            json={
+                "scrapling_enabled": False,
+                "scrapling_default_mode": "stealth",
+                "scrapling_use_for_monitor": False,
+                "scrapling_use_for_catalog": True,
+                "scrapling_timeout_standard": 26,
+                "scrapling_timeout_dynamic": 46,
+                "scrapling_timeout_stealth": 76,
+                "scrapling_domain_cooldown_standard": 1,
+                "scrapling_domain_cooldown_dynamic": 61,
+                "scrapling_domain_cooldown_stealth": 301,
+                "scrapling_max_concurrency_standard": 4,
+                "scrapling_max_concurrency_dynamic": 2,
+                "scrapling_max_concurrency_stealth": 1,
+                "scrapling_session_reuse": False,
+                "scrapling_adaptive_selector": True,
+            },
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.get_json()["ok"])
+
+        snapshot = self.client.get(
+            f"{app_module.PORTAL_PATH}/api/snapshot",
+            headers=self.browser_headers(),
+            base_url=BASE_URL,
+        )
+        payload = snapshot.get_json()
+        settings = payload["settings"]
+        self.assertFalse(settings["scrapling_enabled"])
+        self.assertEqual(settings["scrapling_default_mode"], "stealth")
+        self.assertFalse(settings["scrapling_use_for_monitor"])
+        self.assertTrue(settings["scrapling_use_for_catalog"])
+        self.assertEqual(settings["scrapling_timeout_standard"], 26)
+        self.assertEqual(settings["scrapling_timeout_dynamic"], 46)
+        self.assertEqual(settings["scrapling_timeout_stealth"], 76)
+        self.assertEqual(settings["scrapling_domain_cooldown_standard"], 1)
+        self.assertEqual(settings["scrapling_domain_cooldown_dynamic"], 61)
+        self.assertEqual(settings["scrapling_domain_cooldown_stealth"], 301)
+        self.assertEqual(settings["scrapling_max_concurrency_standard"], 4)
+        self.assertEqual(settings["scrapling_max_concurrency_dynamic"], 2)
+        self.assertEqual(settings["scrapling_max_concurrency_stealth"], 1)
+        self.assertFalse(settings["scrapling_session_reuse"])
+        self.assertTrue(settings["scrapling_adaptive_selector"])
+        self.assertIn("scrapling_status", settings)
+        self.assertIsInstance(settings["scrapling_status"].get("available"), bool)
+
+    def test_scrapling_invalid_mode_falls_back_to_standard(self) -> None:
+        _, headers = self.login()
+        response = self.client.post(
+            f"{app_module.PORTAL_PATH}/api/settings/telegram",
+            headers=headers,
+            base_url=BASE_URL,
+            json={"scrapling_default_mode": "unknown-mode"},
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.get_json()["ok"])
+
+        snapshot = self.client.get(
+            f"{app_module.PORTAL_PATH}/api/snapshot",
+            headers=self.browser_headers(),
+            base_url=BASE_URL,
+        )
+        self.assertEqual(snapshot.get_json()["settings"]["scrapling_default_mode"], "standard")
+
     def test_firecrawl_settings_require_explicit_proxy_feature_flags(self) -> None:
         _, headers = self.login()
 

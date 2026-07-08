@@ -89,6 +89,23 @@
         settingsFirecrawlCatalogLimit: document.getElementById("settings-firecrawl-catalog-limit"),
         settingsFirecrawlTestButton: document.getElementById("settings-firecrawl-test-button"),
         settingsFirecrawlTestResult: document.getElementById("settings-firecrawl-test-result"),
+        settingsScraplingStatus: document.getElementById("settings-scrapling-status"),
+        settingsScraplingStatusPill: document.getElementById("settings-scrapling-status-pill"),
+        settingsScraplingEnabled: document.getElementById("settings-scrapling-enabled"),
+        settingsScraplingDefaultMode: document.getElementById("settings-scrapling-default-mode"),
+        settingsScraplingUseForMonitor: document.getElementById("settings-scrapling-use-for-monitor"),
+        settingsScraplingUseForCatalog: document.getElementById("settings-scrapling-use-for-catalog"),
+        settingsScraplingSessionReuse: document.getElementById("settings-scrapling-session-reuse"),
+        settingsScraplingAdaptiveSelector: document.getElementById("settings-scrapling-adaptive-selector"),
+        settingsScraplingTimeoutStandard: document.getElementById("settings-scrapling-timeout-standard"),
+        settingsScraplingTimeoutDynamic: document.getElementById("settings-scrapling-timeout-dynamic"),
+        settingsScraplingTimeoutStealth: document.getElementById("settings-scrapling-timeout-stealth"),
+        settingsScraplingCooldownStandard: document.getElementById("settings-scrapling-cooldown-standard"),
+        settingsScraplingCooldownDynamic: document.getElementById("settings-scrapling-cooldown-dynamic"),
+        settingsScraplingCooldownStealth: document.getElementById("settings-scrapling-cooldown-stealth"),
+        settingsScraplingConcurrencyStandard: document.getElementById("settings-scrapling-concurrency-standard"),
+        settingsScraplingConcurrencyDynamic: document.getElementById("settings-scrapling-concurrency-dynamic"),
+        settingsScraplingConcurrencyStealth: document.getElementById("settings-scrapling-concurrency-stealth"),
         merchantForm: document.getElementById("merchant-form"),
         merchantSourceUrl: document.getElementById("merchant-source-url"),
         merchantSourceName: document.getElementById("merchant-source-name"),
@@ -1595,6 +1612,32 @@
         syncCheckboxValue(els.settingsFirecrawlUseForMonitor, Boolean(settings.firecrawl_use_for_monitor));
         syncCheckboxValue(els.settingsFirecrawlUseForCatalog, settings.firecrawl_use_for_catalog !== false);
         syncInputValue(els.settingsFirecrawlCatalogLimit, settings.firecrawl_catalog_limit || 50);
+        const scraplingStatus = settings.scrapling_status || {};
+        if (els.settingsScraplingStatus) {
+            els.settingsScraplingStatus.textContent = scraplingStatus.detail || "Scrapling 状态等待检测。";
+        }
+        if (els.settingsScraplingStatusPill) {
+            const available = Boolean(scraplingStatus.available);
+            els.settingsScraplingStatusPill.textContent = available ? "可用" : "未安装";
+            els.settingsScraplingStatusPill.className = available
+                ? "rounded-full border border-emerald-500/30 bg-emerald-500/10 px-3 py-1 text-xs font-bold text-emerald-200"
+                : "rounded-full border border-amber-500/30 bg-amber-500/10 px-3 py-1 text-xs font-bold text-amber-200";
+        }
+        syncCheckboxValue(els.settingsScraplingEnabled, settings.scrapling_enabled !== false);
+        syncInputValue(els.settingsScraplingDefaultMode, settings.scrapling_default_mode || "standard");
+        syncCheckboxValue(els.settingsScraplingUseForMonitor, settings.scrapling_use_for_monitor !== false);
+        syncCheckboxValue(els.settingsScraplingUseForCatalog, settings.scrapling_use_for_catalog !== false);
+        syncCheckboxValue(els.settingsScraplingSessionReuse, settings.scrapling_session_reuse !== false);
+        syncCheckboxValue(els.settingsScraplingAdaptiveSelector, settings.scrapling_adaptive_selector !== false);
+        syncInputValue(els.settingsScraplingTimeoutStandard, settings.scrapling_timeout_standard || 25);
+        syncInputValue(els.settingsScraplingTimeoutDynamic, settings.scrapling_timeout_dynamic || 45);
+        syncInputValue(els.settingsScraplingTimeoutStealth, settings.scrapling_timeout_stealth || 75);
+        syncInputValue(els.settingsScraplingCooldownStandard, settings.scrapling_domain_cooldown_standard ?? 0);
+        syncInputValue(els.settingsScraplingCooldownDynamic, settings.scrapling_domain_cooldown_dynamic || 60);
+        syncInputValue(els.settingsScraplingCooldownStealth, settings.scrapling_domain_cooldown_stealth || 300);
+        syncInputValue(els.settingsScraplingConcurrencyStandard, settings.scrapling_max_concurrency_standard || 3);
+        syncInputValue(els.settingsScraplingConcurrencyDynamic, settings.scrapling_max_concurrency_dynamic || 2);
+        syncInputValue(els.settingsScraplingConcurrencyStealth, settings.scrapling_max_concurrency_stealth || 1);
         updateMerchantFirecrawlOptions();
     }
 
@@ -3691,7 +3734,22 @@
             firecrawl_zero_data_retention: Boolean(els.settingsFirecrawlZeroDataRetention?.checked),
             firecrawl_use_for_monitor: Boolean(els.settingsFirecrawlUseForMonitor?.checked),
             firecrawl_use_for_catalog: Boolean(els.settingsFirecrawlUseForCatalog?.checked),
-            firecrawl_catalog_limit: Number(els.settingsFirecrawlCatalogLimit?.value || 50)
+            firecrawl_catalog_limit: Number(els.settingsFirecrawlCatalogLimit?.value || 50),
+            scrapling_enabled: Boolean(els.settingsScraplingEnabled?.checked),
+            scrapling_default_mode: els.settingsScraplingDefaultMode?.value || "standard",
+            scrapling_use_for_monitor: Boolean(els.settingsScraplingUseForMonitor?.checked),
+            scrapling_use_for_catalog: Boolean(els.settingsScraplingUseForCatalog?.checked),
+            scrapling_session_reuse: Boolean(els.settingsScraplingSessionReuse?.checked),
+            scrapling_adaptive_selector: Boolean(els.settingsScraplingAdaptiveSelector?.checked),
+            scrapling_timeout_standard: Number(els.settingsScraplingTimeoutStandard?.value || 25),
+            scrapling_timeout_dynamic: Number(els.settingsScraplingTimeoutDynamic?.value || 45),
+            scrapling_timeout_stealth: Number(els.settingsScraplingTimeoutStealth?.value || 75),
+            scrapling_domain_cooldown_standard: Number(els.settingsScraplingCooldownStandard?.value || 0),
+            scrapling_domain_cooldown_dynamic: Number(els.settingsScraplingCooldownDynamic?.value || 60),
+            scrapling_domain_cooldown_stealth: Number(els.settingsScraplingCooldownStealth?.value || 300),
+            scrapling_max_concurrency_standard: Number(els.settingsScraplingConcurrencyStandard?.value || 3),
+            scrapling_max_concurrency_dynamic: Number(els.settingsScraplingConcurrencyDynamic?.value || 2),
+            scrapling_max_concurrency_stealth: Number(els.settingsScraplingConcurrencyStealth?.value || 1)
         };
         if (els.settingsBotToken.value.trim()) {
             payload.telegram_bot_token = els.settingsBotToken.value.trim();
