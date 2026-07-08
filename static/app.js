@@ -328,7 +328,7 @@
         if (text.includes("firecrawl_zdr_not_enabled") || text.includes("zero data retention") || text.includes("zdr")) return "关闭 Firecrawl zeroDataRetention 后重试，或联系 Firecrawl 开通 ZDR。";
         if (text.includes("firecrawl_permission_error")) return "检查 Firecrawl 账号权限、proxy 模式或 zeroDataRetention 配置。";
         if (text.includes("firecrawl_auth_error") || text.includes("认证失败")) return "检查 Firecrawl API Key。";
-        if (text.includes("firecrawl_credit_required") || text.includes("额度")) return "检查 Firecrawl 额度。";
+        if (text.includes("firecrawl_credit_required") || text.includes("额度")) return "Firecrawl 额度不足，建议切回 Scrapling 自适应；Firecrawl 仅作为外部兜底。";
         if (text.includes("firecrawl_rate_limited") || text.includes("频率")) return "降低频率或稍后重试。";
         if (text.includes("cloudflare") || text.includes("turnstile") || text.includes("验证页")) return "受保护站点，建议 Webhook、手动录入或替代公开页面。";
         if (text.includes("parse_unknown") || text.includes("无法判断")) return "设置目标关键词或更换解析器。";
@@ -352,8 +352,12 @@
                 return "sitemap";
             case "local_page_links":
                 return "page_links";
+            case "local":
+                return "Scrapling 页面链接";
+            case "hybrid":
+                return "Scrapling + 外部 Map";
             case "firecrawl_map":
-                return "firecrawl_map";
+                return "Firecrawl Map 外部兜底";
             case "entry_page":
                 return "入口页面";
             default:

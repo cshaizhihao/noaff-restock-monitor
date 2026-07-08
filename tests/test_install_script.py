@@ -1071,7 +1071,7 @@ class InstallScriptTestCase(unittest.TestCase):
         discovery_block = portal_html.split('id="merchant-discovery-strategy"', 1)[1].split("</select>", 1)[0]
         scrape_block = portal_html.split('id="merchant-scrape-strategy"', 1)[1].split("</select>", 1)[0]
         task_strategy_block = portal_html.split('id="merchant-default-fetch-strategy"', 1)[1].split("</select>", 1)[0]
-        self.assertLess(discovery_block.index('value="firecrawl_map"'), discovery_block.index('value="local"'))
+        self.assertLess(discovery_block.index('value="local"'), discovery_block.index('value="firecrawl_map"'))
         self.assertLess(scrape_block.index('value="scrapling_adaptive"'), scrape_block.index('value="browser"'))
         self.assertLess(scrape_block.index('value="browser"'), scrape_block.index('value="firecrawl"'))
         self.assertLess(task_strategy_block.index('value="scrapling_adaptive"'), task_strategy_block.index('value="browser"'))

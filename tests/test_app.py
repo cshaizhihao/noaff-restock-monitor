@@ -674,6 +674,80 @@ class PortalAppTestCase(unittest.TestCase):
         self.assertIn("Tokyo VPS", result.html)
         self.assertEqual(client.calls, [("standard", "https://merchant.example.com/products", 25)])
 
+    def test_preview_merchant_source_defaults_to_scrapling_discovery(self) -> None:
+        class FakeScraplingResponse:
+            status = 200
+
+            def __init__(self, url: str) -> None:
+                self.url = url
+                self.html_content = """
+                <html>
+                  <head><title>Example IDC Store</title></head>
+                  <body>
+                    <nav>
+                      <a href="/en">English</a>
+                      <a href="/privacy">Privacy</a>
+                    </nav>
+                    <main>
+                      <a href="/cart.php?gid=9">Hong Kong VPS</a>
+                      <article class="product-card">
+                        <h3>HKG Premium VPS</h3>
+                        <p>$ 9.90 USD / month</p>
+                        <p>2 vCores</p>
+                        <p>2GB RAM</p>
+                        <a href="/cart.php?a=add&pid=88">Order Now</a>
+                      </article>
+                    </main>
+                  </body>
+                </html>
+                """
+
+        class FakeScraplingClient:
+            def __init__(self) -> None:
+                self.calls: list[tuple[str, str, int]] = []
+
+            def fetch(self, mode: str, url: str, timeout_seconds: int):
+                self.calls.append((mode, url, timeout_seconds))
+                return FakeScraplingResponse(url)
+
+        class NoBrowser:
+            def fetch_html(self, url: str, timeout_seconds: int) -> str:
+                raise AssertionError("catalog browser should not be used for default Scrapling product intake")
+
+        client = FakeScraplingClient()
+        engine = self.app.extensions["monitor_engine"]
+        original_selector = engine.fetcher_selector
+        original_browser = engine.catalog_browser
+        try:
+            engine.fetcher_selector = app_module.FetcherSelector(scrapling_client=client)
+            engine.catalog_browser = NoBrowser()
+            result = engine.preview_merchant_source(
+                "https://merchant.example.com/products",
+                "",
+                "Example",
+                {**engine.get_runtime_settings(), **self.scrapling_settings()},
+                catalog_options={
+                    "catalog_discovery_strategy": "local",
+                    "catalog_scrape_strategy": "scrapling_adaptive",
+                    "default_fetch_strategy": "scrapling_adaptive",
+                    "target_keyword": "HKG Premium",
+                    "max_discovered_urls": 5,
+                    "max_import_items": 5,
+                    "timeout_seconds": 25,
+                },
+            )
+        finally:
+            engine.fetcher_selector = original_selector
+            engine.catalog_browser = original_browser
+
+        self.assertGreaterEqual(len(client.calls), 1)
+        self.assertEqual(client.calls[0], ("standard", "https://merchant.example.com/products", 25))
+        self.assertEqual(result.source_name, "Example IDC Store")
+        self.assertTrue(result.candidate_urls)
+        self.assertEqual([item["title"] for item in result.items], ["HKG Premium VPS"])
+        self.assertEqual(result.items[0]["fetch_strategy"], "scrapling_adaptive")
+        self.assertEqual(result.items[0]["backend_used"], "scrapling_adaptive")
+
     def test_catalog_discovery_scores_products_and_filters_locale_navigation_noise(self) -> None:
         html_text = """
         <html>
@@ -838,7 +912,7 @@ class PortalAppTestCase(unittest.TestCase):
                 f"{app_module.PORTAL_PATH}/api/merchant/import",
                 headers=headers,
                 base_url=BASE_URL,
-                json={"source_url": "https://merchant.example.com/products"},
+                json={"source_url": "https://merchant.example.com/products", "catalog_scrape_strategy": "browser"},
             )
         finally:
             engine.catalog_browser = original_browser
@@ -993,7 +1067,7 @@ class PortalAppTestCase(unittest.TestCase):
                 f"{app_module.PORTAL_PATH}/api/merchant/import",
                 headers=headers,
                 base_url=BASE_URL,
-                json={"source_url": "https://merchant.example.com/products"},
+                json={"source_url": "https://merchant.example.com/products", "catalog_scrape_strategy": "browser"},
             )
         finally:
             engine.catalog_browser = original_browser
@@ -1037,6 +1111,7 @@ class PortalAppTestCase(unittest.TestCase):
                     "默认分组",
                     engine.get_runtime_settings(),
                     auto_promote=False,
+                    catalog_options={"catalog_scrape_strategy": "browser"},
                 )
         finally:
             engine.catalog_browser = original_browser
@@ -1371,6 +1446,7 @@ class PortalAppTestCase(unittest.TestCase):
                 "网络节点",
                 engine.get_runtime_settings(),
                 auto_promote=False,
+                catalog_options={"catalog_scrape_strategy": "browser"},
             )
         finally:
             engine.catalog_browser = original_browser

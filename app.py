@@ -4268,6 +4268,17 @@ class MonitoringEngine:
                 ) from exc
         raise CatalogBrowserConnectionError(last_error or "商家页面抓取失败。")
 
+    def fetch_catalog_source_entry(self, source_url: str, settings_payload: dict[str, Any], options: dict[str, Any]) -> FetchResult:
+        strategy = options.get("catalog_scrape_strategy") or FETCH_STRATEGY_SCRAPLING_ADAPTIVE
+        if strategy == CATALOG_SCRAPE_FIRECRAWL:
+            return FirecrawlCatalogProvider(settings_payload).scrape(source_url)
+        if strategy in SCRAPLING_FETCH_STRATEGIES or strategy in {
+            CATALOG_SCRAPE_STATIC_HTTP,
+            CATALOG_SCRAPE_ADAPTIVE,
+        }:
+            return self.scrape_catalog_candidate(source_url, settings_payload, options)
+        return self.fetch_catalog_entry_html(source_url, settings_payload, int(options.get("timeout_seconds") or DEFAULT_TIMEOUT_SECONDS))
+
     def scrape_catalog_candidate(self, candidate_url: str, settings_payload: dict[str, Any], options: dict[str, Any]) -> FetchResult:
         strategy = options.get("catalog_scrape_strategy") or FETCH_STRATEGY_SCRAPLING_ADAPTIVE
         timeout_seconds = int(options.get("timeout_seconds") or settings_payload.get("request_timeout_seconds") or DEFAULT_TIMEOUT_SECONDS)
@@ -4368,7 +4379,7 @@ class MonitoringEngine:
         if options["catalog_discovery_strategy"] == CATALOG_DISCOVERY_FIRECRAWL_MAP:
             entry_result = FetchResult(html="", final_url=source_url, detail="firecrawl_map")
         else:
-            entry_result = self.fetch_catalog_entry_html(source_url, settings_payload, int(options["timeout_seconds"]))
+            entry_result = self.fetch_catalog_source_entry(source_url, settings_payload, options)
         html_text = entry_result.html
         if not html_text and options["catalog_discovery_strategy"] != CATALOG_DISCOVERY_FIRECRAWL_MAP:
             raise CatalogBrowserConnectionError(entry_result.detail or "商家页面抓取失败。")
@@ -4455,7 +4466,7 @@ class MonitoringEngine:
             if options["catalog_discovery_strategy"] == CATALOG_DISCOVERY_FIRECRAWL_MAP:
                 entry_html = ""
             else:
-                entry_result_for_preview = self.fetch_catalog_entry_html(source_url, settings_payload, int(options["timeout_seconds"]))
+                entry_result_for_preview = self.fetch_catalog_source_entry(source_url, settings_payload, options)
                 entry_html = entry_result_for_preview.html
                 if not entry_html:
                     raise CatalogBrowserConnectionError(entry_result_for_preview.detail or "商家页面抓取失败。")

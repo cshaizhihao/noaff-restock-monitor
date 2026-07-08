@@ -346,9 +346,9 @@
                                                 <div>
                                                     <label for="merchant-discovery-strategy" class="form-label">发现方式</label>
                                                     <select id="merchant-discovery-strategy" class="input-dark">
-                                                        <option value="firecrawl_map">Firecrawl Map</option>
-                                                        <option value="hybrid">混合发现</option>
-                                                        <option value="local">本地页面链接</option>
+                                                        <option value="local">Scrapling 页面链接</option>
+                                                        <option value="hybrid">Scrapling + 外部 Map</option>
+                                                        <option value="firecrawl_map">Firecrawl Map 外部兜底</option>
                                                     </select>
                                                 </div>
                                                 <div>
@@ -393,11 +393,11 @@
                                             <div class="merchant-guide-grid">
                                                 <div>
                                                     <strong>默认建议</strong>
-                                                    <p>商品入库是人工触发流程，已配置 Firecrawl 时优先用 Firecrawl Map / Scrape；未启用时系统会自动回到本地链接、浏览器或静态 HTTP。</p>
+                                                    <p>默认使用 Scrapling 自适应：先抓入口页发现候选 URL，再抓选中 URL 生成商品预览。Firecrawl 只作为外部兜底，不再作为首选。</p>
                                                 </div>
                                                 <div>
                                                     <strong>边界说明</strong>
-                                                    <p>Cloudflare challenge 会归类为受保护页面；Firecrawl 返回正常内容才会进入解析。</p>
+                                                    <p>Cloudflare challenge 会归类为受保护页面；高兼容模式仍失败时，建议改用 Webhook、手动录入或替代公开页面。</p>
                                                 </div>
                                             </div>
                                         </section>
