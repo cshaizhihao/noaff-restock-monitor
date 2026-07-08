@@ -156,6 +156,9 @@ DEFAULT_SCRAPLING_MAX_CONCURRENCY_STEALTH = int(os.getenv("SCRAPLING_MAX_CONCURR
 DEFAULT_SCRAPLING_SESSION_REUSE = env_bool("SCRAPLING_SESSION_REUSE", True)
 DEFAULT_SCRAPLING_ADAPTIVE_SELECTOR = env_bool("SCRAPLING_ADAPTIVE_SELECTOR", True)
 DEFAULT_SCRAPLING_HEADLESS = env_bool("SCRAPLING_HEADLESS", True)
+DOMAIN_SESSION_TTL_HOURS = int(os.getenv("DOMAIN_SESSION_TTL_HOURS", "24"))
+DOMAIN_SESSION_UNLOCK_TIMEOUT_SECONDS = int(os.getenv("DOMAIN_SESSION_UNLOCK_TIMEOUT_SECONDS", "120"))
+DOMAIN_SESSION_PROFILE_ROOT = Path(os.getenv("DOMAIN_SESSION_PROFILE_ROOT", str(DATA_DIR / "domain-sessions")))
 DEFAULT_CATALOG_DISCOVERY_STRATEGY = os.getenv("CATALOG_DISCOVERY_STRATEGY", "local").strip().lower() or "local"
 DEFAULT_CATALOG_SCRAPE_STRATEGY = os.getenv("CATALOG_SCRAPE_STRATEGY", "multi_engine").strip().lower() or "multi_engine"
 DEFAULT_CATALOG_FETCH_STRATEGY = os.getenv("CATALOG_DEFAULT_FETCH_STRATEGY", "multi_engine").strip().lower() or "multi_engine"
@@ -367,6 +370,9 @@ FIRECRAWL_FETCH_STRATEGIES = {
 }
 FIRECRAWL_COST_ERROR_KINDS = {"firecrawl_credit_required", "firecrawl_rate_limited"}
 FIRECRAWL_COST_COOLDOWN_MINUTES = 360
+DOMAIN_SESSION_STATUS_READY = "ready"
+DOMAIN_SESSION_STATUS_MISSING = "missing"
+DOMAIN_SESSION_STATUS_FAILED = "failed"
 SCRAPLING_FETCH_STRATEGIES = {
     FETCH_STRATEGY_SCRAPLING_STANDARD,
     FETCH_STRATEGY_SCRAPLING_DYNAMIC,
@@ -1075,6 +1081,200 @@ def fetch_domain_for_url(url: Any) -> str:
     except Exception:
         return ""
     return (parsed.hostname or "").lower()
+
+
+def normalize_domain_session_domain(value: Any) -> str:
+    raw = str(value or "").strip()
+    if not raw:
+        return ""
+    if "://" in raw:
+        return fetch_domain_for_url(raw)
+    return raw.split("/", 1)[0].split(":", 1)[0].lower()
+
+
+def safe_domain_profile_name(domain: str) -> str:
+    safe = re.sub(r"[^a-z0-9.-]+", "-", domain.lower()).strip(".-")
+    return safe or "unknown-domain"
+
+
+def domain_session_profile_path(domain: str) -> Path:
+    return DOMAIN_SESSION_PROFILE_ROOT / safe_domain_profile_name(domain)
+
+
+def normalize_cookie_payload(cookies: Any) -> list[dict[str, Any]]:
+    if not isinstance(cookies, list):
+        return []
+    normalized: list[dict[str, Any]] = []
+    for cookie in cookies:
+        if not isinstance(cookie, dict):
+            continue
+        name = str(cookie.get("name") or "").strip()
+        value = str(cookie.get("value") or "")
+        if not name:
+            continue
+        normalized.append(
+            {
+                "name": name,
+                "value": value,
+                "domain": str(cookie.get("domain") or ""),
+                "path": str(cookie.get("path") or "/") or "/",
+                "expires": cookie.get("expires"),
+                "httpOnly": bool(cookie.get("httpOnly", False)),
+                "secure": bool(cookie.get("secure", False)),
+                "sameSite": str(cookie.get("sameSite") or ""),
+            }
+        )
+    return normalized
+
+
+def parse_domain_session_cookies(value: Any) -> list[dict[str, Any]]:
+    try:
+        payload = json.loads(str(value or "[]"))
+    except json.JSONDecodeError:
+        return []
+    return normalize_cookie_payload(payload)
+
+
+def domain_session_is_ready(session_payload: dict[str, Any] | None, now: datetime | None = None) -> bool:
+    if not session_payload or session_payload.get("status") != DOMAIN_SESSION_STATUS_READY:
+        return False
+    if not session_payload.get("has_cookies"):
+        return False
+    expires_at = parse_iso_datetime(str(session_payload.get("expires_at") or ""))
+    if not expires_at:
+        return False
+    return expires_at > (now or now_utc())
+
+
+def safe_domain_session_payload(row: sqlite3.Row | dict[str, Any] | None) -> dict[str, Any]:
+    if not row:
+        return {
+            "domain": "",
+            "status": DOMAIN_SESSION_STATUS_MISSING,
+            "has_cookies": False,
+            "last_unlocked_at": "",
+            "expires_at": "",
+            "last_error": "",
+            "failure_count": 0,
+            "updated_at": "",
+        }
+    cookies = parse_domain_session_cookies(mapping_value(row, "cookies_json", "[]"))
+    return {
+        "domain": normalize_domain_session_domain(mapping_value(row, "domain", "")),
+        "status": str(mapping_value(row, "status", DOMAIN_SESSION_STATUS_MISSING) or DOMAIN_SESSION_STATUS_MISSING),
+        "has_cookies": bool(cookies),
+        "source_url": str(mapping_value(row, "source_url", "") or ""),
+        "last_unlocked_at": str(mapping_value(row, "last_unlocked_at", "") or ""),
+        "expires_at": str(mapping_value(row, "expires_at", "") or ""),
+        "last_error": sanitize_telegram_error(str(mapping_value(row, "last_error", "") or ""))[:400],
+        "failure_count": int(mapping_value(row, "failure_count", 0) or 0),
+        "updated_at": str(mapping_value(row, "updated_at", "") or ""),
+    }
+
+
+def missing_domain_session_payload(domain: str) -> dict[str, Any]:
+    payload = safe_domain_session_payload(None)
+    payload["domain"] = normalize_domain_session_domain(domain)
+    return payload
+
+
+def get_domain_session(domain_or_url: Any, safe: bool = False) -> dict[str, Any] | None:
+    domain = normalize_domain_session_domain(domain_or_url)
+    if not domain:
+        return missing_domain_session_payload("") if safe else None
+    try:
+        with open_connection() as connection:
+            row = connection.execute(
+                "SELECT * FROM domain_sessions WHERE domain = ?",
+                (domain,),
+            ).fetchone()
+    except sqlite3.OperationalError:
+        row = None
+    if safe:
+        return safe_domain_session_payload(row) if row else missing_domain_session_payload(domain)
+    return dict(row) if row else None
+
+
+def get_ready_domain_session_for_url(url: Any) -> dict[str, Any] | None:
+    session_payload = get_domain_session(fetch_domain_for_url(url), safe=False)
+    safe_payload = safe_domain_session_payload(session_payload)
+    if not domain_session_is_ready(safe_payload):
+        return None
+    return session_payload
+
+
+def domain_session_cookie_dict(session_payload: dict[str, Any] | None) -> dict[str, str]:
+    cookies = parse_domain_session_cookies(mapping_value(session_payload or {}, "cookies_json", "[]"))
+    return {cookie["name"]: cookie["value"] for cookie in cookies if cookie.get("name")}
+
+
+def upsert_domain_session(
+    domain: str,
+    *,
+    status: str,
+    user_agent: str = "",
+    cookies: list[dict[str, Any]] | None = None,
+    profile_path: str = "",
+    source_url: str = "",
+    last_error: str = "",
+    ttl_hours: int = DOMAIN_SESSION_TTL_HOURS,
+) -> dict[str, Any]:
+    domain = normalize_domain_session_domain(domain)
+    if not domain:
+        raise ValueError("域名不能为空。")
+    timestamp = now_iso()
+    expires_at = ""
+    last_unlocked_at = ""
+    cookies_payload = normalize_cookie_payload(cookies or [])
+    if status == DOMAIN_SESSION_STATUS_READY:
+        last_unlocked_at = timestamp
+        expires_at = (now_utc() + timedelta(hours=max(1, ttl_hours))).isoformat(timespec="seconds")
+    with open_connection() as connection:
+        current = connection.execute(
+            "SELECT failure_count FROM domain_sessions WHERE domain = ?",
+            (domain,),
+        ).fetchone()
+        failure_count = int(current["failure_count"] or 0) if current else 0
+        if status == DOMAIN_SESSION_STATUS_READY:
+            failure_count = 0
+        elif status == DOMAIN_SESSION_STATUS_FAILED:
+            failure_count += 1
+        connection.execute(
+            """
+            INSERT INTO domain_sessions (
+                domain, status, user_agent, cookies_json, profile_path, source_url,
+                last_unlocked_at, expires_at, last_error, failure_count, updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(domain) DO UPDATE SET
+                status = excluded.status,
+                user_agent = excluded.user_agent,
+                cookies_json = excluded.cookies_json,
+                profile_path = excluded.profile_path,
+                source_url = excluded.source_url,
+                last_unlocked_at = CASE WHEN excluded.last_unlocked_at != '' THEN excluded.last_unlocked_at ELSE domain_sessions.last_unlocked_at END,
+                expires_at = excluded.expires_at,
+                last_error = excluded.last_error,
+                failure_count = excluded.failure_count,
+                updated_at = excluded.updated_at
+            """,
+            (
+                domain,
+                status,
+                user_agent,
+                json.dumps(cookies_payload, ensure_ascii=False),
+                profile_path,
+                source_url,
+                last_unlocked_at,
+                expires_at,
+                last_error[:1000],
+                failure_count,
+                timestamp,
+            ),
+        )
+        connection.commit()
+        row = connection.execute("SELECT * FROM domain_sessions WHERE domain = ?", (domain,)).fetchone()
+    return safe_domain_session_payload(row)
 
 
 PRODUCT_CODE_CANDIDATE_RE = re.compile(r"\b[a-z0-9]{2,}(?:[._-][a-z0-9]{2,}){2,}\b", re.IGNORECASE)
@@ -2190,6 +2390,20 @@ def initialize_database() -> None:
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
             );
+
+            CREATE TABLE IF NOT EXISTS domain_sessions (
+                domain TEXT PRIMARY KEY,
+                status TEXT NOT NULL DEFAULT 'missing',
+                user_agent TEXT DEFAULT '',
+                cookies_json TEXT NOT NULL DEFAULT '[]',
+                profile_path TEXT DEFAULT '',
+                source_url TEXT DEFAULT '',
+                last_unlocked_at TEXT,
+                expires_at TEXT,
+                last_error TEXT DEFAULT '',
+                failure_count INTEGER NOT NULL DEFAULT 0,
+                updated_at TEXT NOT NULL
+            );
             """
         )
         ensure_column(connection, "tasks", "group_name", "TEXT NOT NULL DEFAULT '默认分组'")
@@ -2302,6 +2516,7 @@ def to_task_payload(row: sqlite3.Row) -> dict[str, Any]:
     last_error = sanitize_telegram_error(row["last_error"] or "")
     last_fetch_attempts = parse_fetch_attempts_text(row["last_fetch_attempts"] if "last_fetch_attempts" in keys else "")
     last_error_kind = task_error_kind_from_attempts(last_error, last_fetch_attempts)
+    task_domain = fetch_domain_for_url(row["monitor_url"])
     return {
         "id": row["id"],
         "name": row["name"],
@@ -2309,6 +2524,8 @@ def to_task_payload(row: sqlite3.Row) -> dict[str, Any]:
         "subgroup_name": normalize_task_subgroup(row["subgroup_name"] if "subgroup_name" in keys else ""),
         "sort_order": int(row["sort_order"] or 0) if "sort_order" in keys else 0,
         "monitor_url": row["monitor_url"],
+        "monitor_domain": task_domain,
+        "domain_session": get_domain_session(task_domain, safe=True),
         "target_keyword": row["target_keyword"],
         "fetch_strategy": normalize_fetch_strategy(row["fetch_strategy"] if "fetch_strategy" in keys else ""),
         "source_config": normalize_source_config_text(row["source_config"] if "source_config" in keys else "{}"),
@@ -3039,6 +3256,18 @@ class ProtectedSourceError(RuntimeError):
     error_kind = "cloudflare_challenge"
 
 
+@dataclass
+class DomainSessionUnlockResult:
+    domain: str
+    status: str
+    detail: str
+    final_url: str = ""
+    user_agent: str = ""
+    cookies: list[dict[str, Any]] = field(default_factory=list)
+    profile_path: str = ""
+    html: str = ""
+
+
 class CatalogBrowserError(RuntimeError):
     error_kind = "catalog_browser_connection_failed"
 
@@ -3543,20 +3772,23 @@ class StaticHttpFetcher:
 
 
 class CurlCffiFetcher:
-    def __init__(self, client: Any = None) -> None:
+    def __init__(self, client: Any = None, session_provider: Callable[[str], dict[str, Any] | None] | None = None) -> None:
         self.client = client
+        self.session_provider = session_provider or get_ready_domain_session_for_url
 
-    def request_headers(self) -> dict[str, str]:
+    def request_headers(self, session_payload: dict[str, Any] | None = None) -> dict[str, str]:
+        user_agent = str(mapping_value(session_payload or {}, "user_agent", "") or "").strip()
         return {
-            "User-Agent": DEFAULT_BROWSER_USER_AGENT or STATIC_HTTP_USER_AGENT,
+            "User-Agent": user_agent or DEFAULT_BROWSER_USER_AGENT or STATIC_HTTP_USER_AGENT,
             "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
             "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
             "Cache-Control": "no-cache",
         }
 
     def fetch(self, url: str, timeout_seconds: int) -> FetchResult:
+        session_payload = self.session_provider(url) if self.session_provider else None
         try:
-            response = self._request(url, timeout_seconds)
+            response = self._request(url, timeout_seconds, session_payload)
         except ImportError as exc:
             return FetchResult(
                 html="",
@@ -3579,6 +3811,14 @@ class CurlCffiFetcher:
         status_code = int(getattr(response, "status_code", None) or getattr(response, "status", None) or 0)
         html_text = str(getattr(response, "text", "") or getattr(response, "content", "") or "")
         if looks_like_cloudflare_challenge(html_text, extract_page_title(html_text), final_url):
+            if not session_payload:
+                return FetchResult(
+                    html="",
+                    final_url=final_url,
+                    status_code=status_code,
+                    error_kind="domain_session_required",
+                    detail=f"{fetch_domain_for_url(final_url) or '目标站'} 需要先初始化采集会话。",
+                )
             return FetchResult(
                 html="",
                 final_url=final_url,
@@ -3602,11 +3842,19 @@ class CurlCffiFetcher:
                 error_kind="empty_response",
                 detail=f"curl_cffi 返回了空 HTML：{final_url}",
             )
-        return FetchResult(html=html_text, final_url=final_url, status_code=status_code, detail="curl_cffi ok")
+        detail = "curl_cffi ok"
+        if session_payload:
+            detail = "curl_cffi 复用域名会话成功"
+        return FetchResult(html=html_text, final_url=final_url, status_code=status_code, detail=detail)
 
-    def _request(self, url: str, timeout_seconds: int) -> Any:
+    def _request(self, url: str, timeout_seconds: int, session_payload: dict[str, Any] | None = None) -> Any:
+        headers = self.request_headers(session_payload)
+        cookies = domain_session_cookie_dict(session_payload)
         if self.client is not None:
-            return self.client.get(url, timeout=timeout_seconds, headers=self.request_headers())
+            try:
+                return self.client.get(url, timeout=timeout_seconds, headers=headers, cookies=cookies or None)
+            except TypeError:
+                return self.client.get(url, timeout=timeout_seconds, headers=headers)
         try:
             from curl_cffi import requests as curl_requests
         except Exception as exc:
@@ -3614,7 +3862,8 @@ class CurlCffiFetcher:
         try:
             return curl_requests.get(
                 url,
-                headers=self.request_headers(),
+                headers=headers,
+                cookies=cookies or None,
                 timeout=timeout_seconds,
                 impersonate="chrome",
                 allow_redirects=True,
@@ -3625,6 +3874,131 @@ class CurlCffiFetcher:
             if any(token in str(exc).lower() for token in ("timeout", "timed out", "超时")):
                 raise TimeoutError(str(exc)) from exc
             raise
+
+
+class DomainSessionUnlocker:
+    def unlock(
+        self,
+        url: str,
+        target_keyword: str = "",
+        timeout_seconds: int = DOMAIN_SESSION_UNLOCK_TIMEOUT_SECONDS,
+    ) -> DomainSessionUnlockResult:
+        if not validate_http_url(url):
+            raise ValueError("解锁链接必须是有效的 http(s) 地址。")
+        domain = fetch_domain_for_url(url)
+        if not domain:
+            raise ValueError("无法从链接中识别域名。")
+        browser_binary = find_browser_binary()
+        if not browser_binary:
+            raise RuntimeError("未找到 Chromium/Chrome，无法初始化域名会话。")
+        display = ensure_scrapling_display_for_headed()
+        if not display and not (os.getenv("DISPLAY") or os.getenv("WAYLAND_DISPLAY")):
+            raise RuntimeError("当前环境没有 DISPLAY/Xvfb，无法启动有头浏览器。")
+
+        profile_path = domain_session_profile_path(domain)
+        profile_path.mkdir(parents=True, exist_ok=True)
+        timeout_seconds = max(15, min(300, int(timeout_seconds or DOMAIN_SESSION_UNLOCK_TIMEOUT_SECONDS)))
+        deadline = time.monotonic() + timeout_seconds
+        context = None
+        try:
+            sync_playwright = self._sync_playwright()
+            with sync_playwright() as playwright:
+                context = playwright.chromium.launch_persistent_context(
+                    str(profile_path),
+                    executable_path=browser_binary,
+                    headless=False,
+                    viewport={"width": 1440, "height": 980},
+                    locale="zh-CN",
+                    args=[
+                        "--no-sandbox",
+                        "--disable-dev-shm-usage",
+                        "--disable-gpu",
+                        "--disable-blink-features=AutomationControlled",
+                        "--window-size=1440,980",
+                    ],
+                )
+                page = context.pages[0] if context.pages else context.new_page()
+                page.goto(url, wait_until="domcontentloaded", timeout=timeout_seconds * 1000)
+                page.wait_for_timeout(1200)
+                html_text = ""
+                final_url = url
+                challenge_seen = False
+                keyword_seen = False
+                while time.monotonic() < deadline:
+                    try:
+                        final_url = page.url or url
+                        title = page.title()
+                        html_text = page.content()
+                    except Exception:
+                        html_text = ""
+                        title = ""
+                    challenge_seen = looks_like_cloudflare_challenge(html_text, title, final_url)
+                    keyword_seen = bool(target_keyword and re.search(re.escape(target_keyword), html_text, re.IGNORECASE))
+                    if html_text and not challenge_seen and (not target_keyword or keyword_seen or len(html_text) > 6000):
+                        break
+                    page.wait_for_timeout(1500)
+                user_agent = ""
+                try:
+                    user_agent = str(page.evaluate("navigator.userAgent") or "")
+                except Exception:
+                    user_agent = ""
+                cookies = normalize_cookie_payload(context.cookies())
+                if not html_text:
+                    raise RuntimeError("浏览器没有返回可读取页面内容。")
+                if looks_like_cloudflare_challenge(html_text, "", final_url):
+                    detail = "仍停留在 Cloudflare/Turnstile 验证页；请保持窗口打开完成验证后再次点击解锁。"
+                    return DomainSessionUnlockResult(
+                        domain=domain,
+                        status=DOMAIN_SESSION_STATUS_FAILED,
+                        detail=detail,
+                        final_url=final_url,
+                        user_agent=user_agent,
+                        cookies=cookies,
+                        profile_path=str(profile_path),
+                        html=html_text,
+                    )
+                if not cookies:
+                    raise RuntimeError("浏览器已打开页面，但没有得到可复用 cookie。")
+                detail = "域名会话已初始化，后续检测会优先复用 cookie。"
+                if keyword_seen:
+                    detail = "域名会话已初始化，并在页面中看到目标关键词。"
+                return DomainSessionUnlockResult(
+                    domain=domain,
+                    status=DOMAIN_SESSION_STATUS_READY,
+                    detail=detail,
+                    final_url=final_url,
+                    user_agent=user_agent,
+                    cookies=cookies,
+                    profile_path=str(profile_path),
+                    html=html_text,
+                )
+        except Exception as exc:
+            return DomainSessionUnlockResult(
+                domain=domain,
+                status=DOMAIN_SESSION_STATUS_FAILED,
+                detail=str(exc)[:1000],
+                final_url=url,
+                profile_path=str(profile_path),
+            )
+        finally:
+            if context is not None:
+                try:
+                    context.close()
+                except Exception:
+                    pass
+
+    def _sync_playwright(self) -> Callable[..., Any]:
+        try:
+            from patchright.sync_api import sync_playwright
+
+            return sync_playwright
+        except Exception:
+            try:
+                from playwright.sync_api import sync_playwright
+
+                return sync_playwright
+            except Exception as exc:
+                raise RuntimeError("Playwright/Patchright 不可用，请重新执行安装或升级脚本。") from exc
 
 
 class ScraplingUnavailableError(RuntimeError):
@@ -4386,6 +4760,7 @@ class FetcherSelector:
         if next_backend == FETCH_STRATEGY_SCRAPLING_STANDARD:
             return result.error_kind in {
                 "cloudflare_challenge",
+                "domain_session_required",
                 "scrapling_challenge_upgrade_required",
                 "timeout",
                 "request_error",
@@ -4398,6 +4773,7 @@ class FetcherSelector:
         if next_backend in {FETCH_STRATEGY_SCRAPLING_DYNAMIC, FETCH_STRATEGY_SCRAPLING_STEALTH}:
             return result.error_kind in {
                 "cloudflare_challenge",
+                "domain_session_required",
                 "scrapling_challenge_upgrade_required",
                 "timeout",
                 "request_error",
@@ -4500,6 +4876,24 @@ class FetcherSelector:
             if not next_backend or not self.should_try_next_backend(last_result, next_backend, settings_payload):
                 break
 
+        needs_domain_session = any(attempt.error_kind == "domain_session_required" for attempt in attempts)
+        if needs_domain_session and last_result.error_kind in {
+            "cloudflare_challenge",
+            "scrapling_challenge_failed",
+            "scrapling_browser_failed",
+            "timeout",
+        }:
+            domain = fetch_domain_for_url(last_result.final_url or url) or fetch_domain_for_url(url)
+            return FetchPipelineResult(
+                html="",
+                final_url=last_result.final_url or url,
+                status_code=last_result.status_code,
+                backend_used="",
+                attempts=attempts,
+                error_kind="domain_session_required",
+                detail=f"{domain or '目标站'} 需要先初始化采集会话，再执行库存检测。",
+            )
+
         return FetchPipelineResult(
             html="",
             final_url=last_result.final_url or url,
@@ -4523,6 +4917,7 @@ class MonitoringEngine:
         self.test_browser = BrowserHarness("test", DEFAULT_TEST_PORT, DEFAULT_HEADLESS, browser_binary)
         self.catalog_browser = BrowserHarness("catalog", DEFAULT_CATALOG_PORT, DEFAULT_HEADLESS, browser_binary)
         self.fetcher_selector = FetcherSelector()
+        self.domain_unlocker = DomainSessionUnlocker()
         self.last_cycle_started = ""
         self.last_cycle_finished = ""
         self.last_exception = ""
@@ -5781,6 +6176,39 @@ class MonitoringEngine:
             "checked_at": now_iso(),
         }
 
+    def unlock_task_domain_session(self, task_id: int, timeout_seconds: int | None = None) -> dict[str, Any]:
+        with open_connection() as connection:
+            task = connection.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()
+            if not task:
+                raise RuntimeError("任务不存在。")
+
+        url = monitor_url_for_fetch(task)
+        target_keyword = str(task["target_keyword"] or "")
+        result = self.domain_unlocker.unlock(
+            url,
+            target_keyword=target_keyword,
+            timeout_seconds=timeout_seconds or DOMAIN_SESSION_UNLOCK_TIMEOUT_SECONDS,
+        )
+        session_payload = upsert_domain_session(
+            result.domain,
+            status=result.status,
+            user_agent=result.user_agent,
+            cookies=result.cookies,
+            profile_path=result.profile_path,
+            source_url=result.final_url or url,
+            last_error="" if result.status == DOMAIN_SESSION_STATUS_READY else result.detail,
+        )
+        level = "info" if result.status == DOMAIN_SESSION_STATUS_READY else "warning"
+        log_activity(level, f"domain:{result.domain}", result.detail)
+        return {
+            "task_id": task_id,
+            "domain": result.domain,
+            "status": result.status,
+            "detail": result.detail,
+            "final_url": result.final_url,
+            "session": session_payload,
+        }
+
     def run_test_push(self, task_id: int) -> dict[str, Any]:
         settings_payload = self.get_runtime_settings()
         self.configure_browsers(settings_payload)
@@ -5981,11 +6409,7 @@ def slice_fragment(html_text: str, keyword: str) -> str:
         return ""
     if not keyword:
         return ""
-    keyword_candidates = [
-        keyword,
-        html_module.escape(keyword, quote=False),
-        html_module.escape(keyword, quote=True),
-    ]
+    keyword_candidates = html_keyword_candidates(keyword)
     match = None
     for candidate in dict.fromkeys(candidate for candidate in keyword_candidates if candidate):
         match = re.search(re.escape(candidate), html_text, re.IGNORECASE)
@@ -6003,6 +6427,28 @@ def clean_fragment_text(fragment: str) -> str:
     cleaned = re.sub(r"(?is)<!--.*?-->", " ", cleaned)
     cleaned = html_module.unescape(re.sub(r"<[^>]+>", " ", cleaned))
     return re.sub(r"\s+", " ", cleaned).strip()
+
+
+def html_keyword_candidates(keyword: Any) -> list[str]:
+    raw = str(keyword or "").strip()
+    if not raw:
+        return []
+    candidates = [
+        raw,
+        html_module.escape(raw, quote=False),
+        html_module.escape(raw, quote=True),
+    ]
+    for match in PRODUCT_CODE_CANDIDATE_RE.finditer(raw):
+        code = match.group(0).strip()
+        if code:
+            candidates.extend(
+                [
+                    code,
+                    html_module.escape(code, quote=False),
+                    html_module.escape(code, quote=True),
+                ]
+            )
+    return list(dict.fromkeys(candidate for candidate in candidates if candidate))
 
 
 def normalize_signal_text(value: Any) -> str:
@@ -6577,12 +7023,7 @@ def extract_stock_by_rule(
 def find_html_text_position(html_text: str, keyword: str) -> int:
     if not html_text or not keyword:
         return -1
-    keyword_candidates = [
-        keyword,
-        html_module.escape(keyword, quote=False),
-        html_module.escape(keyword, quote=True),
-    ]
-    for candidate in dict.fromkeys(candidate for candidate in keyword_candidates if candidate):
+    for candidate in html_keyword_candidates(keyword):
         match = re.search(re.escape(candidate), html_text, re.IGNORECASE)
         if match:
             return match.start()
@@ -6848,9 +7289,10 @@ def locate_product_fragment(
     target_keyword: str,
     signal_checker: Callable[[str], bool],
 ) -> str:
-    position = find_html_text_position(html_text, target_keyword)
-    if position >= 0:
-        return locate_html_fragment_around_position(html_text, position, signal_checker)
+    for candidate in html_keyword_candidates(target_keyword):
+        position = find_html_text_position(html_text, candidate)
+        if position >= 0:
+            return locate_html_fragment_around_position(html_text, position, signal_checker)
     if target_keyword:
         return slice_fragment(html_text, target_keyword)
     return html_text
@@ -8088,6 +8530,9 @@ def make_app() -> Flask:
             task_group_nodes = connection.execute(
                 "SELECT * FROM task_group_nodes ORDER BY group_name ASC, sort_order ASC, subgroup_name ASC"
             ).fetchall()
+            domain_session_rows = connection.execute(
+                "SELECT * FROM domain_sessions ORDER BY updated_at DESC, domain ASC"
+            ).fetchall()
             source_rows = connection.execute("SELECT * FROM merchant_sources ORDER BY id DESC").fetchall()
             item_rows = connection.execute("SELECT * FROM merchant_items ORDER BY updated_at DESC, id DESC LIMIT 120").fetchall()
             task_source_rows = connection.execute(
@@ -8153,6 +8598,7 @@ def make_app() -> Flask:
                 "tasks": [to_task_payload(task) for task in tasks],
                 "task_groups": [to_task_group_payload(row) for row in task_groups],
                 "task_group_nodes": [to_task_group_node_payload(row) for row in task_group_nodes],
+                "domain_sessions": [safe_domain_session_payload(row) for row in domain_session_rows],
                 "merchant": {
                     "sources": catalog_sources,
                     "items": catalog_items,
@@ -8820,6 +9266,31 @@ def make_app() -> Flask:
         except Exception as exc:
             return jsonify({"ok": False, "message": str(exc)}), 400
         return jsonify({"ok": True, "message": "库存检测已完成。", "result": result})
+
+    @app.route("/api/tasks/<int:task_id>/unlock-session", methods=["POST"])
+    @login_required
+    @limiter.limit("4 per minute")
+    def unlock_task_domain_session(task_id: int):
+        payload = request.get_json(silent=True) or {}
+        timeout_seconds = bounded_setting_int(
+            payload.get("timeout_seconds"),
+            DOMAIN_SESSION_UNLOCK_TIMEOUT_SECONDS,
+            15,
+            300,
+        )
+        try:
+            result = app.extensions["monitor_engine"].unlock_task_domain_session(task_id, timeout_seconds)
+        except Exception as exc:
+            return jsonify({"ok": False, "message": str(exc)}), 400
+        ok = result.get("status") == DOMAIN_SESSION_STATUS_READY
+        status_code = 200 if ok else 400
+        return jsonify(
+            {
+                "ok": ok,
+                "message": "域名会话已初始化。" if ok else result.get("detail") or "域名会话初始化失败。",
+                "result": result,
+            }
+        ), status_code
 
     @app.route("/api/template-test-push", methods=["POST"])
     @login_required

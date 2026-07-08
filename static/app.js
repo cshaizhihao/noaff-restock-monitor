@@ -1024,6 +1024,8 @@
                 return "Firecrawl 未启用";
             case "domain_cooldown":
                 return "同域名保护等待";
+            case "domain_session_required":
+                return "需要初始化采集会话";
             case "scrapling_browser_failed":
                 return "Scrapling 浏览器依赖异常";
             case "scrapling_challenge_upgrade_required":
@@ -1088,6 +1090,9 @@
         }
         if (kind === "domain_cooldown" || text.includes("采集冷却") || text.includes("同域名保护等待")) {
             return "同域名刚刚失败，系统会等到保护等待结束再请求；其他域名和下一轮正常继续。";
+        }
+        if (kind === "domain_session_required") {
+            return "该域名需要先打开一次本地浏览器会话，完成后再检测库存。";
         }
         if (
             kind === "scrapling_browser_failed" ||
@@ -1517,6 +1522,47 @@
         return `本地抓取遇到受保护站点 · 冷却至 ${formatTime(task.cooldown_until)} · 建议改用 Webhook、手动录入或替代公开页面`;
     }
 
+    function domainSessionMeta(task) {
+        const session = task.domain_session || {};
+        const status = String(session.status || "missing");
+        const ready = status === "ready" && session.has_cookies;
+        const expiresAt = session.expires_at ? formatTime(session.expires_at) : "";
+        if (ready) {
+            return {
+                ready: true,
+                label: "会话已就绪",
+                detail: expiresAt ? `会话有效至 ${expiresAt}` : "会话已就绪",
+                className: "domain-session-ready"
+            };
+        }
+        if (status === "failed") {
+            return {
+                ready: false,
+                label: "需初始化会话",
+                detail: session.last_error || "点击初始化会话后再检测",
+                className: "domain-session-needed"
+            };
+        }
+        return {
+            ready: false,
+            label: "需初始化会话",
+            detail: "点击初始化会话后再检测",
+            className: "domain-session-needed"
+        };
+    }
+
+    function shouldSuggestDomainUnlock(task) {
+        const strategy = normalizeFetchStrategy(task.fetch_strategy);
+        if (["manual", "webhook"].includes(strategy)) {
+            return false;
+        }
+        if (task.last_error_kind === "domain_session_required") {
+            return true;
+        }
+        const session = domainSessionMeta(task);
+        return !session.ready && ["cloudflare_challenge", "scrapling_browser_failed", "scrapling_challenge_failed"].includes(task.last_error_kind);
+    }
+
     function webhookMetaText(task) {
         if (normalizeFetchStrategy(task.fetch_strategy) !== "webhook") {
             return "";
@@ -1639,6 +1685,7 @@
         const protectedNotice = protectedSourceNoticeText(task);
         const webhookMeta = webhookMetaText(task);
         const attemptMeta = fetchAttemptMeta(task);
+        const domainMeta = domainSessionMeta(task);
 
         const statusBadge = card.querySelector("[data-task-status]");
         if (statusBadge) {
@@ -1675,6 +1722,12 @@
         const fetchStrategy = card.querySelector("[data-task-fetch-strategy]");
         if (fetchStrategy) {
             fetchStrategy.textContent = fetchStrategyText;
+        }
+        const domainSession = card.querySelector("[data-task-domain-session]");
+        if (domainSession) {
+            domainSession.textContent = domainMeta.label;
+            domainSession.title = domainMeta.detail;
+            domainSession.className = `task-tag domain-session-chip ${domainMeta.className}`;
         }
 
         const terminal = card.querySelector("[data-task-terminal]");
@@ -1717,6 +1770,11 @@
                 "hidden",
                 ["manual", "webhook"].includes(normalizeFetchStrategy(task.fetch_strategy))
             );
+        }
+        const unlockAction = card.querySelector("[data-task-unlock-action]");
+        if (unlockAction) {
+            unlockAction.classList.toggle("is-suggested", shouldSuggestDomainUnlock(task));
+            unlockAction.title = domainMeta.detail;
         }
 
         const meta = card.querySelector("[data-task-meta]");
@@ -2625,6 +2683,7 @@
             const webhookMeta = webhookMetaText(task);
             const normalizedStrategy = normalizeFetchStrategy(task.fetch_strategy);
             const attemptMeta = fetchAttemptMeta(task);
+            const domainMeta = domainSessionMeta(task);
             const rowClass = animateCards ? "task-row task-product-card reveal" : "task-row task-product-card";
             const modeActions = (() => {
                 if (normalizedStrategy === "manual") {
@@ -2641,6 +2700,12 @@
                     `;
                 }
                 return `
+                    <button type="button" class="ghost-button task-check-button task-unlock-button ${shouldSuggestDomainUnlock(task) ? "is-suggested" : ""}" data-action="unlock-session" data-task-unlock-action title="${escapeHtml(domainMeta.detail)}">
+                        <svg class="mr-1.5 h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H3v-4.586l5.257-5.257A6 6 0 1121 9z"/>
+                        </svg>
+                        初始化会话
+                    </button>
                     <button type="button" class="ghost-button task-check-button" data-action="check" data-task-check-action>
                         <svg class="mr-1.5 h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8"/>
@@ -2680,6 +2745,7 @@
                                 <span data-task-keyword-text>${escapeHtml(task.target_keyword || "未设置关键词")}</span>
                             </span>
                             <span class="task-tag" data-task-fetch-strategy>${escapeHtml(fetchStrategyLabel(task.fetch_strategy))}</span>
+                            <span class="task-tag domain-session-chip ${domainMeta.className}" data-task-domain-session title="${escapeHtml(domainMeta.detail)}">${escapeHtml(domainMeta.label)}</span>
                             <span class="task-tag task-row-stock font-mono">
                                 库存:
                                 <strong class="${task.last_stock > 0 ? "text-emerald-400" : "text-slate-300"} font-bold" data-task-stock>${escapeHtml(stockText)}</strong>
@@ -3903,6 +3969,17 @@
         return result;
     }
 
+    async function unlockTaskDomainSession(taskId) {
+        showToast("正在初始化域名会话，会打开本地浏览器窗口...");
+        const data = await apiFetch(`/api/tasks/${taskId}/unlock-session`, {
+            method: "POST",
+            body: JSON.stringify({ timeout_seconds: 120 })
+        });
+        const result = data.result || {};
+        showToast(result.detail || "域名会话已初始化。");
+        return result;
+    }
+
     async function handleTaskAction(button) {
         const card = button.closest("[data-task-id]");
         const taskId = card?.dataset.taskId;
@@ -3926,6 +4003,8 @@
         try {
             if (action === "check") {
                 await runTaskStockCheck(taskId);
+            } else if (action === "unlock-session") {
+                await unlockTaskDomainSession(taskId);
             } else if (action === "manual-in-stock" || action === "manual-sold-out") {
                 const stock = action === "manual-in-stock" ? 1 : 0;
                 await apiFetch(`/api/tasks/${taskId}/manual-stock`, {

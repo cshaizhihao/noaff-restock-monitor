@@ -3355,8 +3355,39 @@ class PortalAppTestCase(unittest.TestCase):
 
         result = app_module.CurlCffiFetcher(FakeClient()).fetch("https://example.com/products", 10)
 
-        self.assertEqual(result.error_kind, "cloudflare_challenge")
-        self.assertIn("curl_cffi", result.detail)
+        self.assertEqual(result.error_kind, "domain_session_required")
+        self.assertIn("需要先初始化采集会话", result.detail)
+
+    def test_curl_cffi_fetcher_reuses_domain_session_cookie_and_user_agent(self) -> None:
+        class FakeResponse:
+            status_code = 200
+            url = "https://example.com/products"
+            text = "<html><title>Products</title><body>HK-CMI <a>Order Now</a></body></html>"
+
+        class FakeClient:
+            def __init__(self) -> None:
+                self.headers: dict[str, str] = {}
+                self.cookies: dict[str, str] | None = None
+
+            def get(self, url, timeout=None, headers=None, cookies=None):
+                self.headers = headers or {}
+                self.cookies = cookies
+                return FakeResponse()
+
+        session_payload = {
+            "status": "ready",
+            "user_agent": "Mozilla/5.0 Session Chrome",
+            "cookies_json": json.dumps([{"name": "cf_clearance", "value": "secret-cookie", "domain": "example.com"}]),
+            "expires_at": (app_module.now_utc() + app_module.timedelta(hours=1)).isoformat(timespec="seconds"),
+        }
+        client = FakeClient()
+
+        result = app_module.CurlCffiFetcher(client, session_provider=lambda url: session_payload).fetch("https://example.com/products", 10)
+
+        self.assertEqual(result.error_kind, "")
+        self.assertEqual(result.detail, "curl_cffi 复用域名会话成功")
+        self.assertEqual(client.headers["User-Agent"], "Mozilla/5.0 Session Chrome")
+        self.assertEqual(client.cookies, {"cf_clearance": "secret-cookie"})
 
     def firecrawl_settings(self, **overrides) -> dict[str, object]:
         settings = {
@@ -5238,6 +5269,49 @@ class PortalAppTestCase(unittest.TestCase):
 
         self.assertEqual(result.stock, 0)
         self.assertIn("LAX.AS3.Pro.TINY", result.fragment)
+        self.assertIn("售罄", result.detail)
+
+    def test_generic_pricing_table_detects_dmit_lax_soldout_on_category_url(self) -> None:
+        fetch_result = app_module.FetchResult(
+            html="",
+            final_url="https://www.dmit.io/cart.php?region=los-angeles&network=premium&generation=as3",
+        )
+        html_text = """
+        <main>
+          <section>
+            <h2>選擇實例類型</h2>
+            <article class="product-card">
+              <h3>HKG.AS3.Pro.STARTER</h3>
+              <p>$ 12.90 USD / Monthly</p>
+              <p>1 vCores 2.0GB RAM 40GB SSD</p>
+            </article>
+            <article class="product-card popular">
+              <h3>LAX.AS3.Pro.TINY</h3>
+              <span>Out of Stock</span>
+              <p>$ 10.90 USD / Monthly</p>
+              <p>1 vCores 2.0GB RAM 20GB SSD</p>
+            </article>
+          </section>
+          <footer class="cart-summary">
+            <button type="button">繼續</button>
+          </footer>
+        </main>
+        """
+
+        result = app_module.extract_stock_for_strategy(
+            "generic_pricing_table",
+            html_text,
+            "Dmit LAX.AS3.Pro.TINY",
+            {
+                "fetch_strategy": "multi_engine",
+                "monitor_url": "https://www.dmit.io/cart.php?region=los-angeles&network=premium&generation=as3",
+            },
+            fetch_result,
+        )
+
+        self.assertEqual(result.stock, 0)
+        self.assertIn("LAX.AS3.Pro.TINY", result.fragment)
+        self.assertIn("Out of Stock", result.fragment)
         self.assertIn("售罄", result.detail)
 
     def test_generic_pricing_table_unknown_detail_explains_missing_signal_or_target(self) -> None:
