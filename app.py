@@ -297,6 +297,14 @@ STATIC_HTTP_FETCH_STRATEGIES = {
     FETCH_STRATEGY_GENERIC_PRICING_TABLE,
     FETCH_STRATEGY_WHMCS,
 }
+FIRECRAWL_FETCH_STRATEGIES = {
+    FETCH_STRATEGY_FIRECRAWL,
+    FETCH_STRATEGY_FIRECRAWL_THEN_STATIC,
+    FETCH_STRATEGY_STATIC_THEN_FIRECRAWL,
+    FETCH_STRATEGY_FIRECRAWL_THEN_BROWSER,
+}
+FIRECRAWL_COST_ERROR_KINDS = {"firecrawl_credit_required", "firecrawl_rate_limited"}
+FIRECRAWL_COST_COOLDOWN_MINUTES = 360
 EXTERNAL_INPUT_FETCH_STRATEGIES = {FETCH_STRATEGY_MANUAL, FETCH_STRATEGY_WEBHOOK}
 EXTERNAL_INPUT_PENDING_ERROR_KINDS = {"manual_pending", "webhook_pending"}
 CATALOG_DISCOVERY_LOCAL = "local"
@@ -818,6 +826,67 @@ def protected_source_cooldown_message(cooldown_until: str) -> str:
     return (
         f"Cloudflare 受保护站点冷却中，冷却至 {cooldown_until}。"
         "建议改用 Webhook、手动录入或替代公开页面。"
+    )
+
+
+def firecrawl_cost_cooldown_until(now: datetime | None = None) -> str:
+    now = now or now_utc()
+    return (now + timedelta(minutes=FIRECRAWL_COST_COOLDOWN_MINUTES)).isoformat(timespec="seconds")
+
+
+def firecrawl_cost_cooldown_message(cooldown_until: str) -> str:
+    return (
+        f"Firecrawl 额度不足或频率受限，已暂停外部抓取至 {cooldown_until}。"
+        "Firecrawl 会消耗 credits，建议改用本地采集、手动检测或降低监控频率。"
+    )
+
+
+def last_error_looks_like_firecrawl_cost(task: Any) -> bool:
+    text = normalize_signal_text(str(mapping_value(task, "last_error", "") or ""))
+    return "firecrawlcreditrequired" in text or "firecrawlratelimited" in text or "额度不足" in text or "频率受限" in text
+
+
+def last_firecrawl_cost_error_kind(task: Any) -> str:
+    text = normalize_signal_text(str(mapping_value(task, "last_error", "") or ""))
+    if "firecrawlratelimited" in text or "频率受限" in text:
+        return "firecrawl_rate_limited"
+    if "firecrawlcreditrequired" in text or "额度不足" in text:
+        return "firecrawl_credit_required"
+    return "firecrawl_credit_required"
+
+
+def firecrawl_allowed_for_context(settings_payload: dict[str, Any] | None, context: str) -> bool:
+    settings_payload = settings_payload or {}
+    if not settings_payload.get("firecrawl_enabled"):
+        return False
+    if context == "catalog":
+        return bool(settings_payload.get("firecrawl_use_for_catalog"))
+    if context in {"test", "manual"}:
+        return True
+    return bool(settings_payload.get("firecrawl_use_for_monitor"))
+
+
+def firecrawl_monitor_disabled_result(url: str) -> "FetchPipelineResult":
+    attempt = FetchAttempt(
+        backend=FETCH_STRATEGY_FIRECRAWL,
+        started_at=now_iso(),
+        ended_at=now_iso(),
+        status="skipped",
+        error_kind="firecrawl_monitor_disabled",
+        detail="Firecrawl 定时监控未启用，已跳过外部抓取。",
+        final_url=url,
+    )
+    return FetchPipelineResult(
+        html="",
+        final_url=url,
+        status_code=0,
+        backend_used="",
+        attempts=[attempt],
+        error_kind="firecrawl_monitor_disabled",
+        detail=(
+            "Firecrawl 会消耗 credits，当前未允许用于定时监控；"
+            "已跳过本轮外部抓取。可手动立即检测，或改用本地采集策略。"
+        ),
     )
 
 
@@ -3338,20 +3407,20 @@ class FetcherSelector:
     ) -> list[str]:
         strategy = task_fetch_strategy(task)
         settings_payload = settings_payload or {}
+        firecrawl_allowed = firecrawl_allowed_for_context(settings_payload, context)
         if strategy in EXTERNAL_INPUT_FETCH_STRATEGIES:
             return [strategy]
         if strategy == FETCH_STRATEGY_FIRECRAWL:
             return [FETCH_STRATEGY_FIRECRAWL]
         if strategy == FETCH_STRATEGY_FIRECRAWL_THEN_STATIC:
-            return [FETCH_STRATEGY_FIRECRAWL, FETCH_STRATEGY_STATIC_HTTP]
+            return ([FETCH_STRATEGY_FIRECRAWL] if firecrawl_allowed else []) + [FETCH_STRATEGY_STATIC_HTTP]
         if strategy == FETCH_STRATEGY_STATIC_THEN_FIRECRAWL:
-            return [FETCH_STRATEGY_STATIC_HTTP, FETCH_STRATEGY_FIRECRAWL]
+            return [FETCH_STRATEGY_STATIC_HTTP] + ([FETCH_STRATEGY_FIRECRAWL] if firecrawl_allowed else [])
         if strategy == FETCH_STRATEGY_FIRECRAWL_THEN_BROWSER:
-            return [FETCH_STRATEGY_FIRECRAWL, FETCH_STRATEGY_BROWSER]
+            return ([FETCH_STRATEGY_FIRECRAWL] if firecrawl_allowed else []) + [FETCH_STRATEGY_BROWSER]
         if strategy == FETCH_STRATEGY_ADAPTIVE:
             backends = [FETCH_STRATEGY_STATIC_HTTP, FETCH_STRATEGY_BROWSER]
-            use_firecrawl = bool(settings_payload.get("firecrawl_use_for_catalog")) if context == "catalog" else bool(settings_payload.get("firecrawl_use_for_monitor"))
-            if use_firecrawl or task_fetch_strategy(task) == FETCH_STRATEGY_FIRECRAWL:
+            if firecrawl_allowed:
                 backends.append(FETCH_STRATEGY_FIRECRAWL)
             return backends
         if strategy in STATIC_HTTP_FETCH_STRATEGIES:
@@ -3391,6 +3460,13 @@ class FetcherSelector:
         context: str = "monitor",
     ) -> FetchPipelineResult:
         url = str(mapping_value(task, "monitor_url", "") or "")
+        strategy = task_fetch_strategy(task)
+        if (
+            context == "monitor"
+            and strategy == FETCH_STRATEGY_FIRECRAWL
+            and not bool(settings_payload.get("firecrawl_use_for_monitor"))
+        ):
+            return firecrawl_monitor_disabled_result(url)
         timeout_seconds = int(settings_payload.get("request_timeout_seconds") or DEFAULT_TIMEOUT_SECONDS)
         backends = self.backends_for_strategy(task, settings_payload, context=context)
         attempts: list[FetchAttempt] = []
@@ -3447,7 +3523,7 @@ class FetcherSelector:
             if (
                 last_result.error_kind == "cloudflare_challenge"
                 and FETCH_STRATEGY_FIRECRAWL in remaining_backends
-                and bool(settings_payload.get("firecrawl_enabled"))
+                and firecrawl_allowed_for_context(settings_payload, context)
             ):
                 backends[index + 1 :] = [FETCH_STRATEGY_FIRECRAWL] + [
                     backend_name for backend_name in remaining_backends if backend_name != FETCH_STRATEGY_FIRECRAWL
@@ -3610,6 +3686,15 @@ class MonitoringEngine:
     def scrape_task(self, task: sqlite3.Row, settings_payload: dict[str, Any], use_test_browser: bool) -> ScrapeResult:
         if is_task_in_protected_cooldown(task):
             cooldown_until = str(mapping_value(task, "cooldown_until", "") or "")
+            if last_error_looks_like_firecrawl_cost(task):
+                return ScrapeResult(
+                    stock=None,
+                    fragment="",
+                    detail=firecrawl_cost_cooldown_message(cooldown_until),
+                    used_test_browser=use_test_browser,
+                    error_kind=last_firecrawl_cost_error_kind(task),
+                    cooldown_skip=True,
+                )
             return ScrapeResult(
                 stock=None,
                 fragment="",
@@ -4330,6 +4415,32 @@ class MonitoringEngine:
                             task["id"],
                         ),
                     )
+                elif result.error_kind in FIRECRAWL_COST_ERROR_KINDS and not result.cooldown_skip:
+                    cooldown_until = firecrawl_cost_cooldown_until(checked_at)
+                    connection.execute(
+                        """
+                        UPDATE tasks
+                        SET last_checked_at = ?,
+                            last_error = ?,
+                            last_fetch_backend = ?,
+                            last_fetch_attempts = ?,
+                            last_protected_source_backend = '',
+                            last_blocked_at = ?,
+                            cooldown_until = ?,
+                            updated_at = ?
+                        WHERE id = ?
+                        """,
+                        (
+                            timestamp,
+                            result.detail[:1000],
+                            fetch_backend,
+                            fetch_attempts_text,
+                            timestamp,
+                            cooldown_until,
+                            timestamp,
+                            task["id"],
+                        ),
+                    )
                 else:
                     connection.execute(
                         """
@@ -4742,6 +4853,12 @@ def classify_browser_error(message: str) -> str:
         return "firecrawl_bad_request"
     if "firecrawlautherror" in lowered or "firecrawl认证失败" in lowered:
         return "firecrawl_auth_error"
+    if "firecrawlcreditrequired" in lowered or "firecrawl额度不足" in lowered:
+        return "firecrawl_credit_required"
+    if "firecrawlratelimited" in lowered or "firecrawl频率受限" in lowered:
+        return "firecrawl_rate_limited"
+    if "firecrawlmonitordisabled" in lowered or "firecrawl定时监控未启用" in lowered:
+        return "firecrawl_monitor_disabled"
     return ""
 
 

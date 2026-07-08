@@ -3113,13 +3113,123 @@ class PortalAppTestCase(unittest.TestCase):
                     "request_timeout_seconds": 25,
                     **self.firecrawl_settings(),
                 },
-                use_test_browser=False,
+                use_test_browser=True,
             )
         finally:
             engine.fetcher_selector = original_selector
 
         self.assertEqual(result.stock, 1)
         self.assertEqual(result.error_kind, "")
+
+    def test_firecrawl_monitor_disabled_does_not_call_external_backend(self) -> None:
+        class ExplodingFirecrawlFetcher:
+            def fetch(self, url: str, timeout_seconds: int) -> app_module.FetchResult:
+                raise AssertionError("scheduled monitor must not call Firecrawl unless explicitly enabled")
+
+        engine = self.app.extensions["monitor_engine"]
+        original_selector = engine.fetcher_selector
+        try:
+            engine.fetcher_selector = app_module.FetcherSelector(
+                firecrawl_fetcher=ExplodingFirecrawlFetcher(),
+            )
+            result = engine.scrape_task(
+                {
+                    "name": "Credit Safe VM",
+                    "monitor_url": "https://merchant.example.com/products",
+                    "target_keyword": "Credit Safe VM",
+                    "fetch_strategy": "firecrawl",
+                    "source_config": "{}",
+                },
+                {"request_timeout_seconds": 25, **self.firecrawl_settings(firecrawl_use_for_monitor=False)},
+                use_test_browser=False,
+            )
+        finally:
+            engine.fetcher_selector = original_selector
+
+        self.assertIsNone(result.stock)
+        self.assertEqual(result.error_kind, "firecrawl_monitor_disabled")
+        self.assertIn("未允许用于定时监控", result.detail)
+        self.assertEqual([attempt.backend for attempt in result.fetch_attempts or []], ["firecrawl"])
+
+    def test_firecrawl_credit_error_enters_long_cooldown(self) -> None:
+        timestamp = app_module.now_iso()
+        with app_module.open_connection() as connection:
+            cursor = connection.execute(
+                """
+                INSERT INTO tasks (
+                    name, monitor_url, target_keyword, fetch_strategy, restock_template, soldout_template,
+                    enabled, last_stock, last_state, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    "Credit Limited VM",
+                    "https://merchant.example.com/products",
+                    "Credit Limited VM",
+                    "firecrawl",
+                    "{name} {stock}",
+                    "{name} sold out",
+                    1,
+                    2,
+                    "in_stock",
+                    timestamp,
+                    timestamp,
+                ),
+            )
+            connection.commit()
+            task_id = cursor.lastrowid
+            task = connection.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()
+
+        result = app_module.ScrapeResult(
+            stock=None,
+            fragment="",
+            detail="Firecrawl 额度不足或需要付费额度；尝试后端：firecrawl:failed/firecrawl_credit_required",
+            used_test_browser=False,
+            error_kind="firecrawl_credit_required",
+            backend_used="firecrawl",
+            fetch_attempts=[
+                app_module.FetchAttempt(
+                    backend="firecrawl",
+                    started_at=timestamp,
+                    ended_at=timestamp,
+                    status="failed",
+                    error_kind="firecrawl_credit_required",
+                    detail="credit required",
+                    final_url="https://merchant.example.com/products",
+                )
+            ],
+        )
+
+        engine = self.app.extensions["monitor_engine"]
+        processed = engine.apply_task_result(
+            task,
+            {"telegram_bot_token": "", "telegram_chat_ids": "", **self.firecrawl_settings()},
+            result,
+            checked_at=app_module.parse_iso_datetime(timestamp),
+        )
+
+        self.assertFalse(processed)
+        with app_module.open_connection() as connection:
+            row = connection.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()
+        self.assertEqual(row["last_stock"], 2)
+        self.assertEqual(row["last_state"], "in_stock")
+        self.assertEqual(row["last_fetch_backend"], "firecrawl")
+        self.assertTrue(row["cooldown_until"])
+        checked_at = app_module.parse_iso_datetime(row["last_checked_at"])
+        cooldown_until = app_module.parse_iso_datetime(row["cooldown_until"])
+        self.assertIsNotNone(checked_at)
+        self.assertIsNotNone(cooldown_until)
+        self.assertGreaterEqual((cooldown_until - checked_at).total_seconds(), 6 * 60 * 60 - 2)
+
+        with app_module.open_connection() as connection:
+            cooling_task = connection.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()
+        cooldown_result = engine.scrape_task(
+            cooling_task,
+            {"request_timeout_seconds": 25, **self.firecrawl_settings(firecrawl_use_for_monitor=True)},
+            use_test_browser=False,
+        )
+        self.assertEqual(cooldown_result.error_kind, "firecrawl_credit_required")
+        self.assertTrue(cooldown_result.cooldown_skip)
+        self.assertIn("已暂停外部抓取", cooldown_result.detail)
 
     def test_task_stock_check_updates_inventory_without_telegram_push(self) -> None:
         _, headers = self.login()
@@ -3272,7 +3382,7 @@ class PortalAppTestCase(unittest.TestCase):
                     "fetch_strategy": "static_then_firecrawl",
                     "source_config": "{}",
                 },
-                {"request_timeout_seconds": 25, **self.firecrawl_settings()},
+                {"request_timeout_seconds": 25, **self.firecrawl_settings(), "firecrawl_use_for_monitor": True},
                 use_test_browser=False,
             )
         finally:
@@ -3324,7 +3434,7 @@ class PortalAppTestCase(unittest.TestCase):
                     "fetch_strategy": "firecrawl_then_browser",
                     "source_config": "{}",
                 },
-                {"request_timeout_seconds": 25, **self.firecrawl_settings()},
+                {"request_timeout_seconds": 25, **self.firecrawl_settings(), "firecrawl_use_for_monitor": True},
                 use_test_browser=False,
             )
         finally:
@@ -3545,7 +3655,7 @@ class PortalAppTestCase(unittest.TestCase):
             )
             result = engine.scrape_task(
                 task,
-                {"request_timeout_seconds": 25, **self.firecrawl_settings()},
+                {"request_timeout_seconds": 25, **self.firecrawl_settings(), "firecrawl_use_for_monitor": True},
                 use_test_browser=False,
             )
             changed = engine.apply_task_result(

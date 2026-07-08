@@ -203,15 +203,15 @@
             case "whmcs":
                 return "WHMCS";
             case "firecrawl":
-                return "Firecrawl";
+                return "Firecrawl 外部兜底";
             case "firecrawl_then_static":
-                return "Firecrawl → 静态";
+                return "外部兜底 → 静态";
             case "static_then_firecrawl":
-                return "静态 → Firecrawl";
+                return "静态 → 外部兜底";
             case "firecrawl_then_browser":
-                return "Firecrawl → 浏览器";
+                return "外部兜底 → 浏览器";
             case "adaptive":
-                return "自适应 fallback";
+                return "自适应低成本";
             case "manual":
                 return "手动录入";
             case "webhook":
@@ -224,15 +224,15 @@
     function fetchStrategyHelp(value) {
         switch (normalizeFetchStrategy(value)) {
             case "firecrawl":
-                return "推荐用于复杂 IDC 商品页。需要先在系统设置启用 Firecrawl 并保存 API Key；库存监控会使用 maxAge=0，避免缓存库存。";
+                return "外部付费兜底服务，会消耗 Firecrawl credits；默认不用于定时监控，只建议手动检测、商品入库或诊断时使用。";
             case "firecrawl_then_static":
-                return "先用 Firecrawl 抓取，失败后回退到静态 HTTP。适合公开页面结构稳定、但偶尔本地抓取失败的页面。";
+                return "先尝试外部 Firecrawl，再回退静态 HTTP。定时监控默认会跳过 Firecrawl，除非系统设置显式允许。";
             case "firecrawl_then_browser":
-                return "先用 Firecrawl，遇到限流或可回退错误时再尝试本地浏览器。适合需要渲染但不想默认启动浏览器的页面。";
+                return "先尝试外部 Firecrawl，再回退本地浏览器。定时监控默认会跳过 Firecrawl，避免持续消耗 credits。";
             case "static_then_firecrawl":
-                return "先用本地静态 HTTP，失败后再调用 Firecrawl。适合成本敏感、但希望保留外部后端兜底的监控。";
+                return "先用本地静态 HTTP，失败后才调用外部 Firecrawl；定时监控需显式允许 Firecrawl 才会触发。";
             case "adaptive":
-                return "自动按静态 HTTP、浏览器、Firecrawl 可用性做有限 fallback，不会无限重试；适合不确定页面类型的任务。";
+                return "默认低成本方案：先用静态 HTTP，再用本地浏览器做有限 fallback；不会默认消耗 Firecrawl credits。";
             case "generic_pricing_table":
                 return "通用 IDC 价格卡片/表格解析器。会围绕目标关键词判断购买入口、售罄标记和库存数字。";
             case "whmcs":
@@ -261,7 +261,7 @@
     }
 
     function preferredTaskFetchStrategy() {
-        return currentSettings.firecrawl_enabled ? "firecrawl" : "browser";
+        return "adaptive";
     }
 
     function stockResultLabel(stock, state = "") {
@@ -680,6 +680,8 @@
                 return "Firecrawl 参数错误";
             case "firecrawl_auth_error":
                 return "Firecrawl 认证失败";
+            case "firecrawl_monitor_disabled":
+                return "Firecrawl 定时监控未启用";
             case "firecrawl_credit_required":
                 return "Firecrawl 额度不足";
             case "firecrawl_rate_limited":

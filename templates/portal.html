@@ -1004,24 +1004,24 @@
                         <div>
                             <label for="task-fetch-strategy" class="form-label">采集方式</label>
                             <select id="task-fetch-strategy" class="input-dark">
-                                <option value="firecrawl">Firecrawl（推荐，可选外部后端）</option>
-                                <option value="firecrawl_then_static">Firecrawl → 静态 HTTP</option>
-                                <option value="firecrawl_then_browser">Firecrawl → 浏览器</option>
-                                <option value="static_then_firecrawl">静态 HTTP → Firecrawl</option>
-                                <option value="adaptive">自适应 fallback</option>
+                                <option value="adaptive">自适应低成本（推荐）</option>
                                 <option value="generic_pricing_table">通用价格页</option>
                                 <option value="whmcs">WHMCS</option>
                                 <option value="browser">浏览器渲染</option>
                                 <option value="static_http">静态 HTTP</option>
                                 <option value="manual">手动录入</option>
                                 <option value="webhook">Webhook</option>
+                                <option value="static_then_firecrawl">静态 HTTP → Firecrawl 外部兜底</option>
+                                <option value="firecrawl">Firecrawl 外部兜底（消耗 credits）</option>
+                                <option value="firecrawl_then_static">Firecrawl 外部兜底 → 静态 HTTP</option>
+                                <option value="firecrawl_then_browser">Firecrawl 外部兜底 → 浏览器</option>
                             </select>
                         </div>
                     </div>
                     <div id="task-strategy-help" class="task-strategy-help" aria-live="polite">
                         <div>
                             <p class="task-strategy-title">建议采集方式</p>
-                            <p id="task-strategy-summary">优先使用 Firecrawl；如果没有启用 Firecrawl，可改用自适应或本地浏览器渲染。</p>
+                            <p id="task-strategy-summary">默认使用低成本自适应采集。Firecrawl 属于外部付费兜底，默认不参与定时监控。</p>
                         </div>
                         <div id="task-webhook-hint" class="task-strategy-pill hidden">Webhook 模式才会显示 Token 操作</div>
                     </div>
