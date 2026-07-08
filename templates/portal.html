@@ -569,45 +569,52 @@
                                     </div>
                                     <div class="settings-entry-list" role="list">
                                         <button type="button" class="settings-nav-item settings-entry settings-entry-top" data-settings-target="settings-runtime">
-                                            <span class="settings-entry-icon">RT</span>
+                                            <span class="settings-entry-icon">TG</span>
                                             <span class="settings-entry-copy">
-                                                <strong>运行时与推送</strong>
-                                                <small>Telegram 与轮询</small>
-                                            </span>
-                                        </button>
-                                        <button type="button" class="settings-nav-item settings-entry settings-entry-bottom" data-settings-target="settings-browser-runtime">
-                                            <span class="settings-entry-icon">BR</span>
-                                            <span class="settings-entry-copy">
-                                                <strong>浏览器运行时</strong>
-                                                <small>Chromium 端口</small>
+                                                <strong>通知与 Telegram</strong>
+                                                <small>Bot Token 与群聊</small>
                                             </span>
                                         </button>
                                         <button type="button" class="settings-nav-item settings-entry settings-entry-top" data-settings-target="settings-scrapling">
                                             <span class="settings-entry-icon">SC</span>
                                             <span class="settings-entry-copy">
                                                 <strong>Scrapling 采集引擎</strong>
-                                                <small>主采集后端</small>
+                                                <small>标准 / 增强 / 高兼容</small>
                                             </span>
                                         </button>
-                                        <button type="button" class="settings-nav-item settings-entry settings-entry-top" data-settings-target="settings-firecrawl">
-                                            <span class="settings-entry-icon">FC</span>
-                                            <span class="settings-entry-copy">
-                                                <strong>Firecrawl 集成</strong>
-                                                <small>外部采集后端</small>
-                                            </span>
-                                        </button>
-                                        <button type="button" class="settings-nav-item settings-entry settings-entry-bottom" data-settings-target="settings-account">
+                                        <button type="button" class="settings-nav-item settings-entry settings-entry-top" data-settings-target="settings-account">
                                             <span class="settings-entry-icon">AC</span>
                                             <span class="settings-entry-copy">
                                                 <strong>账户与安全</strong>
                                                 <small>管理员凭据</small>
                                             </span>
                                         </button>
-                                        <button type="button" class="settings-nav-item settings-entry settings-entry-bottom" data-settings-target="settings-backup">
+                                        <button type="button" class="settings-nav-item settings-entry settings-entry-top" data-settings-target="settings-backup">
                                             <span class="settings-entry-icon">BK</span>
                                             <span class="settings-entry-copy">
                                                 <strong>备份与恢复</strong>
-                                                <small>数据迁移</small>
+                                                <small>导出、导入与迁移</small>
+                                            </span>
+                                        </button>
+                                        <button type="button" class="settings-nav-item settings-entry settings-entry-bottom" data-settings-target="settings-engine-runtime">
+                                            <span class="settings-entry-icon">RT</span>
+                                            <span class="settings-entry-copy">
+                                                <strong>运行参数</strong>
+                                                <small>轮询间隔与超时</small>
+                                            </span>
+                                        </button>
+                                        <button type="button" class="settings-nav-item settings-entry settings-entry-bottom settings-entry-secondary" data-settings-target="settings-firecrawl">
+                                            <span class="settings-entry-icon">FC</span>
+                                            <span class="settings-entry-copy">
+                                                <strong>Firecrawl 外部兜底</strong>
+                                                <small>付费诊断能力</small>
+                                            </span>
+                                        </button>
+                                        <button type="button" class="settings-nav-item settings-entry settings-entry-bottom settings-entry-secondary" data-settings-target="settings-browser-runtime">
+                                            <span class="settings-entry-icon">AD</span>
+                                            <span class="settings-entry-copy">
+                                                <strong>兼容高级项</strong>
+                                                <small>旧链路兼容设置</small>
                                             </span>
                                         </button>
                                         <button type="button" class="settings-nav-item settings-entry settings-entry-bottom" data-settings-target="settings-logs">
@@ -625,12 +632,12 @@
                                         <section id="settings-runtime" class="settings-section settings-page hidden" data-settings-panel>
                                             <div class="settings-section-heading">
                                                 <div>
-                                                    <p class="settings-kicker">Runtime</p>
-                                                    <h3 class="panel-heading">运行时与推送</h3>
+                                                    <p class="settings-kicker">Notify</p>
+                                                    <h3 class="panel-heading">通知与 Telegram</h3>
                                                 </div>
                                                 <div class="settings-section-actions">
                                                     <button type="button" class="ghost-button settings-back-button" data-settings-back>返回</button>
-                                                    <button type="submit" class="primary-button">保存运行时</button>
+                                                    <button type="submit" class="primary-button">保存通知</button>
                                                 </div>
                                             </div>
                                             <div class="settings-grid">
@@ -647,13 +654,30 @@
                                                         <span id="settings-chat-ids-count" class="rounded-full border border-slate-700 bg-slate-950/70 px-2.5 py-1 font-mono text-[11px] text-slate-400">0 群聊</span>
                                                     </div>
                                                 </div>
+                                            </div>
+                                        </section>
+
+                                        <section id="settings-engine-runtime" class="settings-section settings-page hidden" data-settings-panel>
+                                            <div class="settings-section-heading">
+                                                <div>
+                                                    <p class="settings-kicker">Runtime</p>
+                                                    <h3 class="panel-heading">运行参数</h3>
+                                                </div>
+                                                <div class="settings-section-actions">
+                                                    <button type="button" class="ghost-button settings-back-button" data-settings-back>返回</button>
+                                                    <button type="submit" class="primary-button">保存运行参数</button>
+                                                </div>
+                                            </div>
+                                            <div class="settings-grid">
                                                 <div class="settings-field">
                                                     <label for="settings-poll-interval" class="form-label">轮询间隔</label>
                                                     <input id="settings-poll-interval" type="number" min="15" max="3600" class="input-dark">
+                                                    <p class="field-help mt-2">每轮定时监控的间隔秒数。Scrapling 会按域名复用结果，避免同站点重复消耗。</p>
                                                 </div>
                                                 <div class="settings-field">
-                                                    <label for="settings-timeout" class="form-label">请求超时</label>
+                                                    <label for="settings-timeout" class="form-label">通用请求超时</label>
                                                     <input id="settings-timeout" type="number" min="10" max="120" class="input-dark">
+                                                    <p class="field-help mt-2">普通请求的兜底超时。Scrapling 标准 / 增强 / 高兼容模式有独立高级超时。</p>
                                                 </div>
                                             </div>
                                         </section>
@@ -661,25 +685,26 @@
                                         <section id="settings-browser-runtime" class="settings-section settings-page hidden" data-settings-panel>
                                             <div class="settings-section-heading">
                                                 <div>
-                                                    <p class="settings-kicker">Browser</p>
-                                                    <h3 class="panel-heading">浏览器运行时</h3>
+                                                    <p class="settings-kicker">Legacy</p>
+                                                    <h3 class="panel-heading">兼容高级项</h3>
+                                                    <p class="field-help mt-2">仅用于旧版 DrissionPage / 浏览器兜底链路。Scrapling 是当前主采集引擎，普通用户无需修改这里。</p>
                                                 </div>
                                                 <div class="settings-section-actions">
                                                     <button type="button" class="ghost-button settings-back-button" data-settings-back>返回</button>
-                                                    <button type="submit" class="primary-button">保存浏览器</button>
+                                                    <button type="submit" class="primary-button">保存高级项</button>
                                                 </div>
                                             </div>
                                             <div class="settings-grid settings-grid-three">
                                                 <div class="settings-field">
-                                                    <label for="settings-monitor-port" class="form-label">监控浏览器端口</label>
+                                                    <label for="settings-monitor-port" class="form-label">旧监控链路端口</label>
                                                     <input id="settings-monitor-port" type="number" min="1024" max="65535" class="input-dark">
                                                 </div>
                                                 <div class="settings-field">
-                                                    <label for="settings-test-port" class="form-label">测试浏览器端口</label>
+                                                    <label for="settings-test-port" class="form-label">旧测试链路端口</label>
                                                     <input id="settings-test-port" type="number" min="1024" max="65535" class="input-dark">
                                                 </div>
                                                 <div class="settings-field">
-                                                    <label for="settings-catalog-port" class="form-label">商品入库浏览器端口</label>
+                                                    <label for="settings-catalog-port" class="form-label">旧商品入库链路端口</label>
                                                     <input id="settings-catalog-port" type="number" min="1024" max="65535" class="input-dark">
                                                 </div>
                                             </div>
@@ -702,7 +727,10 @@
                                                         <p class="form-label">当前状态</p>
                                                         <p id="settings-scrapling-status" class="field-help">等待系统状态。</p>
                                                     </div>
-                                                    <span id="settings-scrapling-status-pill" class="rounded-full border border-slate-700 bg-slate-950/70 px-3 py-1 text-xs font-bold text-slate-400">未检测</span>
+                                                    <div class="scrapling-status-actions">
+                                                        <span id="settings-scrapling-status-pill" class="rounded-full border border-slate-700 bg-slate-950/70 px-3 py-1 text-xs font-bold text-slate-400">未检测</span>
+                                                        <button id="settings-scrapling-test-button" type="button" class="ghost-button">检测 Scrapling</button>
+                                                    </div>
                                                 </div>
                                                 <label class="settings-check">
                                                     <input id="settings-scrapling-enabled" type="checkbox" class="h-4 w-4 rounded border-slate-700 bg-slate-950 text-indigo-500">
@@ -773,7 +801,7 @@
                                                         </div>
                                                     </div>
                                                 </details>
-                                                <p class="settings-field-wide text-sm leading-6 text-slate-400">Scrapling 将作为后续主采集引擎。普通用户只需要选择默认模式；高级参数会在后续采集链路接入时用于限流、冷却和会话复用。</p>
+                                                <p class="settings-field-wide text-sm leading-6 text-slate-400">Scrapling 是当前主采集引擎。普通用户只需要选择默认模式；高级参数只在需要微调限流、冷却和会话复用时展开。</p>
                                             </div>
                                         </section>
 
@@ -781,7 +809,8 @@
                                             <div class="settings-section-heading">
                                                 <div>
                                                     <p class="settings-kicker">Integration</p>
-                                                    <h3 class="panel-heading">Firecrawl 集成</h3>
+                                                    <h3 class="panel-heading">Firecrawl 外部兜底</h3>
+                                                    <p class="field-help mt-2">Firecrawl 会消耗外部 credits，默认不建议用于高频定时监控；更适合手动诊断或个别复杂页面兜底。</p>
                                                 </div>
                                                 <div class="settings-section-actions">
                                                     <button type="button" class="ghost-button settings-back-button" data-settings-back>返回</button>

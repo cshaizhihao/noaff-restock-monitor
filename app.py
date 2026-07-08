@@ -8882,6 +8882,19 @@ def make_app() -> Flask:
             }
         )
 
+    @app.route("/api/settings/scrapling-test", methods=["POST"])
+    @login_required
+    @limiter.limit("20 per minute")
+    def test_scrapling_settings():
+        result = scrapling_runtime_status()
+        return jsonify(
+            {
+                "ok": True,
+                "message": "Scrapling 检测完成。",
+                "result": result,
+            }
+        )
+
     @app.route("/api/settings/profile", methods=["POST"])
     @login_required
     @limiter.limit("10 per minute")

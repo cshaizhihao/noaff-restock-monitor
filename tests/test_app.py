@@ -2966,6 +2966,25 @@ class PortalAppTestCase(unittest.TestCase):
         self.assertIn("scrapling_status", settings)
         self.assertIsInstance(settings["scrapling_status"].get("available"), bool)
 
+    def test_scrapling_settings_test_endpoint_returns_safe_status(self) -> None:
+        _, headers = self.login()
+
+        response = self.client.post(
+            f"{app_module.PORTAL_PATH}/api/settings/scrapling-test",
+            headers=headers,
+            base_url=BASE_URL,
+            json={},
+        )
+        self.assertEqual(response.status_code, 200)
+        payload = response.get_json()
+        self.assertTrue(payload["ok"])
+        self.assertEqual(payload["message"], "Scrapling 检测完成。")
+        result = payload["result"]
+        self.assertIn("available", result)
+        self.assertIn("status", result)
+        self.assertIn("detail", result)
+        self.assertNotIn("api_key", json.dumps(payload, ensure_ascii=False).lower())
+
     def test_scrapling_invalid_mode_falls_back_to_standard(self) -> None:
         _, headers = self.login()
         response = self.client.post(

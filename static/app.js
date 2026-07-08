@@ -91,6 +91,7 @@
         settingsFirecrawlTestResult: document.getElementById("settings-firecrawl-test-result"),
         settingsScraplingStatus: document.getElementById("settings-scrapling-status"),
         settingsScraplingStatusPill: document.getElementById("settings-scrapling-status-pill"),
+        settingsScraplingTestButton: document.getElementById("settings-scrapling-test-button"),
         settingsScraplingEnabled: document.getElementById("settings-scrapling-enabled"),
         settingsScraplingDefaultMode: document.getElementById("settings-scrapling-default-mode"),
         settingsScraplingUseForMonitor: document.getElementById("settings-scrapling-use-for-monitor"),
@@ -522,7 +523,7 @@
         if (els.merchantFirecrawlState) {
             els.merchantFirecrawlState.textContent = enabled
                 ? "Firecrawl 已启用，可用于 Map、Scrape 和商品提示解析。"
-                : "Firecrawl 未启用，相关选项已锁定；可在系统设置 > Firecrawl 集成中开启。";
+                : "Firecrawl 未启用，相关选项已锁定；可在系统设置 > Firecrawl 外部兜底中开启。";
         }
         renderMerchantReviewSummary();
     }
@@ -1826,17 +1827,7 @@
         syncCheckboxValue(els.settingsFirecrawlUseForMonitor, Boolean(settings.firecrawl_use_for_monitor));
         syncCheckboxValue(els.settingsFirecrawlUseForCatalog, settings.firecrawl_use_for_catalog !== false);
         syncInputValue(els.settingsFirecrawlCatalogLimit, settings.firecrawl_catalog_limit || 50);
-        const scraplingStatus = settings.scrapling_status || {};
-        if (els.settingsScraplingStatus) {
-            els.settingsScraplingStatus.textContent = scraplingStatus.detail || "Scrapling 状态等待检测。";
-        }
-        if (els.settingsScraplingStatusPill) {
-            const available = Boolean(scraplingStatus.available);
-            els.settingsScraplingStatusPill.textContent = available ? "可用" : "未安装";
-            els.settingsScraplingStatusPill.className = available
-                ? "rounded-full border border-emerald-500/30 bg-emerald-500/10 px-3 py-1 text-xs font-bold text-emerald-200"
-                : "rounded-full border border-amber-500/30 bg-amber-500/10 px-3 py-1 text-xs font-bold text-amber-200";
-        }
+        renderScraplingRuntimeStatus(settings.scrapling_status || {});
         syncCheckboxValue(els.settingsScraplingEnabled, settings.scrapling_enabled !== false);
         syncInputValue(els.settingsScraplingDefaultMode, settings.scrapling_default_mode || "standard");
         syncCheckboxValue(els.settingsScraplingUseForMonitor, settings.scrapling_use_for_monitor !== false);
@@ -2852,6 +2843,44 @@
             showToast(error.message, "error");
         } finally {
             button.disabled = false;
+        }
+    }
+
+    function renderScraplingRuntimeStatus(status) {
+        const payload = status || {};
+        const available = Boolean(payload.available);
+        if (els.settingsScraplingStatus) {
+            els.settingsScraplingStatus.textContent = payload.detail || "Scrapling 状态等待检测。";
+        }
+        if (els.settingsScraplingStatusPill) {
+            els.settingsScraplingStatusPill.textContent = available
+                ? "可用"
+                : (payload.status === "missing_fetchers" ? "依赖缺失" : "未安装");
+            els.settingsScraplingStatusPill.className = available
+                ? "rounded-full border border-emerald-500/30 bg-emerald-500/10 px-3 py-1 text-xs font-bold text-emerald-200"
+                : "rounded-full border border-amber-500/30 bg-amber-500/10 px-3 py-1 text-xs font-bold text-amber-200";
+        }
+    }
+
+    async function testScraplingRuntime() {
+        const button = els.settingsScraplingTestButton;
+        if (!button) return;
+        const originalText = button.textContent;
+        button.disabled = true;
+        button.textContent = "检测中...";
+        try {
+            const data = await apiFetch("/api/settings/scrapling-test", { method: "POST" });
+            const result = data.result || {};
+            renderScraplingRuntimeStatus(result);
+            showToast(
+                result.available ? "Scrapling 检测通过。" : "Scrapling 检测未通过，请查看状态说明。",
+                result.available ? "success" : "error"
+            );
+        } catch (error) {
+            showToast(error.message, "error");
+        } finally {
+            button.disabled = false;
+            button.textContent = originalText || "检测 Scrapling";
         }
     }
 
@@ -4051,6 +4080,7 @@
 
     els.taskFetchStrategy?.addEventListener("change", updateTaskStrategyUi);
     els.settingsFirecrawlTestButton?.addEventListener("click", testFirecrawlConnection);
+    els.settingsScraplingTestButton?.addEventListener("click", testScraplingRuntime);
 
     els.settingsForm?.addEventListener("submit", async (event) => {
         event.preventDefault();
