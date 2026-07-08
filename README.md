@@ -39,7 +39,9 @@ NOAFF Restock Monitor 用来监控 IDC、VPS、独服、WHMCS 商店等公开商
 - IDC 页面解析：围绕目标关键词查找附近 card / table / section，识别库存数字、购买入口和售罄标记。
 - WHMCS 解析：支持常见商店页、`pid`、`cart.php?gid=xx`、`configureproduct`、`Order Now`、`Out of Stock`。
 - 可选 Firecrawl 后端：用于人工触发的商品入库 Map/Scrape 更合适，实时监控默认关闭。
+- Firecrawl 连接诊断：后台可用当前表单配置测试 API URL / Key / proxy / ZDR，不保存、不泄露 Key。
 - 商品入库工作台：入口 URL -> URL 发现 -> 批量抓取 -> 解析预览 -> 批量创建任务。
+- 商品入库降噪：语言切换、导航、页脚、步骤标题、无价格/无规格候选会降级到人工确认。
 - 受保护来源处理：Cloudflare challenge 统一分类为 `cloudflare_challenge`，并按 1 / 3 / 10 分钟递进冷却。
 - Telegram 状态机：补货发新消息，库存变化编辑原消息，售罄覆盖原消息并清空 `message_id`。
 - Manual / Webhook 数据源：没有可抓页面时，也能用后台手动标记或外部系统推送库存。
@@ -109,6 +111,8 @@ Firecrawl 是可选外部采集后端，不是项目硬依赖。不开启 Firecr
 - 实时监控谨慎开启：默认 `FIRECRAWL_USE_FOR_MONITOR=false`，避免每轮监控产生外部调用成本。
 - 库存监控必须使用 `FIRECRAWL_MAX_AGE_MS=0` 和 `FIRECRAWL_STORE_IN_CACHE=false`，避免缓存旧库存。
 - API Key 只保存在后端，snapshot、备份、日志和前端响应不会返回明文。
+- 后台 Firecrawl 集成页提供“测试 Firecrawl 连接”，会使用当前表单里的 API URL、API Key、proxy、zeroDataRetention 做一次最小 scrape 诊断；测试不会保存 Key，响应也不会返回明文 Key。
+- 诊断会把常见错误翻译成操作建议：认证失败、额度不足、限流、ZDR 未开通、proxy 权限、返回 challenge、API URL 不正确等。
 
 Hosted Firecrawl 可能提升复杂页面成功率，但页面内容会发送给外部服务，且 enhanced / auto proxy 可能产生额外费用。Self-host Firecrawl 不包含 hosted 版 Fire-engine 等高级 IP block / robot detection 能力，不能把它当成 Cloudflare 绕过能力。
 
@@ -138,8 +142,10 @@ FIRECRAWL_ALLOW_AUTO_PROXY=true
 商品入库适合 IDC 商家没有公开 API、但有公开价格页 / WHMCS 商店页 / sitemap / 商品列表页的场景。当前工作流是：
 
 ```text
-入口 URL -> 发现候选 URL -> 过滤商品页 -> 批量抓取 -> 解析器 -> 入库预览 -> 创建任务
+来源 -> 采集 -> 规则 -> 执行 -> 发现结果 -> 商品预览 -> 创建任务
 ```
+
+工作台会先发现候选 URL，再让你抓取选中 URL，最后在商品预览里确认可入库商品。默认不会把语言切换、导航、页脚、分类/步骤标题、无价格/无规格候选直接写入任务；这些内容会进入“需要人工确认 / 已过滤候选”。
 
 工作台字段：
 
@@ -155,7 +161,7 @@ FIRECRAWL_ALLOW_AUTO_PROXY=true
 | include sold out | 是否把售罄商品也放进入库预览 |
 | auto create tasks | 是否导入后直接生成监控任务 |
 
-发现结果和商品预览会展示 URL、来源、状态、解析器、`backend_used` 和是否可创建任务。批量创建任务会按 `source_item_id` 去重；重复执行只会同步已有任务，不会重复创建。
+发现结果和商品预览会展示 URL、来源、状态、解析器、`backend_used`、置信度、命中信号和是否可创建任务。批量创建任务会按 `source_item_id` 去重；重复执行只会同步已有任务，不会重复创建。
 
 ## IDC / WHMCS 配置示例
 
@@ -293,7 +299,8 @@ curl -X POST 'https://your-panel.example.com/api/webhooks/restock/123' \
 后台包含：
 
 - 监控任务创建、编辑、启停、删除。
-- 主分组 / 子分组管理、分组重命名、删除分组、批量删除任务。
+- 主分组 / 多级子分组卡片浏览，进入后再看下一级或商品列表，避免一页瀑布流。
+- 分组重命名、删除分组、批量删除子分组、批量删除任务。
 - 采集策略选择。
 - 受保护来源提示和冷却时间展示。
 - Manual 快捷标记。
@@ -447,8 +454,16 @@ ADMIN_USERNAME=operator ADMIN_PASSWORD=operator-test flask --app app:app run --h
 ```bash
 python -m unittest discover -s tests -v
 python -m py_compile app.py tests/test_app.py tests/test_install_script.py
+node --check static/app.js
 bash -n install.sh
 ```
+
+当前完整回归基线：
+
+- 152 tests passing
+- Python compile check passing
+- `static/app.js` syntax check passing
+- `install.sh` bash syntax check passing
 
 当前测试覆盖：
 
@@ -456,10 +471,10 @@ bash -n install.sh
 - 任务创建、编辑、分组、快照字段。
 - 数据库迁移和备份恢复。
 - `static_http`、`browser`、`generic_pricing_table`、`whmcs`。
-- Firecrawl scrape/map/fallback pipeline，全部使用 mock，不依赖实时 Firecrawl。
+- Firecrawl scrape/map/fallback pipeline 和连接诊断，全部使用 mock，不依赖实时 Firecrawl。
 - Cloudflare challenge 分类、受保护来源冷却、浏览器不误 rebuild。
 - Manual / Webhook 库存写入和 Telegram 状态机。
-- 商品入库 URL 发现、Firecrawl Map、商品预览、批量创建任务去重。
+- 商品入库 URL 发现、Firecrawl Map、噪音过滤、商品预览、批量创建任务去重。
 - 安装脚本、Docker、Nginx、升级、卸载。
 - 前端轮询、任务卡片局部更新、UI 静态约束。
 

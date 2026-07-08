@@ -698,7 +698,10 @@ class InstallScriptTestCase(unittest.TestCase):
         self.assertIn("does not bypass Cloudflare / Turnstile / CAPTCHA", release_notes)
         self.assertIn("Cloudflare / Turnstile / CAPTCHA challenge pages are treated as protected sources", release_notes)
         self.assertIn("Webhook tokens are stored as HMAC hashes", release_notes)
-        self.assertIn("135 tests passing", release_notes)
+        self.assertIn("152 tests passing", release_notes)
+        self.assertIn("Firecrawl connection diagnostics", release_notes)
+        self.assertIn("product intake noise filtering", release_notes)
+        self.assertIn("does not save or expose plaintext API keys", release_notes)
         self.assertIn("FIRECRAWL_MAX_AGE_MS=0", release_notes)
         self.assertIn("catalog_discovery_strategy: firecrawl_map", release_notes)
 

@@ -60,7 +60,10 @@ Implemented Behavior:
 - Firecrawl self-host note: self-hosted Firecrawl does not include hosted Fire-engine advanced anti-blocking capabilities.
 - If Firecrawl returns normal page HTML, local extractors parse it. If Firecrawl returns a challenge page, the task/source is still treated as protected.
 - Product intake UI is split from system settings. System settings stays system-level only; intake has its own workbench.
-- Product intake supports bulk task creation and dedupes by existing `source_item_id`.
+- Product intake supports guided source -> strategy -> rules -> discovery -> preview flow, bulk task creation, and dedupes by existing `source_item_id`.
+- Product intake now demotes locale switches, navigation links, footer links, step/category headings, and no-price/no-spec candidates into the review bucket instead of auto-promoting them.
+- The task dashboard uses hierarchical group/subgroup cards and product lists instead of a single long waterfall-like page.
+- System settings Firecrawl page has a non-persistent connection diagnostic button that tests current form values and returns actionable advice without exposing the API key.
 
 Key Files:
 - `app.py`
@@ -89,6 +92,7 @@ Key Files:
   - task form fetch strategy selector
   - product intake workbench
   - system settings Firecrawl integration group
+  - Firecrawl connection diagnostic UI
 - `tests/test_app.py`
   - migration tests
   - fetcher tests
@@ -108,7 +112,7 @@ bash -n install.sh
 ```
 
 Current Passing Baseline:
-- 135 tests pass.
+- 152 tests pass.
 - `py_compile` passes.
 - `node --check static/app.js` passes.
 - `bash -n install.sh` passes.
@@ -147,11 +151,13 @@ Known Limits:
 - Firecrawl hosted may improve complex-page success rates, but it is an external provider with cost/privacy tradeoffs.
 - Firecrawl self-host is useful as a scrape/map service, not as a guaranteed protected-site bypass.
 - Inventory polling through Firecrawl must keep `maxAge=0` and avoid cache.
+- Firecrawl connection diagnostic uses `https://example.com/` as a minimal scrape target and must stay mocked in tests.
 
 Next Release Checklist:
 - Run the validation commands above.
 - Manually smoke test dashboard task creation for all fetch strategies.
 - Smoke test product intake: local discovery, Firecrawl Map if configured, preview, single create, bulk create.
+- Test Firecrawl integration settings with a valid key and with an invalid key; confirm the diagnostic gives a readable reason and never displays the plaintext key.
 - Create one `manual` task and verify in-stock / sold-out buttons update Telegram state.
 - Create one `webhook` task, reset token, and POST stock/sold_out payloads.
 - Confirm protected source tasks show cooldown and do not repeatedly request the target.

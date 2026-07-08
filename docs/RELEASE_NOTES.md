@@ -11,7 +11,9 @@ This release completes the IDC restock monitoring path for public product pages:
 - public page fetching
 - strategy-based fetchers
 - optional Firecrawl scrape/map backend
+- Firecrawl connection diagnostics in settings
 - product intake URL discovery and preview workflow
+- product intake noise filtering for navigation/locale/section text
 - IDC / WHMCS page extractors
 - protected-source cooldown for Cloudflare challenge pages
 - Telegram state machine reuse for crawler, manual, and webhook inputs
@@ -53,6 +55,10 @@ If Firecrawl returns normal page content, NOAFF can parse it. If Firecrawl retur
   - `storeInCache=false`
   - API key masking
   - explicit proxy feature flags for enhanced/auto
+- Added Firecrawl settings diagnostic:
+  - tests current unsaved form values
+  - reports auth, ZDR, credit, rate limit, proxy, timeout, challenge, and bad-response states
+  - does not save or expose plaintext API keys
 - Added Firecrawl-style fallback pipeline with bounded attempts and frontend attempt summaries.
 - Added IDC extractors:
   - `generic_pricing_table`
@@ -67,6 +73,12 @@ If Firecrawl returns normal page content, NOAFF can parse it. If Firecrawl retur
   - product preview
   - bulk task creation
   - user-readable recovery suggestions
+- Product intake now demotes language switches, navigation/footer links, category/step headings, and no-price/no-spec candidates into manual review instead of auto-promoting them.
+- Added hierarchical task browsing:
+  - main group cards
+  - nested subgroup cards
+  - current-layer product lists
+  - drag sorting and bulk delete controls
 - Added manual stock update API and dashboard controls.
 - Added webhook ingest API with one-time plaintext token generation.
 - Webhook tokens are stored as HMAC hashes; snapshots/logs do not expose plaintext tokens.
@@ -201,7 +213,7 @@ bash -n install.sh
 
 Current baseline:
 
-- 135 tests passing
+- 152 tests passing
 - Python compile check passing
 - `static/app.js` syntax check passing
 - `install.sh` bash syntax check passing
@@ -212,6 +224,7 @@ Current baseline:
 - Create a `whmcs` task with a known product title or `pid` and confirm `Out of Stock` is detected as sold out.
 - Import one merchant page with local discovery and confirm discovered products enter preview before task creation.
 - If Firecrawl is configured, run product intake with `firecrawl_map` and confirm backend_used is displayed as Firecrawl.
+- In Firecrawl settings, run connection diagnostics with a valid key and an invalid key; confirm actionable messages and no plaintext key exposure.
 - Bulk-create preview items twice and confirm the second run syncs existing tasks rather than duplicating them.
 - Create a `manual` task and click dashboard “有货” and “售罄”; confirm Telegram send/edit behavior.
 - Create a `webhook` task, reset token, POST `stock`, then POST `status=sold_out`; confirm Telegram send/edit behavior.
