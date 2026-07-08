@@ -148,11 +148,11 @@ class PortalAppTestCase(unittest.TestCase):
             self.assertIn("cooldown_until", columns)
             self.assertIn("ingest_token_hash", columns)
             self.assertIn("ingest_token_hint", columns)
-            self.assertEqual(row[0], "'scrapling_adaptive'")
+            self.assertEqual(row[0], "'multi_engine'")
         finally:
             app_module.DB_PATH = original_db_path
 
-    def test_initialize_database_migrates_legacy_fetch_strategies_to_scrapling(self) -> None:
+    def test_initialize_database_migrates_legacy_fetch_strategies_to_multi_engine(self) -> None:
         original_db_path = app_module.DB_PATH
         legacy_db_path = self.data_dir / "legacy-strategy-monitor.db"
         timestamp = app_module.now_iso()
@@ -235,9 +235,9 @@ class PortalAppTestCase(unittest.TestCase):
 
             self.assertIsNotNone(marker)
             self.assertEqual(tasks["browser task"]["fetch_strategy"], "scrapling_dynamic")
-            self.assertEqual(tasks["static task"]["fetch_strategy"], "scrapling_standard")
-            self.assertEqual(tasks["generic task"]["fetch_strategy"], "scrapling_adaptive")
-            self.assertEqual(tasks["whmcs task"]["fetch_strategy"], "scrapling_adaptive")
+            self.assertEqual(tasks["static task"]["fetch_strategy"], "curl_cffi")
+            self.assertEqual(tasks["generic task"]["fetch_strategy"], "multi_engine")
+            self.assertEqual(tasks["whmcs task"]["fetch_strategy"], "multi_engine")
             self.assertEqual(tasks["firecrawl task"]["fetch_strategy"], "scrapling_stealth")
             self.assertEqual(tasks["manual task"]["fetch_strategy"], "manual")
             self.assertEqual(tasks["webhook task"]["fetch_strategy"], "webhook")
@@ -612,7 +612,7 @@ class PortalAppTestCase(unittest.TestCase):
         self.assertEqual(invalid_strategy.status_code, 400)
         self.assertIn("采集方式", invalid_strategy.get_json()["message"])
 
-    def test_task_creation_without_fetch_strategy_defaults_to_scrapling_adaptive(self) -> None:
+    def test_task_creation_without_fetch_strategy_defaults_to_multi_engine(self) -> None:
         _, headers = self.login()
 
         create = self.client.post(
@@ -638,7 +638,7 @@ class PortalAppTestCase(unittest.TestCase):
             base_url=BASE_URL,
         )
         payload = snapshot.get_json()
-        self.assertEqual(payload["tasks"][0]["fetch_strategy"], "scrapling_adaptive")
+        self.assertEqual(payload["tasks"][0]["fetch_strategy"], "multi_engine")
 
     def test_merchant_import_discovers_products_and_promotes_tasks(self) -> None:
         _, headers = self.login()
@@ -731,12 +731,12 @@ class PortalAppTestCase(unittest.TestCase):
         self.assertEqual(payload["merchant"]["metrics"]["linked_tasks"], 2)
         self.assertTrue(all(item["confidence"] >= 45 for item in payload["merchant"]["items"]))
 
-    def test_catalog_defaults_are_scrapling_first(self) -> None:
+    def test_catalog_defaults_are_multi_engine_first(self) -> None:
         engine = self.app.extensions["monitor_engine"]
         options = app_module.normalize_catalog_options({}, engine.get_runtime_settings(), "Default", True)
 
-        self.assertEqual(options["catalog_scrape_strategy"], "scrapling_adaptive")
-        self.assertEqual(options["default_fetch_strategy"], "scrapling_adaptive")
+        self.assertEqual(options["catalog_scrape_strategy"], "multi_engine")
+        self.assertEqual(options["default_fetch_strategy"], "multi_engine")
 
     def test_scrape_catalog_candidate_uses_scrapling_strategy(self) -> None:
         class FakeScraplingResponse:
@@ -3317,6 +3317,47 @@ class PortalAppTestCase(unittest.TestCase):
         self.assertEqual(result.error_kind, "http_error")
         self.assertIn("HTTP 429", result.detail)
 
+    def test_curl_cffi_fetcher_returns_html_with_browser_fingerprint_headers(self) -> None:
+        class FakeResponse:
+            status_code = 200
+            url = "https://example.com/products"
+            text = "<html><title>Products</title><body>HK-CMI <a>Order Now</a></body></html>"
+
+        class FakeClient:
+            def __init__(self) -> None:
+                self.headers: dict[str, str] = {}
+                self.timeout = None
+
+            def get(self, url, timeout=None, headers=None):
+                self.timeout = timeout
+                self.headers = headers or {}
+                return FakeResponse()
+
+        client = FakeClient()
+        result = app_module.CurlCffiFetcher(client).fetch("https://example.com/products", 25)
+
+        self.assertEqual(result.error_kind, "")
+        self.assertEqual(result.status_code, 200)
+        self.assertIn("HK-CMI", result.html)
+        self.assertEqual(result.detail, "curl_cffi ok")
+        self.assertEqual(client.timeout, 25)
+        self.assertIn("Mozilla/5.0", client.headers["User-Agent"])
+
+    def test_curl_cffi_fetcher_classifies_cloudflare_challenge(self) -> None:
+        class FakeResponse:
+            status_code = 403
+            url = "https://example.com/products"
+            text = "<html><title>Just a moment...</title><body><div id=\"cf-turnstile\">Cloudflare</div></body></html>"
+
+        class FakeClient:
+            def get(self, url, timeout=None, headers=None):
+                return FakeResponse()
+
+        result = app_module.CurlCffiFetcher(FakeClient()).fetch("https://example.com/products", 10)
+
+        self.assertEqual(result.error_kind, "cloudflare_challenge")
+        self.assertIn("curl_cffi", result.detail)
+
     def firecrawl_settings(self, **overrides) -> dict[str, object]:
         settings = {
             "firecrawl_enabled": True,
@@ -4294,6 +4335,63 @@ class PortalAppTestCase(unittest.TestCase):
         self.assertEqual(client.calls, ["standard", "dynamic"])
         self.assertEqual(result.backend_used, "scrapling_dynamic")
         self.assertEqual([attempt.backend for attempt in result.fetch_attempts or []], ["scrapling_standard", "scrapling_dynamic"])
+
+    def test_multi_engine_tries_curl_cffi_then_scrapling_after_challenge(self) -> None:
+        class ChallengeCurlFetcher:
+            def __init__(self) -> None:
+                self.calls = 0
+
+            def fetch(self, url: str, timeout_seconds: int) -> app_module.FetchResult:
+                self.calls += 1
+                return app_module.FetchResult(
+                    html="",
+                    final_url=url,
+                    status_code=403,
+                    error_kind="cloudflare_challenge",
+                    detail="curl_cffi 拿到的仍是 Cloudflare 验证页",
+                )
+
+        class FakeScraplingResponse:
+            url = "https://example.com/products"
+            status = 200
+            html_content = "<html><body><section>Seoul VPS <a>Order Now</a></section></body></html>"
+
+        class FakeScraplingClient:
+            def __init__(self) -> None:
+                self.calls: list[str] = []
+
+            def fetch(self, mode: str, url: str, timeout_seconds: int):
+                self.calls.append(mode)
+                return FakeScraplingResponse()
+
+        curl_fetcher = ChallengeCurlFetcher()
+        scrapling_client = FakeScraplingClient()
+        engine = self.app.extensions["monitor_engine"]
+        original_selector = engine.fetcher_selector
+        try:
+            engine.fetcher_selector = app_module.FetcherSelector(
+                curl_cffi_fetcher=curl_fetcher,
+                scrapling_client=scrapling_client,
+            )
+            result = engine.scrape_task(
+                {
+                    "name": "Seoul VPS",
+                    "monitor_url": "https://example.com/products",
+                    "target_keyword": "Seoul VPS",
+                    "fetch_strategy": "multi_engine",
+                    "source_config": "{}",
+                },
+                {"request_timeout_seconds": 25, **self.scrapling_settings()},
+                use_test_browser=False,
+            )
+        finally:
+            engine.fetcher_selector = original_selector
+
+        self.assertEqual(result.stock, 1)
+        self.assertEqual(curl_fetcher.calls, 1)
+        self.assertEqual(scrapling_client.calls, ["standard"])
+        self.assertEqual(result.backend_used, "scrapling_standard")
+        self.assertEqual([attempt.backend for attempt in result.fetch_attempts or []], ["curl_cffi", "scrapling_standard"])
 
     def test_scrapling_stealth_challenge_failure_enters_protected_cooldown(self) -> None:
         class FakeScraplingResponse:

@@ -12,7 +12,8 @@ Project: NOAFF IDC restock monitor
 
 - Flask dashboard
 - SQLite storage
-- Scrapling-first fetch pipeline
+- Multi-engine-first fetch pipeline
+- `curl_cffi` browser-fingerprint HTTP first layer
 - Legacy DrissionPage / Chromium fallback
 - Optional Firecrawl external fallback / diagnostics
 - Telegram send/edit/sold-out state machine
@@ -21,15 +22,17 @@ Project: NOAFF IDC restock monitor
 
 Primary user-facing modes:
 
-- `scrapling_standard`: lightweight public HTML
+- `multi_engine`: default, bounded curl_cffi -> standard -> dynamic -> stealth escalation
+- `curl_cffi`: low-cost browser-fingerprint HTTP, no browser startup
+- `scrapling_standard`: lightweight Scrapling fetcher
 - `scrapling_dynamic`: JS-rendered pages
-- `scrapling_stealth`: high-compatibility mode, low concurrency
-- `scrapling_adaptive`: default, bounded standard -> dynamic -> stealth escalation
+- `scrapling_stealth`: high-compatibility browser mode, low concurrency
 - `manual`: dashboard-managed stock state
 - `webhook`: external stock writes
 
 Legacy/compatibility modes still exist but are not the default:
 
+- `scrapling_adaptive`
 - `browser`
 - `static_http`
 - `generic_pricing_table`
@@ -40,20 +43,21 @@ Legacy/compatibility modes still exist but are not the default:
 - `firecrawl_then_browser`
 - `adaptive`
 
-Upgrade migration maps old strategies into Scrapling-first:
+Upgrade migration maps old strategies into multi-engine-first:
 
 - `browser` -> `scrapling_dynamic`
-- `static_http` -> `scrapling_standard`
-- `adaptive` -> `scrapling_adaptive`
+- `static_http` -> `curl_cffi`
+- `adaptive` -> `multi_engine`
 - Firecrawl pipelines -> `scrapling_stealth`
-- `generic_pricing_table` / `whmcs` -> `scrapling_adaptive` with original extractor preserved in `source_config.extractor`
+- `generic_pricing_table` / `whmcs` -> `multi_engine` with original extractor preserved in `source_config.extractor`
 - `manual` / `webhook` unchanged
 
 The migration is marked by `scrapling_fetch_strategy_migration_v1` and runs once, so later manual strategy choices are not overwritten.
 
 ## Implemented Behavior
 
-- Scrapling is the default monitor and catalog fetch engine.
+- `multi_engine` is the default monitor and catalog fetch strategy.
+- `curl_cffi` is the first low-cost engine, followed by Scrapling standard/dynamic/stealth when the lightweight request is insufficient.
 - Firecrawl is no longer the default for realtime polling; it remains an external fallback/diagnostic option.
 - Domain-level fetch sharing avoids repeatedly fetching the same URL/domain in one cycle.
 - Same-domain protected-source failures set cooldown and stop further hits in that cycle.
@@ -70,7 +74,7 @@ The migration is marked by `scrapling_fetch_strategy_migration_v1` and runs once
 - `manual` tasks can be marked in stock / sold out from the dashboard.
 - `webhook` tasks accept external stock writes at `POST /api/webhooks/restock/<task_id>`.
 - Webhook token plaintext is returned only once when reset. Database, snapshot, and logs do not expose plaintext tokens.
-- Product intake is guided and Scrapling-first:
+- Product intake is guided and multi-engine-first:
   - source
   - collection mode
   - parsing rules
@@ -89,7 +93,7 @@ The migration is marked by `scrapling_fetch_strategy_migration_v1` and runs once
 - `app.py`
   - strategy constants and migration mapping
   - `FetchResult`, `FetchPipelineResult`, `FetchAttempt`, `ScrapeResult`
-  - `ScraplingFetcher`, `ScraplingSessionManager`
+  - `CurlCffiFetcher`, `ScraplingFetcher`, `ScraplingSessionManager`
   - `FirecrawlClient`, `FirecrawlFetcher`, `FirecrawlCatalogProvider`
   - `BrowserFetcher`, `StaticHttpFetcher`, `ExternalInputFetcher`
   - `FetcherSelector` and bounded fallback pipeline
@@ -149,12 +153,12 @@ Current baseline:
 
 ## Recommended Task Examples
 
-Scrapling adaptive IDC page:
+Multi-engine IDC page:
 
 ```text
 monitor_url: https://provider.example.com/pricing
 target_keyword: target product name
-fetch_strategy: scrapling_adaptive
+fetch_strategy: multi_engine
 source_config: {"extractor":"generic_pricing_table"}
 ```
 
@@ -163,7 +167,7 @@ WHMCS page with preserved extractor:
 ```text
 monitor_url: https://provider.example.com/cart.php?gid=12
 target_keyword: product title
-fetch_strategy: scrapling_adaptive
+fetch_strategy: multi_engine
 source_config: {"extractor":"whmcs","pid":123}
 ```
 

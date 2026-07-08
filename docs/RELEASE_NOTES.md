@@ -2,25 +2,27 @@
 
 ## Title
 
-Scrapling-first IDC monitoring and grouped task management
+Multi-engine-first IDC monitoring and grouped task management
 
 ## Summary
 
-This release moves NOAFF to a Scrapling-first collection model for public IDC product pages. Scrapling is now the primary engine for realtime monitoring and product intake, while Firecrawl is kept as an optional external fallback / diagnostics path instead of a high-frequency default.
+This release moves NOAFF to a multi-engine-first collection model for public IDC product pages. The default `multi_engine` path uses `curl_cffi` browser-fingerprint HTTP first, then escalates to Scrapling standard, dynamic, and stealth modes only when needed. Firecrawl is kept as an optional external fallback / diagnostics path instead of a high-frequency default.
 
 The project intentionally does not bypass Cloudflare / Turnstile / CAPTCHA challenges. Cloudflare / Turnstile / CAPTCHA challenge pages are treated as protected sources, cooled down, and reported to the user without changing inventory state or sending Telegram messages.
 
 ## Highlights
 
-- Added Scrapling-first fetch strategies:
+- Added multi-engine-first fetch strategies:
+  - `multi_engine`
+  - `curl_cffi`
   - `scrapling_standard`
   - `scrapling_dynamic`
   - `scrapling_stealth`
   - `scrapling_adaptive`
   - `manual`
   - `webhook`
-- Reworked the default task and product-intake strategy to `scrapling_adaptive`.
-- Added bounded adaptive escalation: standard -> dynamic -> stealth.
+- Reworked the default task and product-intake strategy to `multi_engine`.
+- Added bounded adaptive escalation: curl_cffi -> standard -> dynamic -> stealth.
 - Added domain-level fetch sharing so one polling cycle can reuse page results across tasks on the same URL/domain.
 - Added domain-level cooldown so protected or failing domains are not repeatedly hit by every task in the same group.
 - Added selector/rule-driven stock parsing:
@@ -32,7 +34,7 @@ The project intentionally does not bypass Cloudflare / Turnstile / CAPTCHA chall
   - stock/sold-out selectors
   - button/disabled selector
   - custom in-stock and sold-out keyword lists
-- Upgraded product intake to a guided Scrapling-first workflow:
+- Upgraded product intake to a guided multi-engine-first workflow:
   - source URL
   - collection mode
   - parsing rules
@@ -64,12 +66,12 @@ The project intentionally does not bypass Cloudflare / Turnstile / CAPTCHA chall
 
 ## Migration Notes
 
-The database migration is automatic. Existing tasks continue working and are mapped to Scrapling-first strategies where possible.
+The database migration is automatic. Existing tasks continue working and are mapped to multi-engine-first strategies where possible.
 
 The default `fetch_strategy` is now:
 
 ```text
-scrapling_adaptive
+multi_engine
 ```
 
 One-time strategy migration marker:
@@ -83,14 +85,14 @@ Strategy migration mapping:
 | Old strategy | New strategy | Notes |
 | --- | --- | --- |
 | `browser` | `scrapling_dynamic` | JS-rendered pages |
-| `static_http` | `scrapling_standard` | lightweight public HTML |
-| `adaptive` | `scrapling_adaptive` | bounded Scrapling escalation |
+| `static_http` | `curl_cffi` | lightweight browser-fingerprint HTTP |
+| `adaptive` | `multi_engine` | bounded multi-engine escalation |
 | `firecrawl` | `scrapling_stealth` | avoids default credit consumption |
 | `firecrawl_then_browser` | `scrapling_stealth` | high-compat local path |
 | `firecrawl_then_static` | `scrapling_stealth` | high-compat local path |
-| `static_then_firecrawl` | `scrapling_standard` | lightweight local path |
-| `generic_pricing_table` | `scrapling_adaptive` | extractor preserved in `source_config.extractor` |
-| `whmcs` | `scrapling_adaptive` | extractor preserved in `source_config.extractor` |
+| `static_then_firecrawl` | `scrapling_standard` | lightweight local browser path |
+| `generic_pricing_table` | `multi_engine` | extractor preserved in `source_config.extractor` |
+| `whmcs` | `multi_engine` | extractor preserved in `source_config.extractor` |
 | `manual` | `manual` | unchanged |
 | `webhook` | `webhook` | unchanged |
 
@@ -145,17 +147,17 @@ Firecrawl hosted can improve some complex page captures, but it is an external p
 
 ## Product Intake Defaults
 
-Product intake now prefers Scrapling:
+Product intake now prefers the local multi-engine path:
 
 ```text
 CATALOG_DISCOVERY_STRATEGY=local
-CATALOG_SCRAPE_STRATEGY=scrapling_adaptive
-CATALOG_DEFAULT_FETCH_STRATEGY=scrapling_adaptive
+CATALOG_SCRAPE_STRATEGY=multi_engine
+CATALOG_DEFAULT_FETCH_STRATEGY=multi_engine
 CATALOG_DEFAULT_EXTRACTOR=generic_pricing_table
 CATALOG_DEDUPE_POLICY=by_url
 ```
 
-Firecrawl map/scrape can still be exposed as an external fallback button when the operator explicitly configures it, but the normal flow is local Scrapling discovery, Scrapling scraping, extractor/rule preview, and then task creation.
+Firecrawl map/scrape can still be exposed as an external fallback button when the operator explicitly configures it, but the normal flow is local link discovery, multi-engine scraping, extractor/rule preview, and then task creation.
 
 ## Verification
 

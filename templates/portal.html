@@ -288,7 +288,7 @@
 
                                 <div id="merchant-wizard-summary" class="merchant-wizard-summary">
                                     <span>未填写来源</span>
-                                    <span>Scrapling 自适应</span>
+                                    <span>智能多引擎</span>
                                     <span>先发现 URL，再抓取商品</span>
                                 </div>
 
@@ -358,19 +358,21 @@
                                                 <div>
                                                     <label for="merchant-scrape-strategy" class="form-label">抓取方式</label>
                                                     <select id="merchant-scrape-strategy" class="input-dark">
-                                                        <option value="scrapling_adaptive">Scrapling 自适应</option>
-                                                        <option value="scrapling_standard">Scrapling 标准</option>
-                                                        <option value="scrapling_dynamic">Scrapling 增强</option>
-                                                        <option value="scrapling_stealth">Scrapling 高兼容</option>
+                                                        <option value="multi_engine">智能多引擎（推荐）</option>
+                                                        <option value="curl_cffi">TLS 指纹 HTTP</option>
+                                                        <option value="scrapling_standard">标准采集</option>
+                                                        <option value="scrapling_dynamic">增强渲染</option>
+                                                        <option value="scrapling_stealth">高兼容浏览器</option>
                                                     </select>
                                                 </div>
                                                 <div>
                                                     <label for="merchant-default-fetch-strategy" class="form-label">生成任务采集方式</label>
                                                     <select id="merchant-default-fetch-strategy" class="input-dark">
-                                                        <option value="scrapling_adaptive">Scrapling 自适应</option>
-                                                        <option value="scrapling_standard">Scrapling 标准</option>
-                                                        <option value="scrapling_dynamic">Scrapling 增强</option>
-                                                        <option value="scrapling_stealth">Scrapling 高兼容</option>
+                                                        <option value="multi_engine">智能多引擎（推荐）</option>
+                                                        <option value="curl_cffi">TLS 指纹 HTTP</option>
+                                                        <option value="scrapling_standard">标准采集</option>
+                                                        <option value="scrapling_dynamic">增强渲染</option>
+                                                        <option value="scrapling_stealth">高兼容浏览器</option>
                                                     </select>
                                                 </div>
                                                 <div>
@@ -387,7 +389,7 @@
                                             <div class="merchant-guide-grid">
                                                 <div>
                                                     <strong>默认建议</strong>
-                                                    <p>默认使用 Scrapling 自适应：先抓入口页发现候选 URL，再抓选中 URL 生成商品预览。Firecrawl 只作为外部兜底，不再作为首选。</p>
+                                                    <p>默认使用智能多引擎：先用 curl_cffi 指纹 HTTP，失败后再升级本地浏览器。Firecrawl 只作为外部兜底，不再作为首选。</p>
                                                 </div>
                                                 <div>
                                                     <strong>边界说明</strong>
@@ -1067,7 +1069,7 @@
                     </div>
                     <div id="task-wizard-summary" class="task-wizard-summary">
                         <span>未填写商品</span>
-                        <span>Scrapling 自适应</span>
+                        <span>智能多引擎</span>
                         <span>保存后可立即检测</span>
                     </div>
                     <section class="task-step-panel is-active" data-task-step-panel="basic">
@@ -1115,10 +1117,11 @@
                             <div class="task-hidden-field">
                                 <label for="task-fetch-strategy" class="form-label">采集方式</label>
                                 <select id="task-fetch-strategy" class="input-dark">
-                                    <option value="scrapling_adaptive">Scrapling 自适应（推荐）</option>
-                                    <option value="scrapling_standard">Scrapling 标准</option>
-                                    <option value="scrapling_dynamic">Scrapling 增强</option>
-                                    <option value="scrapling_stealth">Scrapling 高兼容</option>
+                                    <option value="multi_engine">智能多引擎（推荐）</option>
+                                    <option value="curl_cffi">TLS 指纹 HTTP</option>
+                                    <option value="scrapling_standard">标准采集</option>
+                                    <option value="scrapling_dynamic">增强渲染</option>
+                                    <option value="scrapling_stealth">高兼容浏览器</option>
                                     <option value="manual">手动录入</option>
                                     <option value="webhook">Webhook</option>
                                 </select>
@@ -1138,10 +1141,15 @@
                             </div>
                         </div>
                         <div id="task-strategy-cards" class="task-strategy-card-grid" role="radiogroup" aria-label="采集模式">
-                            <button type="button" class="task-strategy-card" data-task-strategy-card="scrapling_adaptive" role="radio" aria-checked="true">
+                            <button type="button" class="task-strategy-card" data-task-strategy-card="multi_engine" role="radio" aria-checked="true">
                                 <span>推荐</span>
-                                <strong>标准</strong>
-                                <em>普通 IDC / WHMCS 首选，自动逐步尝试。</em>
+                                <strong>智能多引擎</strong>
+                                <em>curl_cffi 先抓，失败后再升级浏览器。</em>
+                            </button>
+                            <button type="button" class="task-strategy-card" data-task-strategy-card="curl_cffi" role="radio" aria-checked="false">
+                                <span>低耗</span>
+                                <strong>TLS 指纹 HTTP</strong>
+                                <em>不启动浏览器，适合普通公开页面。</em>
                             </button>
                             <button type="button" class="task-strategy-card" data-task-strategy-card="scrapling_dynamic" role="radio" aria-checked="false">
                                 <span>JS</span>
@@ -1168,7 +1176,7 @@
                         <div id="task-strategy-help" class="task-strategy-help" aria-live="polite">
                             <div>
                                 <p class="task-strategy-title">当前模式</p>
-                                <p id="task-strategy-summary">默认使用 Scrapling 自适应采集。</p>
+                                <p id="task-strategy-summary">默认使用智能多引擎采集。</p>
                             </div>
                             <div id="task-webhook-hint" class="task-strategy-pill hidden">Webhook 模式才会显示 Token 操作</div>
                         </div>

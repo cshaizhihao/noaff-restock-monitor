@@ -251,19 +251,23 @@
 
     function normalizeFetchStrategy(value) {
         const strategy = String(value || "").trim().toLowerCase().replaceAll("-", "_");
-        return strategy || "scrapling_adaptive";
+        return strategy || "multi_engine";
     }
 
     function fetchStrategyLabel(value) {
         switch (normalizeFetchStrategy(value)) {
+            case "multi_engine":
+                return "智能多引擎";
+            case "curl_cffi":
+                return "TLS 指纹 HTTP";
             case "scrapling_standard":
-                return "Scrapling 标准";
+                return "标准采集";
             case "scrapling_dynamic":
-                return "Scrapling 增强";
+                return "增强渲染";
             case "scrapling_stealth":
-                return "Scrapling 高兼容";
+                return "高兼容浏览器";
             case "scrapling_adaptive":
-                return "Scrapling 自适应";
+                return "旧自适应";
             case "static_http":
                 return "静态 HTTP";
             case "generic_pricing_table":
@@ -291,6 +295,10 @@
 
     function fetchStrategyHelp(value) {
         switch (normalizeFetchStrategy(value)) {
+            case "multi_engine":
+                return "智能多引擎：先用 curl_cffi 做浏览器指纹 HTTP 抓取，失败后再逐步升级到标准、增强和高兼容浏览器。";
+            case "curl_cffi":
+                return "TLS 指纹 HTTP：低成本第一层引擎，适合普通公开页面和轻度反爬页面；不启动浏览器。";
             case "scrapling_standard":
                 return "标准模式：轻量抓取，适合大多数公开 IDC / WHMCS 页面。";
             case "scrapling_dynamic":
@@ -322,7 +330,7 @@
             case "webhook":
                 return "由外部系统通过 Webhook 推送库存状态。只有 Webhook 任务才会显示 Token 重置操作。";
             default:
-                return "兼容旧任务的采集方式。新任务建议使用 Scrapling 自适应。";
+                return "兼容旧任务的采集方式。新任务建议使用智能多引擎。";
         }
     }
 
@@ -517,7 +525,7 @@
     }
 
     function preferredTaskFetchStrategy() {
-        return "scrapling_adaptive";
+        return "multi_engine";
     }
 
     function stockResultLabel(stock, state = "") {
@@ -552,7 +560,7 @@
         if (text.includes("firecrawl_zdr_not_enabled") || text.includes("zero data retention") || text.includes("zdr")) return "关闭 Firecrawl zeroDataRetention 后重试，或联系 Firecrawl 开通 ZDR。";
         if (text.includes("firecrawl_permission_error")) return "检查 Firecrawl 账号权限、proxy 模式或 zeroDataRetention 配置。";
         if (text.includes("firecrawl_auth_error") || text.includes("认证失败")) return "检查 Firecrawl API Key。";
-        if (text.includes("firecrawl_credit_required") || text.includes("额度")) return "Firecrawl 额度不足，建议切回 Scrapling 自适应；Firecrawl 仅作为外部兜底。";
+        if (text.includes("firecrawl_credit_required") || text.includes("额度")) return "Firecrawl 额度不足，建议切回智能多引擎；Firecrawl 仅作为外部兜底。";
         if (text.includes("firecrawl_rate_limited") || text.includes("频率")) return "降低频率或稍后重试。";
         if (text.includes("cloudflare") || text.includes("turnstile") || text.includes("验证页")) return "受保护站点，建议 Webhook、手动录入或替代公开页面。";
         if (text.includes("parse_unknown") || text.includes("无法判断")) return "设置目标关键词或更换解析器。";
@@ -628,8 +636,8 @@
         setOptionAvailability(els.merchantDefaultFetchStrategy, ["firecrawl"], enabled);
         setOptionAvailability(els.merchantDefaultExtractor, ["firecrawl_product_hint"], enabled);
         resetSelectIfDisabled(els.merchantDiscoveryStrategy, "local");
-        resetSelectIfDisabled(els.merchantScrapeStrategy, "scrapling_adaptive");
-        resetSelectIfDisabled(els.merchantDefaultFetchStrategy, "scrapling_adaptive");
+        resetSelectIfDisabled(els.merchantScrapeStrategy, "multi_engine");
+        resetSelectIfDisabled(els.merchantDefaultFetchStrategy, "multi_engine");
         resetSelectIfDisabled(els.merchantDefaultExtractor, "generic_pricing_table");
         if (els.merchantFirecrawlState) {
             els.merchantFirecrawlState.textContent = enabled
@@ -694,7 +702,7 @@
             return;
         }
         const sourceUrl = String(els.merchantSourceUrl?.value || "").trim() || "未填写来源";
-        const strategy = selectOptionLabel(els.merchantScrapeStrategy) || "Scrapling 自适应";
+        const strategy = selectOptionLabel(els.merchantScrapeStrategy) || "智能多引擎";
         const keyword = String(els.merchantTargetKeyword?.value || "").trim() || "不限制关键词";
         els.merchantWizardSummary.innerHTML = `
             <span title="${escapeHtml(sourceUrl)}">${escapeHtml(sourceUrl)}</span>
@@ -3200,8 +3208,8 @@
             source_name: els.merchantSourceName.value.trim(),
             group_name: groupName,
             catalog_discovery_strategy: els.merchantDiscoveryStrategy?.value || "local",
-            catalog_scrape_strategy: els.merchantScrapeStrategy?.value || "scrapling_adaptive",
-            default_fetch_strategy: els.merchantDefaultFetchStrategy?.value || "scrapling_adaptive",
+            catalog_scrape_strategy: els.merchantScrapeStrategy?.value || "multi_engine",
+            default_fetch_strategy: els.merchantDefaultFetchStrategy?.value || "multi_engine",
             default_extractor: els.merchantDefaultExtractor?.value || "generic_pricing_table",
             search_keyword: els.merchantSearchKeyword?.value.trim() || "",
             target_keyword: els.merchantTargetKeyword?.value.trim() || "",

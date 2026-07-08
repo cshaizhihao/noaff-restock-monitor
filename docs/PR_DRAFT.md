@@ -3,28 +3,30 @@
 ## Commit Message
 
 ```text
-feat: complete scrapling-first monitoring release path
+feat: switch monitoring to multi-engine collection
 ```
 
 ## PR Title
 
-Complete Scrapling-first IDC monitoring, product intake, and grouped task management
+Complete multi-engine IDC monitoring, product intake, and grouped task management
 
 ## Summary
 
-This PR moves NOAFF from a Firecrawl/browser-heavy collector into a Scrapling-first IDC restock monitor. Scrapling is now the default engine for scheduled monitoring and product intake. Firecrawl remains available as an optional external fallback / diagnostics tool, but it is no longer the default high-frequency polling path.
+This PR moves NOAFF from a Firecrawl/browser-heavy collector into a multi-engine IDC restock monitor. The default `multi_engine` path uses `curl_cffi` browser-fingerprint HTTP first, then escalates to Scrapling standard, dynamic, and stealth modes only when needed. Firecrawl remains available as an optional external fallback / diagnostics tool, but it is no longer the default high-frequency polling path.
 
 The project still only monitors public pages. It does not bypass Cloudflare / Turnstile / CAPTCHA. Challenge pages are classified as protected sources and cooled down without changing stock state or sending Telegram messages.
 
 ## What Changed
 
-- Added Scrapling-first collection modes:
+- Added multi-engine collection modes:
+  - `multi_engine`
+  - `curl_cffi`
   - `scrapling_standard`
   - `scrapling_dynamic`
   - `scrapling_stealth`
   - `scrapling_adaptive`
-- Made `scrapling_adaptive` the default strategy for new tasks and product-intake-created tasks.
-- Added bounded adaptive fallback: standard -> dynamic -> stealth.
+- Made `multi_engine` the default strategy for new tasks and product-intake-created tasks.
+- Added bounded fallback: curl_cffi -> standard -> dynamic -> stealth.
 - Added domain-level result sharing and cooldown to avoid repeatedly fetching the same IDC page/domain in one polling cycle.
 - Added configurable stock parsing rules:
   - CSS selector
@@ -35,7 +37,7 @@ The project still only monitors public pages. It does not bypass Cloudflare / Tu
   - stock/sold-out selectors
   - button/disabled selector
   - custom keyword lists
-- Rebuilt product intake around a guided Scrapling-first workflow:
+- Rebuilt product intake around a guided multi-engine workflow:
   - source
   - collection mode
   - parsing rules
@@ -79,12 +81,12 @@ The project still only monitors public pages. It does not bypass Cloudflare / Tu
   - backup and restore
   - runtime logs
 - Kept settings entry cards constrained to a compact 4+4 layout; no masonry/waterfall layout.
-- Added Scrapling runtime checks in native install, upgrade, and Docker build flows.
+- Added Scrapling/curl_cffi runtime checks in native install, upgrade, and Docker build flows.
 - Updated README, handoff notes, release notes, PR draft, and environment documentation.
 
 ## Database Migration
 
-The app auto-migrates old strategy names into Scrapling-first equivalents.
+The app auto-migrates old strategy names into multi-engine equivalents.
 
 One-time marker:
 
@@ -95,7 +97,7 @@ scrapling_fetch_strategy_migration_v1
 Default strategy:
 
 ```text
-scrapling_adaptive
+multi_engine
 ```
 
 Migration mapping:
@@ -103,14 +105,14 @@ Migration mapping:
 | Old strategy | New strategy |
 | --- | --- |
 | `browser` | `scrapling_dynamic` |
-| `static_http` | `scrapling_standard` |
-| `adaptive` | `scrapling_adaptive` |
+| `static_http` | `curl_cffi` |
+| `adaptive` | `multi_engine` |
 | `firecrawl` | `scrapling_stealth` |
 | `firecrawl_then_browser` | `scrapling_stealth` |
 | `firecrawl_then_static` | `scrapling_stealth` |
 | `static_then_firecrawl` | `scrapling_standard` |
-| `generic_pricing_table` | `scrapling_adaptive` with extractor preserved |
-| `whmcs` | `scrapling_adaptive` with extractor preserved |
+| `generic_pricing_table` | `multi_engine` with extractor preserved |
+| `whmcs` | `multi_engine` with extractor preserved |
 | `manual` | unchanged |
 | `webhook` | unchanged |
 

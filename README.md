@@ -22,11 +22,12 @@ NOAFF Restock Monitor 用来监控 IDC、VPS、独服、WHMCS 商店等公开商
 公开页面采集 -> 页面/规则解析 -> 库存状态机 -> Telegram send/edit/sold-out 推送
 ```
 
-当前版本采用 **Scrapling-first** 采集架构：
+当前版本采用 **Multi-engine-first** 采集架构：
 
-- Scrapling 是默认采集引擎，适合自部署公益项目，避免 Firecrawl 高频 credits 成本。
+- `multi_engine` 是默认采集策略：先用 `curl_cffi` 做低成本浏览器指纹 HTTP 抓取，失败后再升级到本地浏览器增强链路。
+- Scrapling 仍是本地浏览器增强层，用于标准、增强、高兼容模式。
 - Firecrawl 保留为外部兜底/诊断能力，不再作为定时监控首选。
-- 旧 `browser`、`static_http`、Firecrawl pipeline 任务会在升级时平滑迁移到 Scrapling-first。
+- 旧 `browser`、`static_http`、Firecrawl pipeline 任务会在升级时平滑迁移到多引擎或本地增强策略。
 - `manual` / `webhook` 仍是完全受保护页面的可靠兜底方案。
 
 项目边界：
@@ -42,7 +43,7 @@ NOAFF Restock Monitor 用来监控 IDC、VPS、独服、WHMCS 商店等公开商
 
 ## 功能概览
 
-- Scrapling-first 采集：标准、增强、高兼容、自适应四类模式。
+- Multi-engine-first 采集：智能多引擎、TLS 指纹 HTTP、标准、增强、高兼容。
 - 可配置解析规则：自动卡片、CSS selector、XPath、正则、关键词附近文本、JSON path。
 - IDC 页面解析：围绕目标关键词查找附近 card / table / section，识别库存数字、购买入口和售罄标记。
 - WHMCS 解析：支持常见商店页、`pid`、`cart.php?gid=xx`、`configureproduct`、`Order Now`、`Out of Stock`。
@@ -97,23 +98,24 @@ curl -H 'Cache-Control: no-cache' -fsSL https://raw.githubusercontent.com/cshaiz
 
 | UI 模式 | 内部策略 | 适合场景 | 成本/资源 |
 | --- | --- | --- | --- |
-| 标准 | `scrapling_standard` | 普通公开 HTML、WHMCS、轻量 IDC 页面 | 低 |
-| 增强 | `scrapling_dynamic` | JS 渲染页面、按钮/内容由前端生成 | 中 |
-| 高兼容 | `scrapling_stealth` | 复杂页面、轻度反爬、需要更高兼容性 | 高，低并发 |
-| 自适应 | `scrapling_adaptive` | 默认推荐，自动 standard -> dynamic -> stealth | 按需升级 |
+| 智能多引擎 | `multi_engine` | 默认推荐，curl_cffi -> standard -> dynamic -> stealth | 先低成本，按需升级 |
+| TLS 指纹 HTTP | `curl_cffi` | 普通公开页面、轻度反爬、无需 JS | 最低，不启动浏览器 |
+| 标准采集 | `scrapling_standard` | 普通公开 HTML、WHMCS、轻量 IDC 页面 | 低 |
+| 增强渲染 | `scrapling_dynamic` | JS 渲染页面、按钮/内容由前端生成 | 中 |
+| 高兼容浏览器 | `scrapling_stealth` | 复杂页面、轻度反爬、需要更高兼容性 | 高，低并发 |
 | 手动 | `manual` | 没有稳定公开页面 | 不抓取 |
 | Webhook | `webhook` | 外部系统知道库存 | 不抓取 |
 | 外部兜底 | `firecrawl` | 个别页面诊断或人工触发兜底 | 消耗 Firecrawl credits |
 
-新任务默认使用 `scrapling_adaptive`。旧任务升级时会自动迁移：
+新任务默认使用 `multi_engine`。旧任务升级时会自动迁移：
 
 | 旧策略 | 迁移后 |
 | --- | --- |
 | `browser` | `scrapling_dynamic` |
-| `static_http` | `scrapling_standard` |
-| `adaptive` | `scrapling_adaptive` |
+| `static_http` | `curl_cffi` |
+| `adaptive` | `multi_engine` |
 | `firecrawl` / Firecrawl pipeline | `scrapling_stealth` |
-| `generic_pricing_table` / `whmcs` | `scrapling_adaptive`，并保留原解析器到 `source_config.extractor` |
+| `generic_pricing_table` / `whmcs` | `multi_engine`，并保留原解析器到 `source_config.extractor` |
 | `manual` / `webhook` | 保持不变 |
 
 迁移只执行一次。迁移后如果你手动选择旧兼容策略，系统不会在下次启动时再次覆盖。
@@ -166,11 +168,11 @@ Out of Stock, Sold Out, Unavailable, disabled, 缺货, 售罄, 无货
 来源 -> 采集模式 -> 解析规则 -> 执行发现 -> 候选 URL -> 商品预览 -> 创建任务
 ```
 
-默认路径是 Scrapling-first：
+默认路径是多引擎优先：
 
 - discovery 默认 `local`，从入口页和链接关系发现候选 URL。
-- scrape 默认 `scrapling_adaptive`。
-- 创建任务默认 `scrapling_adaptive`。
+- scrape 默认 `multi_engine`。
+- 创建任务默认 `multi_engine`。
 - Firecrawl Map/Scrape 只作为外部兜底选项，不默认消耗 credits。
 
 工作台会先发现候选 URL，再让你抓取选中 URL，最后在商品预览里确认可入库商品。默认不会把语言切换、导航、页脚、分类/步骤标题、无价格/无规格候选直接写入任务；这些内容会进入“需要人工确认 / 已过滤候选”。
@@ -181,7 +183,7 @@ Out of Stock, Sold Out, Unavailable, disabled, 缺货, 售罄, 无货
 | --- | --- |
 | 商家 URL | 入口页，例如 pricing、store、cart.php?gid=xx |
 | discovery strategy | `local` / `firecrawl_map` / `hybrid` |
-| scrape strategy | `scrapling_adaptive` / `scrapling_standard` / `scrapling_dynamic` / `scrapling_stealth` / legacy / Firecrawl |
+| scrape strategy | `multi_engine` / `curl_cffi` / `scrapling_standard` / `scrapling_dynamic` / `scrapling_stealth` / legacy / Firecrawl |
 | extractor | `generic_pricing_table` / `whmcs` / `fallback_keyword_parser` / `firecrawl_product_hint` |
 | search keyword | Firecrawl Map 搜索词，例如 `vps`、`hk`、`pricing` |
 | target keyword | 目标商品关键词，建议用完整产品名 |
@@ -344,8 +346,8 @@ Firecrawl：
 | 变量 | 说明 | 默认 |
 | --- | --- | --- |
 | `CATALOG_DISCOVERY_STRATEGY` | 默认发现策略 | `local` |
-| `CATALOG_SCRAPE_STRATEGY` | 默认抓取策略 | `scrapling_adaptive` |
-| `CATALOG_DEFAULT_FETCH_STRATEGY` | 创建任务默认策略 | `scrapling_adaptive` |
+| `CATALOG_SCRAPE_STRATEGY` | 默认抓取策略 | `multi_engine` |
+| `CATALOG_DEFAULT_FETCH_STRATEGY` | 创建任务默认策略 | `multi_engine` |
 | `CATALOG_DEFAULT_EXTRACTOR` | 默认解析器 | `generic_pricing_table` |
 | `CATALOG_DEDUPE_POLICY` | 默认去重策略 | `by_url` |
 
@@ -397,7 +399,7 @@ git diff --check
 
 ## 发布检查
 
-- 新建 Scrapling 自适应任务，确认普通 IDC 页面可识别有货/售罄。
+- 新建智能多引擎任务，确认普通 IDC 页面可识别有货/售罄。
 - 用 CSS selector / XPath / 正则各创建一个规则任务，确认状态机正常。
 - 商品入库跑一次 local discovery -> Scrapling preview -> 批量创建。
 - 分组、子分组、移动、批量删除、拖拽排序各 smoke test 一次。

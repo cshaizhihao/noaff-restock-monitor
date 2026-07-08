@@ -157,8 +157,8 @@ DEFAULT_SCRAPLING_SESSION_REUSE = env_bool("SCRAPLING_SESSION_REUSE", True)
 DEFAULT_SCRAPLING_ADAPTIVE_SELECTOR = env_bool("SCRAPLING_ADAPTIVE_SELECTOR", True)
 DEFAULT_SCRAPLING_HEADLESS = env_bool("SCRAPLING_HEADLESS", True)
 DEFAULT_CATALOG_DISCOVERY_STRATEGY = os.getenv("CATALOG_DISCOVERY_STRATEGY", "local").strip().lower() or "local"
-DEFAULT_CATALOG_SCRAPE_STRATEGY = os.getenv("CATALOG_SCRAPE_STRATEGY", "scrapling_adaptive").strip().lower() or "scrapling_adaptive"
-DEFAULT_CATALOG_FETCH_STRATEGY = os.getenv("CATALOG_DEFAULT_FETCH_STRATEGY", "scrapling_adaptive").strip().lower() or "scrapling_adaptive"
+DEFAULT_CATALOG_SCRAPE_STRATEGY = os.getenv("CATALOG_SCRAPE_STRATEGY", "multi_engine").strip().lower() or "multi_engine"
+DEFAULT_CATALOG_FETCH_STRATEGY = os.getenv("CATALOG_DEFAULT_FETCH_STRATEGY", "multi_engine").strip().lower() or "multi_engine"
 DEFAULT_CATALOG_EXTRACTOR = os.getenv("CATALOG_DEFAULT_EXTRACTOR", "generic_pricing_table").strip().lower() or "generic_pricing_table"
 ENABLE_PROXY_FIX = env_bool("ENABLE_PROXY_FIX", False)
 PROXY_FIX_X_FOR = int(os.getenv("PROXY_FIX_X_FOR", "1"))
@@ -322,13 +322,15 @@ FETCH_STRATEGY_FIRECRAWL_THEN_STATIC = "firecrawl_then_static"
 FETCH_STRATEGY_STATIC_THEN_FIRECRAWL = "static_then_firecrawl"
 FETCH_STRATEGY_FIRECRAWL_THEN_BROWSER = "firecrawl_then_browser"
 FETCH_STRATEGY_ADAPTIVE = "adaptive"
+FETCH_STRATEGY_CURL_CFFI = "curl_cffi"
+FETCH_STRATEGY_MULTI_ENGINE = "multi_engine"
 FETCH_STRATEGY_SCRAPLING_STANDARD = "scrapling_standard"
 FETCH_STRATEGY_SCRAPLING_DYNAMIC = "scrapling_dynamic"
 FETCH_STRATEGY_SCRAPLING_STEALTH = "scrapling_stealth"
 FETCH_STRATEGY_SCRAPLING_ADAPTIVE = "scrapling_adaptive"
 FETCH_STRATEGY_MANUAL = "manual"
 FETCH_STRATEGY_WEBHOOK = "webhook"
-DEFAULT_TASK_FETCH_STRATEGY = FETCH_STRATEGY_SCRAPLING_ADAPTIVE
+DEFAULT_TASK_FETCH_STRATEGY = FETCH_STRATEGY_MULTI_ENGINE
 SUPPORTED_FETCH_STRATEGIES = {
     FETCH_STRATEGY_BROWSER,
     FETCH_STRATEGY_STATIC_HTTP,
@@ -339,6 +341,8 @@ SUPPORTED_FETCH_STRATEGIES = {
     FETCH_STRATEGY_STATIC_THEN_FIRECRAWL,
     FETCH_STRATEGY_FIRECRAWL_THEN_BROWSER,
     FETCH_STRATEGY_ADAPTIVE,
+    FETCH_STRATEGY_CURL_CFFI,
+    FETCH_STRATEGY_MULTI_ENGINE,
     FETCH_STRATEGY_SCRAPLING_STANDARD,
     FETCH_STRATEGY_SCRAPLING_DYNAMIC,
     FETCH_STRATEGY_SCRAPLING_STEALTH,
@@ -350,6 +354,10 @@ STATIC_HTTP_FETCH_STRATEGIES = {
     FETCH_STRATEGY_STATIC_HTTP,
     FETCH_STRATEGY_GENERIC_PRICING_TABLE,
     FETCH_STRATEGY_WHMCS,
+}
+LOCAL_HTTP_FINGERPRINT_FETCH_STRATEGIES = {
+    FETCH_STRATEGY_STATIC_HTTP,
+    FETCH_STRATEGY_CURL_CFFI,
 }
 FIRECRAWL_FETCH_STRATEGIES = {
     FETCH_STRATEGY_FIRECRAWL,
@@ -367,10 +375,10 @@ SCRAPLING_FETCH_STRATEGIES = {
 }
 LEGACY_FETCH_STRATEGY_MIGRATIONS = {
     FETCH_STRATEGY_BROWSER: FETCH_STRATEGY_SCRAPLING_DYNAMIC,
-    FETCH_STRATEGY_STATIC_HTTP: FETCH_STRATEGY_SCRAPLING_STANDARD,
-    FETCH_STRATEGY_GENERIC_PRICING_TABLE: FETCH_STRATEGY_SCRAPLING_ADAPTIVE,
-    FETCH_STRATEGY_WHMCS: FETCH_STRATEGY_SCRAPLING_ADAPTIVE,
-    FETCH_STRATEGY_ADAPTIVE: FETCH_STRATEGY_SCRAPLING_ADAPTIVE,
+    FETCH_STRATEGY_STATIC_HTTP: FETCH_STRATEGY_CURL_CFFI,
+    FETCH_STRATEGY_GENERIC_PRICING_TABLE: FETCH_STRATEGY_MULTI_ENGINE,
+    FETCH_STRATEGY_WHMCS: FETCH_STRATEGY_MULTI_ENGINE,
+    FETCH_STRATEGY_ADAPTIVE: FETCH_STRATEGY_MULTI_ENGINE,
     FETCH_STRATEGY_FIRECRAWL: FETCH_STRATEGY_SCRAPLING_STEALTH,
     FETCH_STRATEGY_FIRECRAWL_THEN_STATIC: FETCH_STRATEGY_SCRAPLING_STEALTH,
     FETCH_STRATEGY_STATIC_THEN_FIRECRAWL: FETCH_STRATEGY_SCRAPLING_STANDARD,
@@ -395,6 +403,8 @@ CATALOG_SCRAPE_STRATEGIES = {
     CATALOG_SCRAPE_BROWSER,
     CATALOG_SCRAPE_FIRECRAWL,
     CATALOG_SCRAPE_ADAPTIVE,
+    FETCH_STRATEGY_CURL_CFFI,
+    FETCH_STRATEGY_MULTI_ENGINE,
     FETCH_STRATEGY_SCRAPLING_STANDARD,
     FETCH_STRATEGY_SCRAPLING_DYNAMIC,
     FETCH_STRATEGY_SCRAPLING_STEALTH,
@@ -2084,7 +2094,7 @@ def initialize_database() -> None:
                 sort_order INTEGER NOT NULL DEFAULT 0,
                 monitor_url TEXT NOT NULL,
                 target_keyword TEXT NOT NULL,
-                fetch_strategy TEXT NOT NULL DEFAULT 'scrapling_adaptive',
+                fetch_strategy TEXT NOT NULL DEFAULT 'multi_engine',
                 source_config TEXT NOT NULL DEFAULT '{}',
                 restock_template TEXT NOT NULL,
                 soldout_template TEXT NOT NULL,
@@ -2193,7 +2203,7 @@ def initialize_database() -> None:
         ensure_column(connection, "tasks", "source_snapshot", "TEXT DEFAULT ''")
         ensure_column(connection, "tasks", "source_last_sync_at", "TEXT")
         ensure_column(connection, "tasks", "message_ids", "TEXT DEFAULT ''")
-        ensure_column(connection, "tasks", "fetch_strategy", "TEXT NOT NULL DEFAULT 'scrapling_adaptive'")
+        ensure_column(connection, "tasks", "fetch_strategy", "TEXT NOT NULL DEFAULT 'multi_engine'")
         ensure_column(connection, "tasks", "source_config", "TEXT NOT NULL DEFAULT '{}'")
         ensure_column(connection, "tasks", "last_fetch_backend", "TEXT DEFAULT ''")
         ensure_column(connection, "tasks", "last_fetch_attempts", "TEXT DEFAULT ''")
@@ -3532,6 +3542,91 @@ class StaticHttpFetcher:
         return FetchResult(html=html_text, final_url=final_url, status_code=status_code, detail="ok")
 
 
+class CurlCffiFetcher:
+    def __init__(self, client: Any = None) -> None:
+        self.client = client
+
+    def request_headers(self) -> dict[str, str]:
+        return {
+            "User-Agent": DEFAULT_BROWSER_USER_AGENT or STATIC_HTTP_USER_AGENT,
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+            "Cache-Control": "no-cache",
+        }
+
+    def fetch(self, url: str, timeout_seconds: int) -> FetchResult:
+        try:
+            response = self._request(url, timeout_seconds)
+        except ImportError as exc:
+            return FetchResult(
+                html="",
+                final_url=url,
+                error_kind="curl_cffi_unavailable",
+                detail=f"curl_cffi 未安装或无法导入：{exc}",
+            )
+        except TimeoutError:
+            return FetchResult(html="", final_url=url, error_kind="timeout", detail=f"curl_cffi 请求超时：{url}")
+        except Exception as exc:
+            message = str(exc)
+            return FetchResult(
+                html="",
+                final_url=url,
+                error_kind=classify_browser_error(message) or "request_error",
+                detail=f"curl_cffi 请求失败：{message[:500]}",
+            )
+
+        final_url = str(getattr(response, "url", "") or url)
+        status_code = int(getattr(response, "status_code", None) or getattr(response, "status", None) or 0)
+        html_text = str(getattr(response, "text", "") or getattr(response, "content", "") or "")
+        if looks_like_cloudflare_challenge(html_text, extract_page_title(html_text), final_url):
+            return FetchResult(
+                html="",
+                final_url=final_url,
+                status_code=status_code,
+                error_kind="cloudflare_challenge",
+                detail=f"curl_cffi 拿到的仍是 Cloudflare 验证页：{final_url}",
+            )
+        if status_code in {403, 429} or status_code >= 500:
+            return FetchResult(
+                html="",
+                final_url=final_url,
+                status_code=status_code,
+                error_kind="http_error",
+                detail=f"curl_cffi HTTP {status_code}：{final_url}",
+            )
+        if not html_text:
+            return FetchResult(
+                html="",
+                final_url=final_url,
+                status_code=status_code,
+                error_kind="empty_response",
+                detail=f"curl_cffi 返回了空 HTML：{final_url}",
+            )
+        return FetchResult(html=html_text, final_url=final_url, status_code=status_code, detail="curl_cffi ok")
+
+    def _request(self, url: str, timeout_seconds: int) -> Any:
+        if self.client is not None:
+            return self.client.get(url, timeout=timeout_seconds, headers=self.request_headers())
+        try:
+            from curl_cffi import requests as curl_requests
+        except Exception as exc:
+            raise ImportError("curl_cffi.requests") from exc
+        try:
+            return curl_requests.get(
+                url,
+                headers=self.request_headers(),
+                timeout=timeout_seconds,
+                impersonate="chrome",
+                allow_redirects=True,
+            )
+        except TimeoutError:
+            raise
+        except Exception as exc:
+            if any(token in str(exc).lower() for token in ("timeout", "timed out", "超时")):
+                raise TimeoutError(str(exc)) from exc
+            raise
+
+
 class ScraplingUnavailableError(RuntimeError):
     pass
 
@@ -4150,10 +4245,12 @@ class FetcherSelector:
     def __init__(
         self,
         static_http_fetcher: StaticHttpFetcher | None = None,
+        curl_cffi_fetcher: CurlCffiFetcher | None = None,
         firecrawl_fetcher: FirecrawlFetcher | None = None,
         scrapling_client: Any = None,
     ) -> None:
         self.static_http_fetcher = static_http_fetcher or StaticHttpFetcher()
+        self.curl_cffi_fetcher = curl_cffi_fetcher or CurlCffiFetcher()
         self.firecrawl_fetcher = firecrawl_fetcher
         self.scrapling_client = scrapling_client
 
@@ -4167,8 +4264,10 @@ class FetcherSelector:
         task: Any,
         browser_harness: BrowserHarness,
         settings_payload: dict[str, Any] | None = None,
-    ) -> BrowserFetcher | StaticHttpFetcher | FirecrawlFetcher | ExternalInputFetcher | ScraplingFetcher:
+    ) -> BrowserFetcher | StaticHttpFetcher | CurlCffiFetcher | FirecrawlFetcher | ExternalInputFetcher | ScraplingFetcher:
         strategy = task_fetch_strategy(task)
+        if strategy == FETCH_STRATEGY_CURL_CFFI:
+            return self.curl_cffi_fetcher
         if strategy == FETCH_STRATEGY_FIRECRAWL:
             if self.firecrawl_fetcher is not None:
                 return self.firecrawl_fetcher
@@ -4186,7 +4285,9 @@ class FetcherSelector:
         backend: str,
         browser_harness: BrowserHarness,
         settings_payload: dict[str, Any] | None = None,
-    ) -> BrowserFetcher | StaticHttpFetcher | FirecrawlFetcher | ExternalInputFetcher | ScraplingFetcher:
+    ) -> BrowserFetcher | StaticHttpFetcher | CurlCffiFetcher | FirecrawlFetcher | ExternalInputFetcher | ScraplingFetcher:
+        if backend == FETCH_STRATEGY_CURL_CFFI:
+            return self.curl_cffi_fetcher
         if backend == FETCH_STRATEGY_FIRECRAWL:
             if self.firecrawl_fetcher is not None:
                 return self.firecrawl_fetcher
@@ -4214,8 +4315,16 @@ class FetcherSelector:
             FETCH_STRATEGY_SCRAPLING_STANDARD,
             FETCH_STRATEGY_SCRAPLING_DYNAMIC,
             FETCH_STRATEGY_SCRAPLING_STEALTH,
+            FETCH_STRATEGY_CURL_CFFI,
         }:
             return [strategy]
+        if strategy == FETCH_STRATEGY_MULTI_ENGINE:
+            return [
+                FETCH_STRATEGY_CURL_CFFI,
+                FETCH_STRATEGY_SCRAPLING_STANDARD,
+                FETCH_STRATEGY_SCRAPLING_DYNAMIC,
+                FETCH_STRATEGY_SCRAPLING_STEALTH,
+            ]
         if strategy == FETCH_STRATEGY_SCRAPLING_ADAPTIVE:
             return [
                 FETCH_STRATEGY_SCRAPLING_STANDARD,
@@ -4262,8 +4371,30 @@ class FetcherSelector:
         settings_payload = settings_payload or {}
         if not result.error_kind:
             return False
+        if next_backend == FETCH_STRATEGY_CURL_CFFI:
+            return result.error_kind in {
+                "timeout",
+                "request_error",
+                "empty_response",
+                "http_error",
+                "scrapling_browser_failed",
+                "scrapling_unavailable",
+                "scrapling_disabled",
+            }
         if next_backend in SCRAPLING_FETCH_STRATEGIES and not settings_payload.get("scrapling_enabled", True):
             return False
+        if next_backend == FETCH_STRATEGY_SCRAPLING_STANDARD:
+            return result.error_kind in {
+                "cloudflare_challenge",
+                "scrapling_challenge_upgrade_required",
+                "timeout",
+                "request_error",
+                "empty_response",
+                "http_error",
+                "curl_cffi_unavailable",
+                "scrapling_browser_failed",
+                "scrapling_unavailable",
+            }
         if next_backend in {FETCH_STRATEGY_SCRAPLING_DYNAMIC, FETCH_STRATEGY_SCRAPLING_STEALTH}:
             return result.error_kind in {
                 "cloudflare_challenge",
@@ -4272,6 +4403,7 @@ class FetcherSelector:
                 "request_error",
                 "empty_response",
                 "http_error",
+                "curl_cffi_unavailable",
                 "scrapling_browser_failed",
                 "scrapling_unavailable",
             }
@@ -4290,6 +4422,7 @@ class FetcherSelector:
             "scrapling_browser_failed",
             "scrapling_unavailable",
             "scrapling_disabled",
+            "curl_cffi_unavailable",
         }
 
     def fetch_pipeline(
@@ -4691,10 +4824,12 @@ class MonitoringEngine:
         raise CatalogBrowserConnectionError(last_error or "商家页面抓取失败。")
 
     def fetch_catalog_source_entry(self, source_url: str, settings_payload: dict[str, Any], options: dict[str, Any]) -> FetchResult:
-        strategy = options.get("catalog_scrape_strategy") or FETCH_STRATEGY_SCRAPLING_ADAPTIVE
+        strategy = options.get("catalog_scrape_strategy") or DEFAULT_CATALOG_SCRAPE_STRATEGY
         if strategy == CATALOG_SCRAPE_FIRECRAWL:
             return FirecrawlCatalogProvider(settings_payload).scrape(source_url)
         if strategy in SCRAPLING_FETCH_STRATEGIES or strategy in {
+            FETCH_STRATEGY_CURL_CFFI,
+            FETCH_STRATEGY_MULTI_ENGINE,
             CATALOG_SCRAPE_STATIC_HTTP,
             CATALOG_SCRAPE_ADAPTIVE,
         }:
@@ -4702,13 +4837,13 @@ class MonitoringEngine:
         return self.fetch_catalog_entry_html(source_url, settings_payload, int(options.get("timeout_seconds") or DEFAULT_TIMEOUT_SECONDS))
 
     def scrape_catalog_candidate(self, candidate_url: str, settings_payload: dict[str, Any], options: dict[str, Any]) -> FetchResult:
-        strategy = options.get("catalog_scrape_strategy") or FETCH_STRATEGY_SCRAPLING_ADAPTIVE
+        strategy = options.get("catalog_scrape_strategy") or DEFAULT_CATALOG_SCRAPE_STRATEGY
         timeout_seconds = int(options.get("timeout_seconds") or settings_payload.get("request_timeout_seconds") or DEFAULT_TIMEOUT_SECONDS)
         if strategy == CATALOG_SCRAPE_STATIC_HTTP:
             return self.fetcher_selector.static_http_fetcher.fetch(candidate_url, timeout_seconds)
         if strategy == CATALOG_SCRAPE_FIRECRAWL:
             return FirecrawlCatalogProvider(settings_payload).scrape(candidate_url)
-        if strategy in SCRAPLING_FETCH_STRATEGIES:
+        if strategy in SCRAPLING_FETCH_STRATEGIES or strategy in {FETCH_STRATEGY_CURL_CFFI, FETCH_STRATEGY_MULTI_ENGINE}:
             pipeline_result = self.fetcher_selector.fetch_pipeline(
                 {"monitor_url": candidate_url, "fetch_strategy": strategy},
                 self.catalog_browser,
@@ -4931,7 +5066,7 @@ class MonitoringEngine:
                 candidate.update(candidate_status)
                 continue
 
-            backend_used = options.get("catalog_scrape_strategy") or FETCH_STRATEGY_SCRAPLING_ADAPTIVE
+            backend_used = options.get("catalog_scrape_strategy") or DEFAULT_CATALOG_SCRAPE_STRATEGY
             if fetch_result.error_kind:
                 candidate_status.update(
                     {
