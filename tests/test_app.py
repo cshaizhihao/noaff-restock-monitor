@@ -4336,6 +4336,155 @@ class PortalAppTestCase(unittest.TestCase):
         self.assertIsNone(missing_signal.stock)
         self.assertIn("缺少明确购买入口或售罄标记", missing_signal.detail)
 
+    def test_rule_extractor_css_selector_detects_in_stock(self) -> None:
+        html_text = """
+        <main>
+          <article class="product-card">
+            <h3>Tokyo Basic</h3>
+            <span class="inventory">库存 12</span>
+          </article>
+        </main>
+        """
+        result = app_module.extract_stock_for_strategy(
+            "scrapling_adaptive",
+            html_text,
+            "Tokyo Basic",
+            {
+                "fetch_strategy": "scrapling_adaptive",
+                "source_config": json.dumps(
+                    {
+                        "stock_rule_type": "css_selector",
+                        "target_scope_selector": ".product-card",
+                        "stock_selector": ".inventory",
+                    }
+                ),
+            },
+            app_module.FetchResult(html=html_text, final_url="https://example.com/pricing"),
+        )
+
+        self.assertEqual(result.stock, 12)
+        self.assertIn("css_selector", result.detail)
+
+    def test_rule_extractor_xpath_detects_sold_out(self) -> None:
+        html_text = """
+        <main>
+          <article class="product-card">
+            <h3>Osaka Pro</h3>
+            <button disabled>Out of Stock</button>
+          </article>
+        </main>
+        """
+        result = app_module.extract_stock_for_strategy(
+            "scrapling_adaptive",
+            html_text,
+            "Osaka Pro",
+            {
+                "fetch_strategy": "scrapling_adaptive",
+                "source_config": {
+                    "stock_rule_type": "xpath",
+                    "stock_selector": "//article[contains(., 'Osaka Pro')]//button",
+                },
+            },
+            app_module.FetchResult(html=html_text, final_url="https://example.com/pricing"),
+        )
+
+        self.assertEqual(result.stock, 0)
+        self.assertIn("xpath", result.detail)
+
+    def test_rule_extractor_regex_detects_stock_number(self) -> None:
+        html_text = "<html><body>plan=HK-CMI stock_count: 42</body></html>"
+        result = app_module.extract_stock_for_strategy(
+            "scrapling_standard",
+            html_text,
+            "HK-CMI",
+            {
+                "fetch_strategy": "scrapling_standard",
+                "source_config": {
+                    "stock_rule_type": "regex",
+                    "regex_pattern": r"stock_count:\s*(?P<stock>\d+)",
+                },
+            },
+            app_module.FetchResult(html=html_text, final_url="https://example.com/pricing"),
+        )
+
+        self.assertEqual(result.stock, 42)
+        self.assertIn("regex", result.detail)
+
+    def test_rule_extractor_text_near_keyword_limits_to_target_card(self) -> None:
+        html_text = """
+        <main>
+          <article class="product-card">
+            <h3>Basic VPS</h3>
+            <button>Order Now</button>
+          </article>
+          <article class="product-card">
+            <h3>Premium VPS</h3>
+            <button disabled>Out of Stock</button>
+          </article>
+        </main>
+        """
+        result = app_module.extract_stock_for_strategy(
+            "scrapling_adaptive",
+            html_text,
+            "Premium VPS",
+            {
+                "fetch_strategy": "scrapling_adaptive",
+                "source_config": {
+                    "stock_rule_type": "text_near_keyword",
+                    "soldout_keywords": ["Out of Stock"],
+                    "in_stock_keywords": ["Order Now"],
+                },
+            },
+            app_module.FetchResult(html=html_text, final_url="https://example.com/pricing"),
+        )
+
+        self.assertEqual(result.stock, 0)
+        self.assertIn("自定义售罄关键词", result.detail)
+
+    def test_rule_extractor_json_path_detects_availability(self) -> None:
+        html_text = """
+        <html>
+          <script type="application/json">
+            {"products": [{"sku": "HK", "availability": "InStock"}]}
+          </script>
+        </html>
+        """
+        result = app_module.extract_stock_for_strategy(
+            "scrapling_adaptive",
+            html_text,
+            "HK",
+            {
+                "fetch_strategy": "scrapling_adaptive",
+                "source_config": {
+                    "stock_rule_type": "json_path",
+                    "json_path": "$.products[0].availability",
+                },
+            },
+            app_module.FetchResult(html=html_text, final_url="https://example.com/pricing"),
+        )
+
+        self.assertEqual(result.stock, 1)
+        self.assertIn("json_path", result.detail)
+
+    def test_rule_extractor_returns_readable_reason_when_rule_fails(self) -> None:
+        html_text = "<main><article><h3>HK VPS</h3><p>$9.90</p></article></main>"
+        result = app_module.extract_stock_for_strategy(
+            "scrapling_adaptive",
+            html_text,
+            "HK VPS",
+            {
+                "fetch_strategy": "scrapling_adaptive",
+                "source_config": {
+                    "stock_rule_type": "css_selector",
+                    "stock_selector": ".missing-stock",
+                },
+            },
+            app_module.FetchResult(html=html_text, final_url="https://example.com/pricing"),
+        )
+
+        self.assertIsNone(result.stock)
+        self.assertIn("自定义规则未能判断库存", result.detail)
+
     def test_scrape_task_generic_pricing_table_limits_to_target_product(self) -> None:
         class FakeResponse:
             status_code = 200

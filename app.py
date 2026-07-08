@@ -42,6 +42,11 @@ except Exception:  # pragma: no cover - runtime dependency may be absent during 
     ChromiumOptions = None
     ChromiumPage = None
 
+try:
+    from lxml import html as lxml_html
+except Exception:  # pragma: no cover - optional parser may be absent in minimal installs
+    lxml_html = None
+
 
 BASE_DIR = Path(__file__).resolve().parent
 ASSETS_DIR = BASE_DIR / "assets"
@@ -435,6 +440,14 @@ SENSITIVE_SOURCE_CONFIG_KEYS = {
     "token",
     "secret",
     "hmac_secret",
+}
+STOCK_RULE_TYPES = {
+    "auto_card",
+    "css_selector",
+    "xpath",
+    "regex",
+    "text_near_keyword",
+    "json_path",
 }
 
 STOCK_LABEL = (
@@ -5673,6 +5686,293 @@ def task_source_config(task: Any) -> dict[str, Any]:
     return parsed if isinstance(parsed, dict) else {}
 
 
+def config_text_list(value: Any) -> list[str]:
+    if isinstance(value, (list, tuple)):
+        raw_items = value
+    else:
+        raw_items = re.split(r"[\n,|]+", str(value or ""))
+    return [str(item).strip() for item in raw_items if str(item).strip()]
+
+
+def explicit_stock_rule_enabled(source_config: dict[str, Any]) -> bool:
+    rule_type = str(source_config.get("stock_rule_type") or "").strip().lower().replace("-", "_")
+    if rule_type and rule_type != "auto_card":
+        return True
+    return any(
+        str(source_config.get(key) or "").strip()
+        for key in (
+            "stock_selector",
+            "soldout_selector",
+            "button_selector",
+            "disabled_selector",
+            "target_scope_selector",
+            "json_path",
+            "regex_pattern",
+        )
+    ) or bool(source_config.get("in_stock_keywords") or source_config.get("soldout_keywords"))
+
+
+def parse_html_document(html_text: str) -> Any:
+    if lxml_html is None or not html_text:
+        return None
+    try:
+        return lxml_html.fromstring(html_text)
+    except Exception:
+        return None
+
+
+def element_html(element: Any) -> str:
+    try:
+        return lxml_html.tostring(element, encoding="unicode", with_tail=False) if lxml_html is not None else ""
+    except Exception:
+        return ""
+
+
+def element_text(element: Any) -> str:
+    try:
+        return re.sub(r"\s+", " ", element.text_content()).strip()
+    except Exception:
+        return clean_fragment_text(element_html(element))
+
+
+def select_fragments_by_css(html_text: str, selector: str) -> list[str]:
+    selector = str(selector or "").strip()
+    if not selector:
+        return []
+    document = parse_html_document(html_text)
+    if document is None:
+        return []
+    try:
+        return [element_html(element) for element in document.cssselect(selector)[:30] if element_html(element)]
+    except Exception:
+        return []
+
+
+def select_fragments_by_xpath(html_text: str, expression: str) -> list[str]:
+    expression = str(expression or "").strip()
+    if not expression:
+        return []
+    document = parse_html_document(html_text)
+    if document is None:
+        return []
+    try:
+        values = document.xpath(expression)
+    except Exception:
+        return []
+    fragments: list[str] = []
+    for value in values[:30]:
+        if isinstance(value, str):
+            if value.strip():
+                fragments.append(value.strip())
+            continue
+        fragment = element_html(value)
+        if fragment:
+            fragments.append(fragment)
+    return fragments
+
+
+def json_path_values(payload: Any, path: str) -> list[Any]:
+    path = str(path or "").strip()
+    if not path:
+        return []
+    normalized = path[2:] if path.startswith("$.") else path[1:] if path.startswith("$") else path
+    parts = [part for part in re.split(r"\.", normalized) if part]
+    values = [payload]
+    for part in parts:
+        next_values: list[Any] = []
+        match = re.fullmatch(r"([^\[]+)(?:\[(\d+|\*)\])?", part)
+        key = match.group(1) if match else part
+        index = match.group(2) if match else None
+        for value in values:
+            if isinstance(value, dict) and key in value:
+                child = value[key]
+            else:
+                continue
+            if index == "*":
+                if isinstance(child, list):
+                    next_values.extend(child)
+            elif index is not None:
+                if isinstance(child, list):
+                    try:
+                        next_values.append(child[int(index)])
+                    except (IndexError, ValueError):
+                        pass
+            else:
+                next_values.append(child)
+        values = next_values
+        if not values:
+            break
+    return values
+
+
+def json_payloads_from_html(html_text: str) -> list[Any]:
+    payloads: list[Any] = []
+    for match in JSON_SCRIPT_PATTERN.finditer(html_text or ""):
+        body = html_module.unescape(match.group("body") or "").strip()
+        if not body:
+            continue
+        body = re.sub(r"(?is)^\s*(?:<!--|//<!\[CDATA\[)", "", body).strip()
+        body = re.sub(r"(?is)(?:-->|//\]\]>)\s*$", "", body).strip()
+        if "=" in body and not body.lstrip().startswith(("{", "[")):
+            body = body.split("=", 1)[1].strip().rstrip(";")
+        if not body.startswith(("{", "[")):
+            continue
+        try:
+            payloads.append(json.loads(body))
+        except json.JSONDecodeError:
+            continue
+    return payloads
+
+
+def stock_from_rule_value(value: Any, detail_prefix: str) -> tuple[int | None, str] | None:
+    if isinstance(value, (dict, list)):
+        matched = scan_json_stock_signal(value)
+        if matched is not None:
+            stock, detail = matched
+            return stock, f"{detail_prefix}：{detail}"
+    parsed_int = parse_int_value(value)
+    if parsed_int is not None:
+        return parsed_int, f"{detail_prefix}：匹配到库存数字。"
+    parsed_bool = parse_bool_value(value)
+    if parsed_bool is not None:
+        return (1 if parsed_bool else 0), f"{detail_prefix}：匹配到布尔可用状态。"
+    text = str(value or "").strip()
+    if text:
+        stock, detail = parse_stock(text)
+        if stock is not None:
+            return stock, f"{detail_prefix}：{detail}"
+        normalized = normalize_signal_text(text)
+        if any(token in normalized for token in JSON_IN_STOCK_TOKENS):
+            return 1, f"{detail_prefix}：命中可购买文本。"
+        if any(token in normalized for token in JSON_OUT_OF_STOCK_TOKENS):
+            return 0, f"{detail_prefix}：命中售罄文本。"
+    return None
+
+
+def extract_stock_by_json_path(html_text: str, json_path: str) -> ExtractorResult | None:
+    for payload in json_payloads_from_html(html_text):
+        for value in json_path_values(payload, json_path):
+            matched = stock_from_rule_value(value, "json_path")
+            if matched is not None:
+                stock, detail = matched
+                return ExtractorResult(stock=stock, fragment=json.dumps(value, ensure_ascii=False)[:1200], detail=detail)
+    return None
+
+
+def extract_stock_by_regex(html_text: str, pattern_text: str) -> ExtractorResult | None:
+    pattern_text = str(pattern_text or "").strip()
+    if not pattern_text:
+        return None
+    try:
+        pattern = re.compile(pattern_text, re.IGNORECASE | re.DOTALL)
+    except re.error:
+        return ExtractorResult(stock=None, fragment="", detail="regex：规则格式错误，无法编译。")
+    match = pattern.search(html_text or "")
+    if not match:
+        return ExtractorResult(stock=None, fragment="", detail="regex：未匹配到内容。")
+    value = match.groupdict().get("stock") or match.group(1) if match.groups() else match.group(0)
+    matched = stock_from_rule_value(value, "regex")
+    fragment = html_text[max(0, match.start() - 120) : min(len(html_text), match.end() + 120)]
+    if matched is None:
+        return ExtractorResult(stock=None, fragment=fragment, detail="regex：已匹配内容，但无法转换为库存状态。")
+    stock, detail = matched
+    return ExtractorResult(stock=stock, fragment=fragment, detail=detail)
+
+
+def evaluate_rule_fragments(fragments: list[str], detail_prefix: str) -> ExtractorResult | None:
+    for fragment in fragments:
+        stock, detail = parse_stock(fragment)
+        if stock is not None:
+            return ExtractorResult(stock=stock, fragment=fragment, detail=f"{detail_prefix}：{detail}")
+        cleaned = clean_fragment_text(fragment)
+        if has_generic_sold_out_marker(fragment, cleaned):
+            return ExtractorResult(stock=0, fragment=fragment, detail=f"{detail_prefix}：命中售罄标记。")
+        if has_generic_orderable_marker(fragment, cleaned):
+            return ExtractorResult(stock=1, fragment=fragment, detail=f"{detail_prefix}：命中可下单/购买入口，按有货处理。")
+    return None
+
+
+def extract_stock_by_keyword_lists(fragment: str, source_config: dict[str, Any], detail_prefix: str) -> ExtractorResult | None:
+    cleaned = clean_fragment_text(fragment)
+    haystack = normalize_signal_text(f"{fragment}\n{cleaned}")
+    for keyword in config_text_list(source_config.get("soldout_keywords")):
+        if normalize_signal_text(keyword) in haystack:
+            return ExtractorResult(stock=0, fragment=fragment, detail=f"{detail_prefix}：命中自定义售罄关键词「{keyword}」。")
+    for keyword in config_text_list(source_config.get("in_stock_keywords")):
+        if normalize_signal_text(keyword) in haystack:
+            return ExtractorResult(stock=1, fragment=fragment, detail=f"{detail_prefix}：命中自定义有货关键词「{keyword}」。")
+    return None
+
+
+def extract_stock_by_rule(
+    html_text: str,
+    target_keyword: str,
+    task: Any,
+    fetch_result: FetchResult,
+) -> ExtractorResult | None:
+    source_config = task_source_config(task)
+    if not explicit_stock_rule_enabled(source_config):
+        return None
+    rule_type = str(source_config.get("stock_rule_type") or "auto_card").strip().lower().replace("-", "_")
+    if rule_type not in STOCK_RULE_TYPES:
+        rule_type = "auto_card"
+
+    scope_fragments = select_fragments_by_css(html_text, str(source_config.get("target_scope_selector") or ""))
+    base_html = "\n".join(scope_fragments) if scope_fragments else html_text
+    if rule_type == "text_near_keyword":
+        base_html = locate_product_fragment(html_text, target_keyword, lambda fragment: bool(clean_fragment_text(fragment)))
+
+    keyword_result = extract_stock_by_keyword_lists(base_html, source_config, "custom_rule")
+    if keyword_result is not None:
+        return keyword_result
+
+    soldout_selector = str(source_config.get("soldout_selector") or "").strip()
+    if soldout_selector and select_fragments_by_css(base_html, soldout_selector):
+        return ExtractorResult(stock=0, fragment="\n".join(select_fragments_by_css(base_html, soldout_selector)), detail="css_selector：命中自定义售罄选择器。")
+
+    disabled_selector = str(source_config.get("disabled_selector") or "").strip()
+    if disabled_selector and select_fragments_by_css(base_html, disabled_selector):
+        return ExtractorResult(stock=0, fragment="\n".join(select_fragments_by_css(base_html, disabled_selector)), detail="css_selector：命中自定义禁用按钮选择器。")
+
+    button_selector = str(source_config.get("button_selector") or "").strip()
+    if button_selector and select_fragments_by_css(base_html, button_selector):
+        fragments = select_fragments_by_css(base_html, button_selector)
+        return ExtractorResult(stock=1, fragment="\n".join(fragments), detail="css_selector：命中自定义购买按钮选择器，按有货处理。")
+
+    if rule_type == "json_path" or source_config.get("json_path"):
+        result = extract_stock_by_json_path(base_html, str(source_config.get("json_path") or ""))
+        if result is not None:
+            return result
+
+    if rule_type == "regex" or source_config.get("regex_pattern"):
+        result = extract_stock_by_regex(base_html, str(source_config.get("regex_pattern") or ""))
+        if result is not None:
+            return result
+
+    if rule_type == "xpath":
+        fragments = select_fragments_by_xpath(base_html, str(source_config.get("stock_selector") or ""))
+        result = evaluate_rule_fragments(fragments, "xpath")
+        if result is not None:
+            return result
+
+    if rule_type == "css_selector" or source_config.get("stock_selector"):
+        fragments = select_fragments_by_css(base_html, str(source_config.get("stock_selector") or ""))
+        result = evaluate_rule_fragments(fragments, "css_selector")
+        if result is not None:
+            return result
+
+    if rule_type == "text_near_keyword":
+        result = evaluate_rule_fragments([base_html], "text_near_keyword")
+        if result is not None:
+            return result
+
+    return ExtractorResult(
+        stock=None,
+        fragment=base_html[:1800],
+        detail=f"{rule_type}：自定义规则未能判断库存，请检查 selector / keyword / regex / json_path。",
+    )
+
+
 def find_html_text_position(html_text: str, keyword: str) -> int:
     if not html_text or not keyword:
         return -1
@@ -6118,6 +6418,9 @@ def extract_stock_for_strategy(
     task: Any,
     fetch_result: FetchResult,
 ) -> ExtractorResult:
+    rule_result = extract_stock_by_rule(html_text, target_keyword, task, fetch_result)
+    if rule_result is not None:
+        return rule_result
     extractor = EXTRACTOR_REGISTRY.get(normalize_fetch_strategy(strategy), default_stock_extractor)
     return extractor(html_text, target_keyword, task, fetch_result)
 
