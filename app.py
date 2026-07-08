@@ -7773,6 +7773,88 @@ def make_app() -> Flask:
         log_activity("warning", "tasks", f"已批量删除 {deleted_count} 个任务。")
         return jsonify({"ok": True, "message": f"已删除 {deleted_count} 个任务。", "result": {"deleted_count": deleted_count}})
 
+    @app.route("/api/tasks/move", methods=["POST"])
+    @login_required
+    @limiter.limit(GENERAL_MUTATION_LIMIT)
+    def move_tasks():
+        payload = read_json()
+        raw_ids = payload.get("task_ids")
+        if not isinstance(raw_ids, list):
+            return jsonify({"ok": False, "message": "请选择要移动的任务。"}), 400
+
+        task_ids: list[int] = []
+        for raw_id in raw_ids:
+            try:
+                task_id = int(raw_id)
+            except (TypeError, ValueError):
+                continue
+            if task_id > 0 and task_id not in task_ids:
+                task_ids.append(task_id)
+        if not task_ids:
+            return jsonify({"ok": False, "message": "请选择要移动的任务。"}), 400
+        if len(task_ids) > 200:
+            return jsonify({"ok": False, "message": "单次最多移动 200 个任务。"}), 400
+
+        target_group = normalize_task_group(payload.get("target_group_name") or payload.get("group_name"))
+        target_subgroup = normalize_task_subgroup(payload.get("target_subgroup_name") or payload.get("subgroup_name"))
+        if not target_group:
+            return jsonify({"ok": False, "message": "目标主分组不能为空。"}), 400
+        if not target_subgroup:
+            return jsonify({"ok": False, "message": "目标子分组不能为空。"}), 400
+
+        timestamp = now_iso()
+        placeholders = ",".join("?" for _ in task_ids)
+        with open_connection() as connection:
+            rows = connection.execute(
+                f"SELECT id, name FROM tasks WHERE id IN ({placeholders})",
+                task_ids,
+            ).fetchall()
+            row_by_id = {int(row["id"]): row for row in rows}
+            ordered_rows = [row_by_id[task_id] for task_id in task_ids if task_id in row_by_id]
+            if not ordered_rows:
+                return jsonify({"ok": False, "message": "选中的任务不存在。"}), 404
+
+            upsert_task_group(connection, target_group, timestamp)
+            upsert_task_group_node(connection, target_group, target_subgroup, timestamp)
+            next_order = next_sort_order(
+                connection,
+                "tasks",
+                "group_name = ? AND subgroup_name = ?",
+                (target_group, target_subgroup),
+            )
+            for index, row in enumerate(ordered_rows):
+                connection.execute(
+                    """
+                    UPDATE tasks
+                    SET group_name = ?, subgroup_name = ?, sort_order = ?, updated_at = ?
+                    WHERE id = ?
+                    """,
+                    (
+                        target_group,
+                        target_subgroup,
+                        next_order + (index * 100),
+                        timestamp,
+                        int(row["id"]),
+                    ),
+                )
+            connection.commit()
+
+        moved_count = len(ordered_rows)
+        destination = target_group if target_subgroup == DEFAULT_TASK_SUBGROUP else f"{target_group} / {target_subgroup}"
+        log_activity("info", "tasks", f"已移动 {moved_count} 个任务到「{destination}」。")
+        return jsonify(
+            {
+                "ok": True,
+                "message": f"已移动 {moved_count} 个任务到「{destination}」。",
+                "result": {
+                    "moved_count": moved_count,
+                    "target_group_name": target_group,
+                    "target_subgroup_name": target_subgroup,
+                    "task_ids": [int(row["id"]) for row in ordered_rows],
+                },
+            }
+        )
+
     @app.route("/api/tasks/<int:task_id>/toggle", methods=["POST"])
     @login_required
     @limiter.limit(GENERAL_MUTATION_LIMIT)

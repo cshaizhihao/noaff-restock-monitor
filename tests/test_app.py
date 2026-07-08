@@ -1414,6 +1414,158 @@ class PortalAppTestCase(unittest.TestCase):
         self.assertEqual(task_orders[task_ids[1]], 100)
         self.assertEqual(task_orders[task_ids[0]], 200)
 
+    def test_task_move_rehomes_single_task_and_preserves_state(self) -> None:
+        _, headers = self.login()
+        timestamp = app_module.now_iso()
+        with app_module.open_connection() as connection:
+            cursor = connection.execute(
+                """
+                INSERT INTO tasks (
+                    name, group_name, subgroup_name, monitor_url, target_keyword,
+                    restock_template, soldout_template, fetch_strategy, source_config,
+                    source_source_name, source_item_url, last_stock, last_state, message_id,
+                    message_ids, enabled, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
+                """,
+                (
+                    "HK WEE",
+                    "DMIT",
+                    "香港 / Tier 1",
+                    "https://example.com/hk-wee",
+                    "HKG.AS3.T1.WEE",
+                    "{name} restock",
+                    "{name} soldout",
+                    "scrapling_adaptive",
+                    json.dumps({"stock_rule_type": "auto_card", "target_scope_selector": ".plan"}),
+                    "DMIT catalog",
+                    "https://example.com/source",
+                    3,
+                    "in_stock",
+                    901,
+                    json.dumps({"chat-a": 901}),
+                    timestamp,
+                    timestamp,
+                ),
+            )
+            task_id = cursor.lastrowid
+            connection.commit()
+
+        response = self.client.post(
+            f"{app_module.PORTAL_PATH}/api/tasks/move",
+            headers=headers,
+            base_url=BASE_URL,
+            json={
+                "task_ids": [task_id],
+                "target_group_name": "New IDC",
+                "target_subgroup_name": "美国 / Premium",
+            },
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.get_json()["result"]["moved_count"], 1)
+
+        with app_module.open_connection() as connection:
+            row = connection.execute(
+                """
+                SELECT group_name, subgroup_name, sort_order, source_config, source_source_name,
+                       source_item_url, last_stock, last_state, message_id, message_ids
+                FROM tasks WHERE id = ?
+                """,
+                (task_id,),
+            ).fetchone()
+            target_group = connection.execute(
+                "SELECT 1 FROM task_groups WHERE group_name = ?",
+                ("New IDC",),
+            ).fetchone()
+            target_node = connection.execute(
+                "SELECT 1 FROM task_group_nodes WHERE group_name = ? AND subgroup_name = ?",
+                ("New IDC", "美国 / Premium"),
+            ).fetchone()
+
+        self.assertEqual(row["group_name"], "New IDC")
+        self.assertEqual(row["subgroup_name"], "美国 / Premium")
+        self.assertGreaterEqual(row["sort_order"], 100)
+        self.assertEqual(json.loads(row["source_config"])["stock_rule_type"], "auto_card")
+        self.assertEqual(row["source_source_name"], "DMIT catalog")
+        self.assertEqual(row["source_item_url"], "https://example.com/source")
+        self.assertEqual(row["last_stock"], 3)
+        self.assertEqual(row["last_state"], "in_stock")
+        self.assertEqual(row["message_id"], 901)
+        self.assertEqual(json.loads(row["message_ids"]), {"chat-a": 901})
+        self.assertIsNotNone(target_group)
+        self.assertIsNotNone(target_node)
+
+    def test_task_move_batches_tasks_and_creates_target_nodes(self) -> None:
+        _, headers = self.login()
+        timestamp = app_module.now_iso()
+        with app_module.open_connection() as connection:
+            task_ids = []
+            for name, subgroup_name, state, message_id in (
+                ("US TRI", "美国 / TRI", "unknown", None),
+                ("KR INTL", "韩国 / INTL", "sold_out", 777),
+            ):
+                cursor = connection.execute(
+                    """
+                    INSERT INTO tasks (
+                        name, group_name, subgroup_name, monitor_url, target_keyword,
+                        restock_template, soldout_template, enabled, last_state, message_id,
+                        created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?)
+                    """,
+                    (
+                        name,
+                        "Source IDC",
+                        subgroup_name,
+                        f"https://example.com/{name.lower().replace(' ', '-')}",
+                        name,
+                        "{name} restock",
+                        "{name} soldout",
+                        state,
+                        message_id,
+                        timestamp,
+                        timestamp,
+                    ),
+                )
+                task_ids.append(cursor.lastrowid)
+            connection.commit()
+
+        response = self.client.post(
+            f"{app_module.PORTAL_PATH}/api/tasks/move",
+            headers=headers,
+            base_url=BASE_URL,
+            json={
+                "task_ids": [task_ids[0], task_ids[1], task_ids[1], "bad"],
+                "target_group_name": "Target IDC",
+                "target_subgroup_name": "北美 / Premium / AS3",
+            },
+        )
+        self.assertEqual(response.status_code, 200)
+        payload = response.get_json()["result"]
+        self.assertEqual(payload["moved_count"], 2)
+        self.assertEqual(payload["task_ids"], task_ids)
+
+        with app_module.open_connection() as connection:
+            rows = connection.execute(
+                "SELECT id, group_name, subgroup_name, sort_order, last_state, message_id FROM tasks ORDER BY sort_order"
+            ).fetchall()
+            target_group = connection.execute(
+                "SELECT 1 FROM task_groups WHERE group_name = ?",
+                ("Target IDC",),
+            ).fetchone()
+            target_node = connection.execute(
+                "SELECT 1 FROM task_group_nodes WHERE group_name = ? AND subgroup_name = ?",
+                ("Target IDC", "北美 / Premium / AS3"),
+            ).fetchone()
+
+        self.assertEqual([row["id"] for row in rows], task_ids)
+        self.assertEqual({row["group_name"] for row in rows}, {"Target IDC"})
+        self.assertEqual({row["subgroup_name"] for row in rows}, {"北美 / Premium / AS3"})
+        self.assertEqual([row["sort_order"] for row in rows], [100, 200])
+        self.assertEqual(rows[0]["last_state"], "unknown")
+        self.assertEqual(rows[1]["last_state"], "sold_out")
+        self.assertEqual(rows[1]["message_id"], 777)
+        self.assertIsNotNone(target_group)
+        self.assertIsNotNone(target_node)
+
     def test_merchant_item_promote_creates_linked_task(self) -> None:
         _, headers = self.login()
         engine = self.app.extensions["monitor_engine"]

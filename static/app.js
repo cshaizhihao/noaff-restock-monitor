@@ -208,7 +208,20 @@
         groupRenameForm: document.getElementById("group-rename-form"),
         groupRenameInput: document.getElementById("group-rename-input"),
         groupRenameCancel: document.getElementById("group-rename-cancel"),
-        groupRenameSubmit: document.getElementById("group-rename-submit")
+        groupRenameSubmit: document.getElementById("group-rename-submit"),
+        taskMoveModal: document.getElementById("task-move-modal"),
+        taskMoveTitle: document.getElementById("task-move-title"),
+        taskMoveCount: document.getElementById("task-move-count"),
+        taskMoveClose: document.getElementById("task-move-close"),
+        taskMoveForm: document.getElementById("task-move-form"),
+        taskMoveGroup: document.getElementById("task-move-group"),
+        taskMoveGroupCustomWrap: document.getElementById("task-move-group-custom-wrap"),
+        taskMoveGroupCustom: document.getElementById("task-move-group-custom"),
+        taskMoveSubgroup: document.getElementById("task-move-subgroup"),
+        taskMoveSubgroupCustomWrap: document.getElementById("task-move-subgroup-custom-wrap"),
+        taskMoveSubgroupCustom: document.getElementById("task-move-subgroup-custom"),
+        taskMoveCancel: document.getElementById("task-move-cancel"),
+        taskMoveSubmit: document.getElementById("task-move-submit")
     };
 
     const defaultTemplates = {
@@ -885,6 +898,7 @@
     const defaultTaskGroup = "默认分组";
     const defaultTaskSubgroup = "默认子分组";
     let pendingGroupRename = "";
+    let pendingTaskMoveIds = [];
 
     function normalizeTaskGroup(value) {
         const group = String(value ?? "").trim().replace(/\s+/g, " ");
@@ -989,6 +1003,11 @@
                 subgroups.add(normalizeTaskSubgroup(task.subgroup_name));
             }
         });
+        currentTaskGroupNodes.forEach((node) => {
+            if (normalizeTaskGroup(node.group_name) === targetGroup) {
+                subgroups.add(normalizeTaskSubgroup(node.subgroup_name));
+            }
+        });
         extraSubgroupNames.forEach((subgroupName) => {
             const normalized = normalizeTaskSubgroup(subgroupName);
             if (normalized) {
@@ -1075,12 +1094,24 @@
         renderGroupOptions(els.merchantGroup, els.merchantGroupCustomWrap, els.merchantGroupCustom, tasks, extraGroupNames);
     }
 
+    function renderTaskMoveGroupOptions(extraGroupNames = []) {
+        renderGroupOptions(els.taskMoveGroup, els.taskMoveGroupCustomWrap, els.taskMoveGroupCustom, Array.from(currentTasks.values()), extraGroupNames);
+    }
+
     function setTaskGroupSelection(groupName, extraGroupNames = []) {
         setGroupSelection(els.taskGroup, els.taskGroupCustomWrap, els.taskGroupCustom, groupName, Array.from(currentTasks.values()), extraGroupNames);
     }
 
+    function setTaskMoveGroupSelection(groupName, extraGroupNames = []) {
+        setGroupSelection(els.taskMoveGroup, els.taskMoveGroupCustomWrap, els.taskMoveGroupCustom, groupName, Array.from(currentTasks.values()), extraGroupNames);
+    }
+
     function readTaskGroupValue() {
         return readGroupValue(els.taskGroup, els.taskGroupCustom);
+    }
+
+    function readTaskMoveGroupValue() {
+        return readGroupValue(els.taskMoveGroup, els.taskMoveGroupCustom);
     }
 
     function readMerchantGroupValue() {
@@ -1146,6 +1177,67 @@
             return customSubgroup ? normalizeTaskSubgroup(customSubgroup) : "";
         }
         return normalizeTaskSubgroup(els.taskSubgroup.value);
+    }
+
+    function renderTaskMoveSubgroupOptions(groupName, extraSubgroupNames = []) {
+        const selectEl = els.taskMoveSubgroup;
+        const customWrapEl = els.taskMoveSubgroupCustomWrap;
+        const customInputEl = els.taskMoveSubgroupCustom;
+        if (!selectEl) {
+            return;
+        }
+        const currentSelectValue = selectEl.value || defaultTaskSubgroup;
+        const currentCustomValue = customInputEl?.value || "";
+        const subgroupNames = collectSubgroupNames(Array.from(currentTasks.values()), groupName, extraSubgroupNames);
+        if (currentSelectValue !== "__custom__" && !subgroupNames.includes(currentSelectValue)) {
+            subgroupNames.push(currentSelectValue);
+        }
+        const signature = `${normalizeTaskGroup(groupName)}\u0000${subgroupNames.join("\u0000")}`;
+        if (selectEl.dataset.subgroupOptionsSignature === signature && selectEl.dataset.subgroupOptionsReady === "1") {
+            updateGroupVisibility(selectEl, customWrapEl, customInputEl);
+            return;
+        }
+        selectEl.dataset.subgroupOptionsSignature = signature;
+        selectEl.innerHTML = `${subgroupNames
+            .map((subgroupName) => `<option value="${escapeHtml(subgroupName)}">${escapeHtml(subgroupName)}</option>`)
+            .join("")}<option value="__custom__">新建子分组…</option>`;
+        selectEl.dataset.subgroupOptionsReady = "1";
+        if (currentSelectValue === "__custom__") {
+            selectEl.value = "__custom__";
+            syncInputValue(customInputEl, currentCustomValue);
+        } else {
+            selectEl.value = subgroupNames.includes(currentSelectValue) ? currentSelectValue : defaultTaskSubgroup;
+            syncInputValue(customInputEl, "");
+        }
+        updateGroupVisibility(selectEl, customWrapEl, customInputEl);
+    }
+
+    function setTaskMoveSubgroupSelection(groupName, subgroupName, extraSubgroupNames = []) {
+        if (!els.taskMoveSubgroup) {
+            return;
+        }
+        renderTaskMoveSubgroupOptions(groupName, extraSubgroupNames);
+        const normalized = normalizeTaskSubgroup(subgroupName);
+        const subgroupNames = collectSubgroupNames(Array.from(currentTasks.values()), groupName, extraSubgroupNames);
+        if (subgroupNames.includes(normalized)) {
+            els.taskMoveSubgroup.value = normalized;
+            syncInputValue(els.taskMoveSubgroupCustom, "");
+        } else {
+            els.taskMoveSubgroup.value = "__custom__";
+            syncInputValue(els.taskMoveSubgroupCustom, normalized);
+        }
+        updateGroupVisibility(els.taskMoveSubgroup, els.taskMoveSubgroupCustomWrap, els.taskMoveSubgroupCustom);
+    }
+
+    function readTaskMoveSubgroupValue() {
+        if (!els.taskMoveSubgroup) {
+            return defaultTaskSubgroup;
+        }
+        if (els.taskMoveSubgroup.value === "__custom__") {
+            const customSubgroup = String(els.taskMoveSubgroupCustom?.value || "").trim();
+            return customSubgroup ? normalizeTaskSubgroup(customSubgroup) : "";
+        }
+        return normalizeTaskSubgroup(els.taskMoveSubgroup.value);
     }
 
     function splitTelegramChatIds(value) {
@@ -2332,6 +2424,11 @@
                                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/>
                                 </svg>
                             </button>
+                            <button type="button" class="icon-button !h-9 !w-9" title="移动到其他分组" data-action="move" data-task-move-action>
+                                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7h12m0 0l-4-4m4 4l-4 4M16 17H4m0 0l4 4m-4-4l4-4"/>
+                                </svg>
+                            </button>
                             <button type="button" class="icon-button !h-9 !w-9" title="删除" data-action="delete">
                                 <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/>
@@ -2504,6 +2601,7 @@
                     </div>
                     <div class="task-browser-head-actions">
                         ${hasChildren ? '<button type="button" class="ghost-button !min-h-9 !rounded-lg !px-3 !py-2 text-[12px]" data-task-products-back>返回子分组</button>' : ""}
+                        <button type="button" class="ghost-button !min-h-9 !rounded-lg !px-3 !py-2 text-[12px]" data-group-action="bulk-move" disabled>移动选中商品</button>
                         <button type="button" class="ghost-button !min-h-9 !rounded-lg !px-3 !py-2 text-[12px]" data-group-action="bulk-delete" disabled>删除选中商品</button>
                     </div>
                 </div>
@@ -3032,6 +3130,77 @@
         }
     }
 
+    function openTaskMoveModal(taskIds) {
+        pendingTaskMoveIds = Array.from(new Set((taskIds || [])
+            .map((taskId) => Number(taskId))
+            .filter((taskId) => Number.isInteger(taskId) && taskId > 0)));
+        if (!pendingTaskMoveIds.length) {
+            showToast("请先选择要移动的商品。", "error");
+            return;
+        }
+        const firstTask = currentTasks.get(String(pendingTaskMoveIds[0]));
+        const defaultGroup = taskBrowserPath.groupName || firstTask?.group_name || defaultTaskGroup;
+        const defaultSubgroup = taskBrowserPath.subgroupName || firstTask?.subgroup_name || defaultTaskSubgroup;
+        if (els.taskMoveTitle) {
+            els.taskMoveTitle.textContent = pendingTaskMoveIds.length > 1 ? "批量移动商品" : "移动商品";
+        }
+        if (els.taskMoveCount) {
+            els.taskMoveCount.textContent = `将移动 ${pendingTaskMoveIds.length} 个商品，状态、消息记录和来源信息都会保留。`;
+        }
+        renderTaskMoveGroupOptions([defaultGroup]);
+        setTaskMoveGroupSelection(defaultGroup, [defaultGroup]);
+        renderTaskMoveSubgroupOptions(defaultGroup, [defaultSubgroup]);
+        setTaskMoveSubgroupSelection(defaultGroup, defaultSubgroup, [defaultSubgroup]);
+        els.taskMoveModal?.classList.remove("hidden");
+        document.body.style.overflow = "hidden";
+        window.setTimeout(() => els.taskMoveGroup?.focus(), 40);
+    }
+
+    function closeTaskMoveModal() {
+        pendingTaskMoveIds = [];
+        els.taskMoveModal?.classList.add("hidden");
+        document.body.style.overflow = "";
+    }
+
+    async function submitTaskMove(event) {
+        event.preventDefault();
+        const targetGroup = readTaskMoveGroupValue();
+        const targetSubgroup = readTaskMoveSubgroupValue();
+        if (!pendingTaskMoveIds.length) {
+            showToast("请先选择要移动的商品。", "error");
+            return;
+        }
+        if (!targetGroup) {
+            showToast("请选择或输入目标主分组。", "error");
+            return;
+        }
+        if (!targetSubgroup) {
+            showToast("请选择或输入目标子分组。", "error");
+            return;
+        }
+        const submitButton = els.taskMoveSubmit;
+        if (submitButton) submitButton.disabled = true;
+        try {
+            const data = await apiFetch("/api/tasks/move", {
+                method: "POST",
+                body: JSON.stringify({
+                    task_ids: pendingTaskMoveIds,
+                    target_group_name: targetGroup,
+                    target_subgroup_name: targetSubgroup
+                })
+            });
+            showToast(data.message || `已移动 ${pendingTaskMoveIds.length} 个商品。`);
+            closeTaskMoveModal();
+            setTaskBrowserPath(targetGroup, targetSubgroup === defaultTaskSubgroup ? "" : targetSubgroup, "products");
+            await loadSnapshot(false);
+        } catch (error) {
+            showToast(error.message, "error");
+        } finally {
+            if (submitButton) submitButton.disabled = false;
+            updateBulkDeleteButtons();
+        }
+    }
+
     function selectedTaskIdsIn(scope) {
         return Array.from(scope?.querySelectorAll?.("[data-task-select]:checked") || [])
             .map((input) => Number(input.value))
@@ -3045,6 +3214,12 @@
     }
 
     function updateBulkDeleteButtons(scope = els.tasksGrid) {
+        scope?.querySelectorAll?.("[data-group-action=\"bulk-move\"]")?.forEach((button) => {
+            const container = button.closest(".task-browser-section") || button.closest("[data-task-subgroup-section]") || button.closest("[data-task-group-section]") || els.tasksGrid;
+            const selectedCount = selectedTaskIdsIn(container).length;
+            button.disabled = selectedCount === 0;
+            button.textContent = selectedCount ? `移动选中 (${selectedCount})` : "移动选中商品";
+        });
         scope?.querySelectorAll?.("[data-group-action=\"bulk-delete\"]")?.forEach((button) => {
             const container = button.closest(".task-browser-section") || button.closest("[data-task-subgroup-section]") || button.closest("[data-task-group-section]") || els.tasksGrid;
             const selectedCount = selectedTaskIdsIn(container).length;
@@ -3057,6 +3232,11 @@
             button.disabled = selectedCount === 0;
             button.textContent = selectedCount ? `删除选中子分组 (${selectedCount})` : "删除选中子分组";
         });
+    }
+
+    function bulkMoveSelectedTasks(button) {
+        const scope = button.closest(".task-browser-section") || button.closest("[data-task-subgroup-section]") || button.closest("[data-task-group-section]") || els.tasksGrid;
+        openTaskMoveModal(selectedTaskIdsIn(scope));
     }
 
     async function bulkDeleteSelectedTasks(button) {
@@ -3370,6 +3550,10 @@
             openTaskModal(task);
             return;
         }
+        if (action === "move") {
+            openTaskMoveModal([taskId]);
+            return;
+        }
         if (action === "delete" && !window.confirm(`确认删除任务「${task.name}」？`)) {
             return;
         }
@@ -3619,6 +3803,11 @@
             closeTaskModal();
         }
     });
+    els.taskMoveModal?.addEventListener("click", (event) => {
+        if (event.target === els.taskMoveModal) {
+            closeTaskMoveModal();
+        }
+    });
     els.templateHelpModal?.addEventListener("click", (event) => {
         if (event.target === els.templateHelpModal) {
             closeTemplateHelpModal();
@@ -3636,6 +3825,20 @@
         updateGroupVisibility(els.taskSubgroup, els.taskSubgroupCustomWrap, els.taskSubgroupCustom);
         if (els.taskSubgroup?.value === "__custom__") {
             window.setTimeout(() => els.taskSubgroupCustom?.focus(), 0);
+        }
+    });
+    els.taskMoveGroup?.addEventListener("change", () => {
+        updateGroupVisibility(els.taskMoveGroup, els.taskMoveGroupCustomWrap, els.taskMoveGroupCustom);
+        const selectedGroup = readTaskMoveGroupValue() || defaultTaskGroup;
+        renderTaskMoveSubgroupOptions(selectedGroup);
+        if (els.taskMoveGroup?.value === "__custom__") {
+            window.setTimeout(() => els.taskMoveGroupCustom?.focus(), 0);
+        }
+    });
+    els.taskMoveSubgroup?.addEventListener("change", () => {
+        updateGroupVisibility(els.taskMoveSubgroup, els.taskMoveSubgroupCustomWrap, els.taskMoveSubgroupCustom);
+        if (els.taskMoveSubgroup?.value === "__custom__") {
+            window.setTimeout(() => els.taskMoveSubgroupCustom?.focus(), 0);
         }
     });
     els.merchantGroup?.addEventListener("change", () => {
@@ -3658,6 +3861,8 @@
                 openTaskGroupRenameModal(groupName);
             } else if (groupAction.dataset.groupAction === "delete") {
                 deleteTaskGroup(groupName, groupAction);
+            } else if (groupAction.dataset.groupAction === "bulk-move") {
+                bulkMoveSelectedTasks(groupAction);
             } else if (groupAction.dataset.groupAction === "bulk-delete") {
                 bulkDeleteSelectedTasks(groupAction);
             }
@@ -3801,6 +4006,9 @@
     els.groupRenameForm?.addEventListener("submit", submitTaskGroupRename);
     els.groupRenameCancel?.addEventListener("click", closeTaskGroupRenameModal);
     els.groupRenameClose?.addEventListener("click", closeTaskGroupRenameModal);
+    els.taskMoveForm?.addEventListener("submit", submitTaskMove);
+    els.taskMoveCancel?.addEventListener("click", closeTaskMoveModal);
+    els.taskMoveClose?.addEventListener("click", closeTaskMoveModal);
 
     els.taskForm?.addEventListener("click", (event) => {
         const strategyCard = event.target.closest("[data-task-strategy-card]");
@@ -3944,6 +4152,8 @@
             closeTaskModal();
         } else if (event.key === "Escape" && !els.groupRenameModal.classList.contains("hidden")) {
             closeTaskGroupRenameModal();
+        } else if (event.key === "Escape" && !els.taskMoveModal?.classList.contains("hidden")) {
+            closeTaskMoveModal();
         }
     });
 
@@ -3951,6 +4161,10 @@
     wireDirtyTracking(els.taskGroupCustom);
     wireDirtyTracking(els.taskSubgroup);
     wireDirtyTracking(els.taskSubgroupCustom);
+    wireDirtyTracking(els.taskMoveGroup);
+    wireDirtyTracking(els.taskMoveGroupCustom);
+    wireDirtyTracking(els.taskMoveSubgroup);
+    wireDirtyTracking(els.taskMoveSubgroupCustom);
     wireDirtyTracking(els.merchantGroup);
     wireDirtyTracking(els.merchantGroupCustom);
     [
@@ -3989,6 +4203,8 @@
     ].forEach(wireDirtyTracking);
     updateGroupVisibility(els.taskGroup, els.taskGroupCustomWrap, els.taskGroupCustom);
     updateGroupVisibility(els.taskSubgroup, els.taskSubgroupCustomWrap, els.taskSubgroupCustom);
+    updateGroupVisibility(els.taskMoveGroup, els.taskMoveGroupCustomWrap, els.taskMoveGroupCustom);
+    updateGroupVisibility(els.taskMoveSubgroup, els.taskMoveSubgroupCustomWrap, els.taskMoveSubgroupCustom);
     updateGroupVisibility(els.merchantGroup, els.merchantGroupCustomWrap, els.merchantGroupCustom);
     resetTaskForm();
     setMerchantStep("source");
