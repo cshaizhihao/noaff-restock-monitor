@@ -168,6 +168,8 @@ Current result:
 
 ## Manual Smoke Test
 
+Detailed release validation lives in `docs/RELEASE_CHECKLIST.md`.
+
 - Create tasks in standard, enhanced, high-compatibility, manual, and webhook modes.
 - Save a task and run “save and check now”.
 - Configure a CSS selector rule and verify only the target product is parsed.

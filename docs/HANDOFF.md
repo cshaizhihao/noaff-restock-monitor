@@ -152,6 +152,8 @@ The migration is marked by `scrapling_fetch_strategy_migration_v1` and runs once
   - group/subgroup/move tests
 - `tests/test_install_script.py`
   - installer and UI structure tests
+- `docs/RELEASE_CHECKLIST.md`
+  - pre-release validation, smoke tests, resource-safety checks, and residual risks
 
 ## Validation Commands
 
@@ -215,6 +217,7 @@ Selector-based rule:
 
 ## Next Release Checklist
 
+- Use `docs/RELEASE_CHECKLIST.md` as the source checklist.
 - Run all validation commands.
 - Smoke test task creation for standard/enhanced/high-compatibility/manual/webhook modes.
 - Smoke test product intake: local discovery, Scrapling preview, bulk create.

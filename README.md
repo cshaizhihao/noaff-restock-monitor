@@ -441,6 +441,8 @@ git diff --check
 
 ## 发布检查
 
+更完整的发布清单见 `docs/RELEASE_CHECKLIST.md`。
+
 - 新建智能多引擎任务，确认普通 IDC 页面可识别有货/售罄。
 - 用 CSS selector / XPath / 正则各创建一个规则任务，确认状态机正常。
 - 商品入库跑一次 local discovery -> Scrapling preview -> 批量创建。
