@@ -230,7 +230,7 @@
                                     <div>
                                         <p class="settings-kicker">Product Intake</p>
                                         <h3 class="panel-heading">商品入库工作台</h3>
-                                        <p class="merchant-workbench-copy">按“来源 → 采集 → 规则 → 执行 → 发现结果 → 商品预览”逐步入库，先看候选 URL，再抓取选中 URL，最后确认商品，避免把语言、导航、页脚内容误当商品。</p>
+                                        <p class="merchant-workbench-copy">按“填页面 → 自动发现 → 预览确认 → 创建任务”入库。默认配置已经适合大多数 IDC / WHMCS 页面，只有识别不准时再展开高级选项。</p>
                                     </div>
                                     <div class="merchant-metric-strip" aria-label="商品入库统计">
                                         <div>
@@ -256,18 +256,18 @@
                                     </button>
                                     <button type="button" class="merchant-step-button" data-merchant-step-target="strategy" aria-selected="false">
                                         <span>02</span>
-                                        <strong>采集</strong>
-                                        <em>发现和抓取</em>
+                                        <strong>自动采集</strong>
+                                        <em>默认推荐</em>
                                     </button>
                                     <button type="button" class="merchant-step-button" data-merchant-step-target="rules" aria-selected="false">
                                         <span>03</span>
-                                        <strong>规则</strong>
-                                        <em>关键词和上限</em>
+                                        <strong>筛选</strong>
+                                        <em>关键词可选</em>
                                     </button>
                                     <button type="button" class="merchant-step-button" data-merchant-step-target="review" aria-selected="false">
                                         <span>04</span>
-                                        <strong>执行</strong>
-                                        <em>确认后开始</em>
+                                        <strong>开始</strong>
+                                        <em>发现商品页</em>
                                     </button>
                                     <button type="button" class="merchant-step-button" data-merchant-step-target="sources" aria-selected="false">
                                         <span>05</span>
@@ -288,8 +288,8 @@
 
                                 <div id="merchant-wizard-summary" class="merchant-wizard-summary">
                                     <span>未填写来源</span>
-                                    <span>智能多引擎</span>
-                                    <span>先发现 URL，再抓取商品</span>
+                                    <span>自动采集</span>
+                                    <span>发现后预览确认</span>
                                 </div>
 
                                 <div class="merchant-workbench-body intake-results-stack">
@@ -325,15 +325,11 @@
                                                     <input id="merchant-group-custom" type="text" class="input-dark" maxlength="48" placeholder="输入新的分组名称">
                                                 </div>
                                             </div>
-                                            <div class="merchant-guide-grid">
-                                                <div>
-                                                    <strong>推荐入口</strong>
-                                                    <p>公开 pricing、store、cart.php?gid、带 product 参数的页面。</p>
-                                                </div>
-                                                <div>
-                                                    <strong>不推荐入口</strong>
-                                                    <p>登录页、公告页、知识库、隐私条款、只有语言切换的首页。</p>
-                                                </div>
+                                            <div class="merchant-quick-flow" aria-label="入库流程">
+                                                <div><strong>1</strong><span>填写商家商品页</span></div>
+                                                <div><strong>2</strong><span>系统自动发现候选 URL</span></div>
+                                                <div><strong>3</strong><span>勾选真实商品</span></div>
+                                                <div><strong>4</strong><span>创建监控任务</span></div>
                                             </div>
                                         </section>
 
@@ -341,113 +337,134 @@
                                             <div class="merchant-panel-header">
                                                 <div>
                                                     <p class="settings-kicker">Step 02</p>
-                                                    <h4>采集策略</h4>
+                                                    <h4>自动采集</h4>
                                                 </div>
                                                 <div class="merchant-panel-actions">
                                                     <button type="button" class="ghost-button !min-h-10 !px-3 !py-2 text-[12px]" data-merchant-step-prev>返回</button>
                                                     <button type="button" class="ghost-button !min-h-10 !px-3 !py-2 text-[12px]" data-merchant-step-next>下一步</button>
                                                 </div>
                                             </div>
-                                            <div class="merchant-field-grid four">
-                                                <div>
-                                                    <label for="merchant-discovery-strategy" class="form-label">发现方式</label>
-                                                    <select id="merchant-discovery-strategy" class="input-dark">
-                                                        <option value="local">Scrapling 页面链接</option>
-                                                    </select>
-                                                </div>
-                                                <div>
-                                                    <label for="merchant-scrape-strategy" class="form-label">抓取方式</label>
-                                                    <select id="merchant-scrape-strategy" class="input-dark">
-                                                        <option value="multi_engine">智能多引擎（推荐）</option>
-                                                        <option value="curl_cffi">TLS 指纹 HTTP</option>
-                                                        <option value="scrapling_standard">标准采集</option>
-                                                        <option value="scrapling_dynamic">增强渲染</option>
-                                                        <option value="scrapling_stealth">高兼容浏览器</option>
-                                                    </select>
-                                                </div>
-                                                <div>
-                                                    <label for="merchant-default-fetch-strategy" class="form-label">生成任务采集方式</label>
-                                                    <select id="merchant-default-fetch-strategy" class="input-dark">
-                                                        <option value="multi_engine">智能多引擎（推荐）</option>
-                                                        <option value="curl_cffi">TLS 指纹 HTTP</option>
-                                                        <option value="scrapling_standard">标准采集</option>
-                                                        <option value="scrapling_dynamic">增强渲染</option>
-                                                        <option value="scrapling_stealth">高兼容浏览器</option>
-                                                    </select>
-                                                </div>
-                                                <div>
-                                                    <label for="merchant-default-extractor" class="form-label">解析器</label>
-                                                    <select id="merchant-default-extractor" class="input-dark">
-                                                        <option value="generic_pricing_table">通用价格表</option>
-                                                        <option value="whmcs">WHMCS</option>
-                                                        <option value="firecrawl_product_hint">Firecrawl Product hint</option>
-                                                        <option value="fallback_keyword_parser">关键词 fallback</option>
-                                                    </select>
-                                                </div>
+                                            <div class="merchant-mode-cards">
+                                                <label class="merchant-mode-card">
+                                                    <input type="radio" name="merchant-mode-preset" value="auto" checked data-merchant-mode-preset>
+                                                    <span>
+                                                        <strong>自动推荐</strong>
+                                                        <small>适合大多数 IDC 页面，发现和任务都用自动采集。</small>
+                                                    </span>
+                                                </label>
+                                                <label class="merchant-mode-card">
+                                                    <input type="radio" name="merchant-mode-preset" value="dynamic" data-merchant-mode-preset>
+                                                    <span>
+                                                        <strong>JS 页面</strong>
+                                                        <small>页面内容由前端渲染时使用增强模式。</small>
+                                                    </span>
+                                                </label>
+                                                <label class="merchant-mode-card">
+                                                    <input type="radio" name="merchant-mode-preset" value="compatible" data-merchant-mode-preset>
+                                                    <span>
+                                                        <strong>高兼容</strong>
+                                                        <small>复杂页面再用，资源消耗更高。</small>
+                                                    </span>
+                                                </label>
                                             </div>
+                                            <details class="merchant-advanced-options">
+                                                <summary>高级采集参数</summary>
+                                                <div class="merchant-field-grid four">
+                                                    <div>
+                                                        <label for="merchant-discovery-strategy" class="form-label">发现方式</label>
+                                                        <select id="merchant-discovery-strategy" class="input-dark">
+                                                            <option value="local">页面链接发现</option>
+                                                        </select>
+                                                    </div>
+                                                    <div>
+                                                        <label for="merchant-scrape-strategy" class="form-label">抓取方式</label>
+                                                        <select id="merchant-scrape-strategy" class="input-dark">
+                                                            <option value="multi_engine">自动采集</option>
+                                                            <option value="curl_cffi">标准 HTTP</option>
+                                                            <option value="scrapling_standard">标准采集</option>
+                                                            <option value="scrapling_dynamic">增强渲染</option>
+                                                            <option value="scrapling_stealth">高兼容浏览器</option>
+                                                        </select>
+                                                    </div>
+                                                    <div>
+                                                        <label for="merchant-default-fetch-strategy" class="form-label">任务采集方式</label>
+                                                        <select id="merchant-default-fetch-strategy" class="input-dark">
+                                                            <option value="multi_engine">自动采集</option>
+                                                            <option value="curl_cffi">标准 HTTP</option>
+                                                            <option value="scrapling_standard">标准采集</option>
+                                                            <option value="scrapling_dynamic">增强渲染</option>
+                                                            <option value="scrapling_stealth">高兼容浏览器</option>
+                                                        </select>
+                                                    </div>
+                                                    <div>
+                                                        <label for="merchant-default-extractor" class="form-label">解析器</label>
+                                                        <select id="merchant-default-extractor" class="input-dark">
+                                                            <option value="generic_pricing_table">自动价格卡片</option>
+                                                            <option value="whmcs">WHMCS</option>
+                                                            <option value="firecrawl_product_hint">外部 Product hint</option>
+                                                            <option value="fallback_keyword_parser">关键词 fallback</option>
+                                                        </select>
+                                                    </div>
+                                                </div>
+                                            </details>
                                             <p id="merchant-firecrawl-state" class="merchant-inline-state"></p>
-                                            <div class="merchant-guide-grid">
-                                                <div>
-                                                    <strong>默认建议</strong>
-                                                    <p>默认使用智能多引擎：先用 curl_cffi 指纹 HTTP，失败后再升级本地浏览器。Firecrawl 只作为外部兜底，不再作为首选。</p>
-                                                </div>
-                                                <div>
-                                                    <strong>边界说明</strong>
-                                                    <p>Cloudflare challenge 会归类为受保护页面；高兼容模式仍失败时，建议改用 Webhook、手动录入或替代公开页面。</p>
-                                                </div>
-                                            </div>
                                         </section>
 
                                         <section id="merchant-step-rules" class="merchant-step-panel hidden" data-merchant-step-panel="rules">
                                             <div class="merchant-panel-header">
                                                 <div>
                                                     <p class="settings-kicker">Step 03</p>
-                                                    <h4>入库规则</h4>
+                                                    <h4>筛选规则</h4>
                                                 </div>
                                                 <div class="merchant-panel-actions">
                                                     <button type="button" class="ghost-button !min-h-10 !px-3 !py-2 text-[12px]" data-merchant-step-prev>返回</button>
                                                     <button type="button" class="ghost-button !min-h-10 !px-3 !py-2 text-[12px]" data-merchant-step-next>下一步</button>
                                                 </div>
                                             </div>
-                                            <div class="merchant-field-grid three">
+                                            <div class="merchant-field-grid two">
                                                 <div>
-                                                    <label for="merchant-search-keyword" class="form-label">Map 搜索词</label>
-                                                    <input id="merchant-search-keyword" type="text" class="input-dark" placeholder="vps / hk / pricing / store">
-                                                </div>
-                                                <div>
-                                                    <label for="merchant-target-keyword" class="form-label">目标关键词</label>
+                                                    <label for="merchant-target-keyword" class="form-label">目标关键词（可选）</label>
                                                     <input id="merchant-target-keyword" type="text" class="input-dark" placeholder="HKG.AS3 / HK / CMI / VPS">
-                                                    <p class="field-help">导入异常时优先填写商品型号、地区或线路关键词，系统会把不匹配候选放到“需要人工确认”。</p>
+                                                    <p class="field-help">只想导入某个地区或型号时填写；不填则让系统自动识别商品卡片。</p>
                                                 </div>
                                                 <div>
-                                                    <label for="merchant-target-keyword-mode" class="form-label">关键词模式</label>
-                                                    <select id="merchant-target-keyword-mode" class="input-dark">
-                                                        <option value="contains">包含</option>
-                                                        <option value="exact">精确</option>
-                                                        <option value="fuzzy">模糊</option>
-                                                    </select>
-                                                </div>
-                                                <div>
-                                                    <label for="merchant-dedupe-policy" class="form-label">去重策略</label>
-                                                    <select id="merchant-dedupe-policy" class="input-dark">
-                                                        <option value="by_url">按 URL</option>
-                                                        <option value="by_title_url">按标题 + URL</option>
-                                                        <option value="by_pid">按 pid/gid</option>
-                                                    </select>
-                                                </div>
-                                                <div>
-                                                    <label for="merchant-max-discovered-urls" class="form-label">发现 URL 上限</label>
-                                                    <input id="merchant-max-discovered-urls" type="number" min="1" max="250" class="input-dark" value="50">
-                                                </div>
-                                                <div>
-                                                    <label for="merchant-max-import-items" class="form-label">单次入库上限</label>
+                                                    <label for="merchant-max-import-items" class="form-label">最多导入商品</label>
                                                     <input id="merchant-max-import-items" type="number" min="1" max="250" class="input-dark" value="50">
                                                 </div>
-                                                <div>
-                                                    <label for="merchant-timeout-seconds" class="form-label">超时秒数</label>
-                                                    <input id="merchant-timeout-seconds" type="number" min="10" max="180" class="input-dark" value="25">
-                                                </div>
                                             </div>
+                                            <details class="merchant-advanced-options">
+                                                <summary>高级筛选参数</summary>
+                                                <div class="merchant-field-grid three">
+                                                    <div>
+                                                        <label for="merchant-search-keyword" class="form-label">搜索词</label>
+                                                    <input id="merchant-search-keyword" type="text" class="input-dark" placeholder="vps / hk / pricing / store">
+                                                    </div>
+                                                    <div>
+                                                        <label for="merchant-target-keyword-mode" class="form-label">关键词模式</label>
+                                                        <select id="merchant-target-keyword-mode" class="input-dark">
+                                                            <option value="contains">包含</option>
+                                                            <option value="exact">精确</option>
+                                                            <option value="fuzzy">模糊</option>
+                                                        </select>
+                                                    </div>
+                                                    <div>
+                                                        <label for="merchant-dedupe-policy" class="form-label">去重策略</label>
+                                                        <select id="merchant-dedupe-policy" class="input-dark">
+                                                            <option value="by_url">按 URL</option>
+                                                            <option value="by_title_url">按标题 + URL</option>
+                                                            <option value="by_pid">按 pid/gid</option>
+                                                        </select>
+                                                    </div>
+                                                    <div>
+                                                        <label for="merchant-max-discovered-urls" class="form-label">发现 URL 上限</label>
+                                                        <input id="merchant-max-discovered-urls" type="number" min="1" max="250" class="input-dark" value="50">
+                                                    </div>
+                                                    <div>
+                                                        <label for="merchant-timeout-seconds" class="form-label">超时秒数</label>
+                                                        <input id="merchant-timeout-seconds" type="number" min="10" max="180" class="input-dark" value="25">
+                                                    </div>
+                                                </div>
+                                            </details>
                                             <div class="merchant-check-row">
                                                 <label class="settings-check">
                                                     <input id="merchant-include-sold-out" type="checkbox" class="h-4 w-4 rounded border-slate-700 bg-slate-950 text-indigo-500" checked>
@@ -458,14 +475,14 @@
                                                     导入后自动创建任务
                                                 </label>
                                             </div>
-                                            <p class="field-help">建议先关闭自动创建任务，确认商品预览后再批量创建，避免误入库。语言切换、导航、步骤标题、页脚、无价格/无规格的候选会被自动降级到人工确认。</p>
+                                            <p class="field-help">建议先确认商品预览，再批量创建任务。系统会自动过滤语言、导航、页脚、步骤标题和没有价格/规格的候选。</p>
                                         </section>
 
                                         <section id="merchant-step-review" class="merchant-step-panel hidden" data-merchant-step-panel="review">
                                             <div class="merchant-panel-header">
                                                 <div>
                                                     <p class="settings-kicker">Step 04</p>
-                                                    <h4>执行采集</h4>
+                                                    <h4>开始发现</h4>
                                                 </div>
                                                 <button type="button" class="ghost-button !min-h-10 !px-3 !py-2 text-[12px]" data-merchant-step-prev>返回</button>
                                             </div>
@@ -473,13 +490,13 @@
                                             <div class="merchant-run-box">
                                                 <div>
                                                     <strong>开始后会做什么</strong>
-                                                    <p>第一步只发现候选 URL；进入“发现结果”后再抓取选中 URL 并生成商品预览。只有勾选自动创建任务时才会直接生成监控任务。</p>
+                                                    <p>先发现候选 URL，再让你选择要抓取的页面。确认商品预览后再写入任务，避免误导入。</p>
                                                 </div>
                                                 <button id="merchant-import-button" type="submit" class="primary-button">
                                                     <svg class="mr-2 h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 7h16M4 12h10M4 17h7"/>
                                                     </svg>
-                                                    <span id="merchant-import-button-label">发现候选 URL</span>
+                                                    <span id="merchant-import-button-label">开始发现</span>
                                                 </button>
                                             </div>
                                         </section>
@@ -811,7 +828,7 @@
                                                 <div>
                                                     <p class="settings-kicker">External Fallback</p>
                                                     <h3 class="panel-heading">外部兜底</h3>
-                                                    <p class="field-help mt-2">Firecrawl 会消耗外部 credits，默认不参与高频定时监控；只建议用于手动诊断或个别复杂页面兜底。</p>
+                                                    <p class="field-help mt-2">这里配置外部增强采集服务和 Firecrawl。外部服务默认只作为兜底，不替代 Scrapling 主采集。</p>
                                                 </div>
                                                 <div class="settings-section-actions">
                                                     <button type="button" class="ghost-button settings-back-button" data-settings-back>返回</button>
@@ -819,6 +836,56 @@
                                                 </div>
                                             </div>
                                             <div class="settings-grid settings-firecrawl-grid">
+                                                <div class="settings-field-wide external-collector-box">
+                                                    <div>
+                                                        <p class="settings-kicker">External Collector</p>
+                                                        <h4>通用外部增强采集</h4>
+                                                        <p class="field-help">可填写你自建的兼容服务地址，用于少量受保护页面兜底。留空则完全不启用。</p>
+                                                    </div>
+                                                    <label class="settings-check">
+                                                        <input id="settings-enhanced-collector-enabled" type="checkbox" class="h-4 w-4 rounded border-slate-700 bg-slate-950 text-indigo-500">
+                                                        启用外部增强采集
+                                                    </label>
+                                                    <div class="settings-grid settings-grid-three">
+                                                        <div class="settings-field">
+                                                            <label for="settings-enhanced-collector-api-url" class="form-label">服务地址</label>
+                                                            <input id="settings-enhanced-collector-api-url" type="url" class="input-dark" placeholder="http://127.0.0.1:8191">
+                                                        </div>
+                                                        <div class="settings-field">
+                                                            <label for="settings-enhanced-collector-timeout" class="form-label">超时秒数</label>
+                                                            <input id="settings-enhanced-collector-timeout" type="number" min="5" max="180" class="input-dark">
+                                                        </div>
+                                                        <div class="settings-field">
+                                                            <label for="settings-enhanced-collector-retries" class="form-label">重试次数</label>
+                                                            <input id="settings-enhanced-collector-retries" type="number" min="0" max="5" class="input-dark">
+                                                        </div>
+                                                    </div>
+                                                    <div class="settings-field-wide grid gap-3 sm:grid-cols-2">
+                                                        <label class="settings-check">
+                                                            <input id="settings-enhanced-collector-use-for-monitor" type="checkbox" class="h-4 w-4 rounded border-slate-700 bg-slate-950 text-indigo-500">
+                                                            允许用于定时监控
+                                                        </label>
+                                                        <label class="settings-check">
+                                                            <input id="settings-enhanced-collector-use-for-catalog" type="checkbox" class="h-4 w-4 rounded border-slate-700 bg-slate-950 text-indigo-500">
+                                                            允许用于商品入库
+                                                        </label>
+                                                    </div>
+                                                    <div class="firecrawl-test-box">
+                                                        <div>
+                                                            <p class="form-label">连接诊断</p>
+                                                            <p class="field-help">会调用服务的最小健康检查接口；不会保存表单内容。</p>
+                                                        </div>
+                                                        <button id="settings-enhanced-collector-test-button" type="button" class="ghost-button">测试外部采集</button>
+                                                        <p id="settings-enhanced-collector-test-result" class="firecrawl-test-result">尚未测试。</p>
+                                                    </div>
+                                                </div>
+                                                <div class="settings-field-wide external-collector-box external-collector-box-muted">
+                                                    <div>
+                                                        <p class="settings-kicker">Firecrawl</p>
+                                                        <h4>Firecrawl 外部兜底</h4>
+                                                        <p class="field-help">会消耗外部 credits，默认不参与高频定时监控；只建议用于手动诊断或个别复杂页面。</p>
+                                                    </div>
+                                                </div>
                                                 <label class="settings-check settings-field-wide">
                                                     <input id="settings-firecrawl-enabled" type="checkbox" class="h-4 w-4 rounded border-slate-700 bg-slate-950 text-indigo-500">
                                                     启用 Firecrawl 外部采集后端
@@ -1069,7 +1136,7 @@
                     </div>
                     <div id="task-wizard-summary" class="task-wizard-summary">
                         <span>未填写商品</span>
-                        <span>智能多引擎</span>
+                        <span>自动</span>
                         <span>保存后可立即检测</span>
                     </div>
                     <section class="task-step-panel is-active" data-task-step-panel="basic">
@@ -1117,11 +1184,11 @@
                             <div class="task-hidden-field">
                                 <label for="task-fetch-strategy" class="form-label">采集方式</label>
                                 <select id="task-fetch-strategy" class="input-dark">
-                                    <option value="multi_engine">智能多引擎（推荐）</option>
-                                    <option value="curl_cffi">TLS 指纹 HTTP</option>
+                                    <option value="multi_engine">自动（推荐）</option>
+                                    <option value="curl_cffi">标准</option>
                                     <option value="scrapling_standard">标准采集</option>
-                                    <option value="scrapling_dynamic">增强渲染</option>
-                                    <option value="scrapling_stealth">高兼容浏览器</option>
+                                    <option value="scrapling_dynamic">增强</option>
+                                    <option value="scrapling_stealth">高兼容</option>
                                     <option value="manual">手动录入</option>
                                     <option value="webhook">Webhook</option>
                                 </select>
@@ -1143,23 +1210,23 @@
                         <div id="task-strategy-cards" class="task-strategy-card-grid" role="radiogroup" aria-label="采集模式">
                             <button type="button" class="task-strategy-card" data-task-strategy-card="multi_engine" role="radio" aria-checked="true">
                                 <span>推荐</span>
-                                <strong>智能多引擎</strong>
-                                <em>curl_cffi 先抓，失败后再升级浏览器。</em>
+                                <strong>自动</strong>
+                                <em>系统自己选择低成本采集方式。</em>
                             </button>
                             <button type="button" class="task-strategy-card" data-task-strategy-card="curl_cffi" role="radio" aria-checked="false">
-                                <span>低耗</span>
-                                <strong>TLS 指纹 HTTP</strong>
-                                <em>不启动浏览器，适合普通公开页面。</em>
+                                <span>轻量</span>
+                                <strong>标准</strong>
+                                <em>适合普通公开页面，不启动浏览器。</em>
                             </button>
                             <button type="button" class="task-strategy-card" data-task-strategy-card="scrapling_dynamic" role="radio" aria-checked="false">
                                 <span>JS</span>
                                 <strong>增强</strong>
-                                <em>适合需要渲染的页面，资源消耗中等。</em>
+                                <em>适合需要页面渲染的商品页。</em>
                             </button>
                             <button type="button" class="task-strategy-card" data-task-strategy-card="scrapling_stealth" role="radio" aria-checked="false">
                                 <span>兼容</span>
                                 <strong>高兼容</strong>
-                                <em>复杂页面备用，低并发、长冷却。</em>
+                                <em>复杂页面备用，消耗更高。</em>
                             </button>
                             <button type="button" class="task-strategy-card" data-task-strategy-card="manual" role="radio" aria-checked="false">
                                 <span>人工</span>
@@ -1176,7 +1243,7 @@
                         <div id="task-strategy-help" class="task-strategy-help" aria-live="polite">
                             <div>
                                 <p class="task-strategy-title">当前模式</p>
-                                <p id="task-strategy-summary">默认使用智能多引擎采集。</p>
+                                <p id="task-strategy-summary">默认使用自动采集。</p>
                             </div>
                             <div id="task-webhook-hint" class="task-strategy-pill hidden">Webhook 模式才会显示 Token 操作</div>
                         </div>
@@ -1188,47 +1255,54 @@
                                 <h4>解析规则</h4>
                             </div>
                         </div>
-                        <div class="grid gap-4 lg:grid-cols-2">
-                            <div>
-                                <label for="task-stock-rule-type" class="form-label">规则类型</label>
-                                <select id="task-stock-rule-type" class="input-dark">
-                                    <option value="">自动识别</option>
-                                    <option value="css_selector">CSS selector</option>
-                                    <option value="xpath">XPath</option>
-                                    <option value="regex">正则</option>
-                                    <option value="text_near_keyword">关键词附近文本</option>
-                                    <option value="json_path">JSON path</option>
-                                </select>
-                            </div>
-                            <div>
-                                <label for="task-target-scope-selector" class="form-label">商品范围 selector</label>
-                                <input id="task-target-scope-selector" type="text" class="input-dark" placeholder=".product-card">
-                            </div>
-                            <div>
-                                <label for="task-stock-selector" class="form-label">有货 / 库存 selector</label>
-                                <input id="task-stock-selector" type="text" class="input-dark" placeholder=".stock, .inventory">
-                            </div>
-                            <div>
-                                <label for="task-soldout-selector" class="form-label">售罄 selector</label>
-                                <input id="task-soldout-selector" type="text" class="input-dark" placeholder=".sold-out, button[disabled]">
-                            </div>
-                            <div>
-                                <label for="task-regex-pattern" class="form-label">正则表达式</label>
-                                <input id="task-regex-pattern" type="text" class="input-dark" placeholder="stock_count:\\s*(?P<stock>\\d+)">
-                            </div>
-                            <div>
-                                <label for="task-json-path" class="form-label">JSON path</label>
-                                <input id="task-json-path" type="text" class="input-dark" placeholder="$.products[0].availability">
-                            </div>
-                            <div>
-                                <label for="task-in-stock-keywords" class="form-label">有货关键词</label>
-                                <input id="task-in-stock-keywords" type="text" class="input-dark" placeholder="Order Now, Available, 购买">
-                            </div>
-                            <div>
-                                <label for="task-soldout-keywords" class="form-label">售罄关键词</label>
-                                <input id="task-soldout-keywords" type="text" class="input-dark" placeholder="Out of Stock, Sold Out, 售罄">
-                            </div>
+                        <div class="task-auto-rule-card">
+                            <strong>自动识别</strong>
+                            <span>优先围绕目标关键词判断商品卡片、售罄标记、购买入口和库存数字。大多数 IDC 页面不需要手写规则。</span>
                         </div>
+                        <details id="task-rule-advanced" class="task-rule-advanced">
+                            <summary>高级规则</summary>
+                            <div class="task-rule-grid">
+                                <div>
+                                    <label for="task-stock-rule-type" class="form-label">规则类型</label>
+                                    <select id="task-stock-rule-type" class="input-dark">
+                                        <option value="">自动识别</option>
+                                        <option value="css_selector">CSS selector</option>
+                                        <option value="xpath">XPath</option>
+                                        <option value="regex">正则</option>
+                                        <option value="text_near_keyword">关键词附近文本</option>
+                                        <option value="json_path">JSON path</option>
+                                    </select>
+                                </div>
+                                <div>
+                                    <label for="task-target-scope-selector" class="form-label">商品范围 selector</label>
+                                    <input id="task-target-scope-selector" type="text" class="input-dark" placeholder=".product-card">
+                                </div>
+                                <div>
+                                    <label for="task-stock-selector" class="form-label">有货 / 库存 selector</label>
+                                    <input id="task-stock-selector" type="text" class="input-dark" placeholder=".stock, .inventory">
+                                </div>
+                                <div>
+                                    <label for="task-soldout-selector" class="form-label">售罄 selector</label>
+                                    <input id="task-soldout-selector" type="text" class="input-dark" placeholder=".sold-out, button[disabled]">
+                                </div>
+                                <div>
+                                    <label for="task-regex-pattern" class="form-label">正则表达式</label>
+                                    <input id="task-regex-pattern" type="text" class="input-dark" placeholder="stock_count:\\s*(?P<stock>\\d+)">
+                                </div>
+                                <div>
+                                    <label for="task-json-path" class="form-label">JSON path</label>
+                                    <input id="task-json-path" type="text" class="input-dark" placeholder="$.products[0].availability">
+                                </div>
+                                <div>
+                                    <label for="task-in-stock-keywords" class="form-label">有货关键词</label>
+                                    <input id="task-in-stock-keywords" type="text" class="input-dark" placeholder="Order Now, Available, 购买">
+                                </div>
+                                <div>
+                                    <label for="task-soldout-keywords" class="form-label">售罄关键词</label>
+                                    <input id="task-soldout-keywords" type="text" class="input-dark" placeholder="Out of Stock, Sold Out, 售罄">
+                                </div>
+                            </div>
+                        </details>
                     </section>
                     <section class="task-step-panel" data-task-step-panel="notify">
                     <div class="rounded-lg border border-slate-800 bg-slate-950/45 p-4">

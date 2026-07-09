@@ -90,6 +90,14 @@
         settingsFirecrawlCatalogLimit: document.getElementById("settings-firecrawl-catalog-limit"),
         settingsFirecrawlTestButton: document.getElementById("settings-firecrawl-test-button"),
         settingsFirecrawlTestResult: document.getElementById("settings-firecrawl-test-result"),
+        settingsEnhancedCollectorEnabled: document.getElementById("settings-enhanced-collector-enabled"),
+        settingsEnhancedCollectorApiUrl: document.getElementById("settings-enhanced-collector-api-url"),
+        settingsEnhancedCollectorTimeout: document.getElementById("settings-enhanced-collector-timeout"),
+        settingsEnhancedCollectorRetries: document.getElementById("settings-enhanced-collector-retries"),
+        settingsEnhancedCollectorUseForMonitor: document.getElementById("settings-enhanced-collector-use-for-monitor"),
+        settingsEnhancedCollectorUseForCatalog: document.getElementById("settings-enhanced-collector-use-for-catalog"),
+        settingsEnhancedCollectorTestButton: document.getElementById("settings-enhanced-collector-test-button"),
+        settingsEnhancedCollectorTestResult: document.getElementById("settings-enhanced-collector-test-result"),
         settingsScraplingStatus: document.getElementById("settings-scrapling-status"),
         settingsScraplingStatusPill: document.getElementById("settings-scrapling-status-pill"),
         settingsScraplingTestButton: document.getElementById("settings-scrapling-test-button"),
@@ -182,6 +190,7 @@
         taskStrategySummary: document.getElementById("task-strategy-summary"),
         taskWebhookHint: document.getElementById("task-webhook-hint"),
         taskRuleDetails: document.getElementById("task-rule-details"),
+        taskRuleAdvanced: document.getElementById("task-rule-advanced"),
         taskStockRuleType: document.getElementById("task-stock-rule-type"),
         taskTargetScopeSelector: document.getElementById("task-target-scope-selector"),
         taskStockSelector: document.getElementById("task-stock-selector"),
@@ -269,17 +278,17 @@
     function fetchStrategyLabel(value) {
         switch (normalizeFetchStrategy(value)) {
             case "multi_engine":
-                return "智能多引擎";
+                return "自动";
             case "curl_cffi":
-                return "TLS 指纹 HTTP";
+                return "标准";
             case "scrapling_standard":
                 return "标准采集";
             case "scrapling_dynamic":
-                return "增强渲染";
+                return "增强";
             case "scrapling_stealth":
-                return "高兼容浏览器";
+                return "高兼容";
             case "scrapling_adaptive":
-                return "旧自适应";
+                return "自动采集";
             case "static_http":
                 return "静态 HTTP";
             case "generic_pricing_table":
@@ -308,17 +317,17 @@
     function fetchStrategyHelp(value) {
         switch (normalizeFetchStrategy(value)) {
             case "multi_engine":
-                return "智能多引擎：先用 curl_cffi 做浏览器指纹 HTTP 抓取，失败后再逐步升级到标准、增强和高兼容浏览器。";
+                return "自动模式：系统优先使用低成本采集，失败后再逐步升级。推荐新任务使用。";
             case "curl_cffi":
-                return "TLS 指纹 HTTP：低成本第一层引擎，适合普通公开页面和轻度反爬页面；不启动浏览器。";
+                return "标准模式：不启动浏览器，适合普通公开商品页，资源消耗最低。";
             case "scrapling_standard":
                 return "标准模式：轻量抓取，适合大多数公开 IDC / WHMCS 页面。";
             case "scrapling_dynamic":
-                return "增强模式：适合需要渲染的页面，资源消耗高于标准模式。";
+                return "增强模式：适合需要页面渲染的商品页，资源消耗高于标准模式。";
             case "scrapling_stealth":
-                return "高兼容模式：适合复杂页面，低并发运行，优先用于手动检测或少量重点商品。";
+                return "高兼容模式：适合复杂页面，建议只给少量重点商品使用。";
             case "scrapling_adaptive":
-                return "自适应模式：先轻量抓取，必要时再升级到增强/高兼容，是新增任务默认选择。";
+                return "自动采集：兼容旧任务的自动模式。新任务建议使用“自动”。";
             case "firecrawl":
                 return "外部付费兜底服务，会消耗 Firecrawl credits；默认不用于定时监控，只建议手动检测、商品入库或诊断时使用。";
             case "firecrawl_then_static":
@@ -342,7 +351,7 @@
             case "webhook":
                 return "由外部系统通过 Webhook 推送库存状态。只有 Webhook 任务才会显示 Token 重置操作。";
             default:
-                return "兼容旧任务的采集方式。新任务建议使用智能多引擎。";
+                return "兼容旧任务的采集方式。新任务建议使用自动模式。";
         }
     }
 
@@ -499,8 +508,8 @@
                 ? sourceConfig.soldout_keywords.join(", ")
                 : sourceConfig.soldout_keywords || "";
         }
-        if (els.taskRuleDetails) {
-            els.taskRuleDetails.open = stockRuleConfigKeys.some((key) => Boolean(sourceConfig[key]));
+        if (els.taskRuleAdvanced) {
+            els.taskRuleAdvanced.open = stockRuleConfigKeys.some((key) => Boolean(sourceConfig[key]));
         }
     }
 
@@ -572,7 +581,7 @@
         if (text.includes("firecrawl_zdr_not_enabled") || text.includes("zero data retention") || text.includes("zdr")) return "关闭 Firecrawl zeroDataRetention 后重试，或联系 Firecrawl 开通 ZDR。";
         if (text.includes("firecrawl_permission_error")) return "检查 Firecrawl 账号权限、proxy 模式或 zeroDataRetention 配置。";
         if (text.includes("firecrawl_auth_error") || text.includes("认证失败")) return "检查 Firecrawl API Key。";
-        if (text.includes("firecrawl_credit_required") || text.includes("额度")) return "Firecrawl 额度不足，建议切回智能多引擎；Firecrawl 仅作为外部兜底。";
+        if (text.includes("firecrawl_credit_required") || text.includes("额度")) return "Firecrawl 额度不足，建议切回自动模式；Firecrawl 仅作为外部兜底。";
         if (text.includes("firecrawl_rate_limited") || text.includes("频率")) return "降低频率或稍后重试。";
         if (text.includes("cloudflare") || text.includes("turnstile") || text.includes("验证页")) return "受保护站点，建议 Webhook、手动录入或替代公开页面。";
         if (text.includes("parse_unknown") || text.includes("无法判断")) return "设置目标关键词或更换解析器。";
@@ -692,8 +701,8 @@
             ["来源名称", payload.source_name || "自动识别"],
             ["默认分组", payload.group_name || defaultTaskGroup],
             ["发现方式", selectOptionLabel(els.merchantDiscoveryStrategy)],
-            ["抓取方式", selectOptionLabel(els.merchantScrapeStrategy)],
-            ["生成任务采集", selectOptionLabel(els.merchantDefaultFetchStrategy)],
+            ["采集方式", selectOptionLabel(els.merchantScrapeStrategy)],
+            ["任务采集", selectOptionLabel(els.merchantDefaultFetchStrategy)],
             ["解析器", selectOptionLabel(els.merchantDefaultExtractor)],
             ["目标关键词", payload.target_keyword || "不限制"],
             ["单次上限", `${payload.max_discovered_urls || 50} URL / ${payload.max_import_items || 50} 商品`],
@@ -714,13 +723,49 @@
             return;
         }
         const sourceUrl = String(els.merchantSourceUrl?.value || "").trim() || "未填写来源";
-        const strategy = selectOptionLabel(els.merchantScrapeStrategy) || "智能多引擎";
+        const strategy = selectOptionLabel(els.merchantScrapeStrategy) || "自动采集";
         const keyword = String(els.merchantTargetKeyword?.value || "").trim() || "不限制关键词";
         els.merchantWizardSummary.innerHTML = `
             <span title="${escapeHtml(sourceUrl)}">${escapeHtml(sourceUrl)}</span>
             <span>${escapeHtml(strategy)}</span>
             <span title="${escapeHtml(keyword)}">${escapeHtml(keyword)}</span>
         `;
+    }
+
+    function applyMerchantModePreset(value) {
+        const preset = String(value || "auto");
+        const mapping = {
+            auto: {
+                scrape: "multi_engine",
+                task: "multi_engine",
+                extractor: "generic_pricing_table"
+            },
+            dynamic: {
+                scrape: "scrapling_dynamic",
+                task: "scrapling_dynamic",
+                extractor: "generic_pricing_table"
+            },
+            compatible: {
+                scrape: "scrapling_stealth",
+                task: "scrapling_stealth",
+                extractor: "generic_pricing_table"
+            }
+        };
+        const selected = mapping[preset] || mapping.auto;
+        if (els.merchantDiscoveryStrategy) {
+            els.merchantDiscoveryStrategy.value = "local";
+        }
+        if (els.merchantScrapeStrategy) {
+            els.merchantScrapeStrategy.value = selected.scrape;
+        }
+        if (els.merchantDefaultFetchStrategy) {
+            els.merchantDefaultFetchStrategy.value = selected.task;
+        }
+        if (els.merchantDefaultExtractor) {
+            els.merchantDefaultExtractor.value = selected.extractor;
+        }
+        renderMerchantReviewSummary();
+        updateMerchantWizardSummary();
     }
 
     function updateMerchantStepCounts(metrics = {}) {
@@ -1011,7 +1056,7 @@
     function errorKindLabel(kind) {
         switch (kind) {
             case "cloudflare_challenge":
-                return "受保护页面 / Cloudflare 验证";
+                return "页面被保护，未拿到库存";
             case "telegram_error":
                 return "通知失败，不影响库存识别";
             case "firecrawl_zdr_not_enabled":
@@ -1035,19 +1080,19 @@
             case "firecrawl_disabled":
                 return "Firecrawl 未启用";
             case "domain_cooldown":
-                return "同域名保护等待";
+                return "同站点本轮跳过";
             case "domain_session_required":
-                return "需要初始化采集会话";
+                return "需要采集会话";
             case "scrapling_browser_failed":
-                return "Scrapling 浏览器依赖异常";
+                return "高兼容浏览器启动失败";
             case "scrapling_challenge_upgrade_required":
-                return "Scrapling 正在升级采集模式";
+                return "正在切换更强采集模式";
             case "scrapling_challenge_failed":
-                return "Scrapling 高兼容未拿到可解析页面";
+                return "高兼容仍未拿到库存";
             case "scrapling_unavailable":
-                return "Scrapling 未安装";
+                return "采集引擎未安装";
             case "scrapling_disabled":
-                return "Scrapling 未启用";
+                return "采集引擎未启用";
             case "empty_response":
                 return "页面没有可解析内容";
             case "parse_unknown":
@@ -1101,10 +1146,13 @@
             return "";
         }
         if (kind === "domain_cooldown" || text.includes("采集冷却") || text.includes("同域名保护等待")) {
-            return "同域名刚刚失败，系统会等到保护等待结束再请求；其他域名和下一轮正常继续。";
+            return "同一站点刚刚失败，本轮不重复请求；下一轮会自动再试。";
         }
         if (kind === "domain_session_required") {
-            return "该域名需要先打开一次本地浏览器会话，完成后再检测库存。";
+            return "该站点需要先完成一次采集会话初始化。";
+        }
+        if (kind === "cloudflare_challenge") {
+            return "目标页返回保护页，没有拿到真实商品内容。";
         }
         if (
             kind === "scrapling_browser_failed" ||
@@ -1112,12 +1160,18 @@
             text.includes("launch_persistent_context") ||
             text.includes("Executable doesn't exist")
         ) {
-            return "高兼容浏览器启动失败，请在系统设置里检测 Scrapling，或先切换为标准/增强模式。";
+            return "高兼容浏览器启动失败，请在系统设置里检测采集引擎，或先切换为标准/增强模式。";
+        }
+        if (kind === "scrapling_challenge_upgrade_required") {
+            return "系统会自动尝试更强的采集模式。";
+        }
+        if (kind === "scrapling_challenge_failed") {
+            return "高兼容模式仍没有拿到真实商品内容。";
         }
         if (text.includes("firecrawl_credit_required")) {
             return "Firecrawl 额度不足，已停止继续消耗；建议把定时监控改回 Scrapling。";
         }
-        return text;
+        return text.length > 90 ? `${text.slice(0, 90)}...` : text;
     }
 
     function formatTaskLogLine(task, logHint) {
@@ -1529,9 +1583,9 @@
         }
         const backend = normalizeFetchStrategy(task.last_protected_source_backend || task.last_fetch_backend || "");
         if (backend === "firecrawl") {
-            return `外部采集服务也返回受保护页面 · 冷却至 ${formatTime(task.cooldown_until)} · 建议改用 Webhook、手动录入或替代公开页面`;
+            return `外部采集也返回保护页 · 下轮 ${formatTime(task.cooldown_until)} 后再试`;
         }
-        return `本地抓取遇到受保护站点 · 冷却至 ${formatTime(task.cooldown_until)} · 建议改用 Webhook、手动录入或替代公开页面`;
+        return `目标页返回保护页 · 下轮 ${formatTime(task.cooldown_until)} 后再试`;
     }
 
     function domainSessionMeta(task) {
@@ -1542,7 +1596,7 @@
         if (ready) {
             return {
                 ready: true,
-                label: "会话已就绪",
+                label: "会话就绪",
                 detail: expiresAt ? `会话有效至 ${expiresAt}` : "会话已就绪",
                 className: "domain-session-ready"
             };
@@ -1550,14 +1604,14 @@
         if (status === "failed") {
             return {
                 ready: false,
-                label: "需初始化会话",
+                label: "需会话",
                 detail: session.last_error || "点击初始化会话后再检测",
                 className: "domain-session-needed"
             };
         }
         return {
             ready: false,
-            label: "需初始化会话",
+            label: "需会话",
             detail: "点击初始化会话后再检测",
             className: "domain-session-needed"
         };
@@ -2156,6 +2210,12 @@
         syncCheckboxValue(els.settingsFirecrawlUseForMonitor, Boolean(settings.firecrawl_use_for_monitor));
         syncCheckboxValue(els.settingsFirecrawlUseForCatalog, settings.firecrawl_use_for_catalog !== false);
         syncInputValue(els.settingsFirecrawlCatalogLimit, settings.firecrawl_catalog_limit || 50);
+        syncCheckboxValue(els.settingsEnhancedCollectorEnabled, Boolean(settings.enhanced_collector_enabled));
+        syncInputValue(els.settingsEnhancedCollectorApiUrl, settings.enhanced_collector_api_url || "");
+        syncInputValue(els.settingsEnhancedCollectorTimeout, settings.enhanced_collector_timeout_seconds || 90);
+        syncInputValue(els.settingsEnhancedCollectorRetries, settings.enhanced_collector_max_retries ?? 1);
+        syncCheckboxValue(els.settingsEnhancedCollectorUseForMonitor, Boolean(settings.enhanced_collector_use_for_monitor));
+        syncCheckboxValue(els.settingsEnhancedCollectorUseForCatalog, settings.enhanced_collector_use_for_catalog !== false);
         renderScraplingRuntimeStatus(settings.scrapling_status || {});
         syncCheckboxValue(els.settingsScraplingEnabled, settings.scrapling_enabled !== false);
         syncInputValue(els.settingsScraplingDefaultMode, settings.scrapling_default_mode || "standard");
@@ -3191,6 +3251,50 @@
         };
     }
 
+    function collectEnhancedCollectorDiagnosticPayload() {
+        return {
+            enhanced_collector_enabled: Boolean(els.settingsEnhancedCollectorEnabled?.checked),
+            enhanced_collector_api_url: els.settingsEnhancedCollectorApiUrl?.value.trim() || "",
+            enhanced_collector_timeout_seconds: Number(els.settingsEnhancedCollectorTimeout?.value || 90),
+            enhanced_collector_max_retries: Number(els.settingsEnhancedCollectorRetries?.value || 1),
+            enhanced_collector_use_for_monitor: Boolean(els.settingsEnhancedCollectorUseForMonitor?.checked),
+            enhanced_collector_use_for_catalog: Boolean(els.settingsEnhancedCollectorUseForCatalog?.checked)
+        };
+    }
+
+    async function testEnhancedCollectorConnection() {
+        const button = els.settingsEnhancedCollectorTestButton;
+        const resultBox = els.settingsEnhancedCollectorTestResult;
+        if (!button) return;
+        button.disabled = true;
+        if (resultBox) {
+            resultBox.textContent = "正在测试外部采集服务...";
+            resultBox.className = "firecrawl-test-result is-pending";
+        }
+        try {
+            const data = await apiFetch("/api/settings/enhanced-collector-test", {
+                method: "POST",
+                body: JSON.stringify(collectEnhancedCollectorDiagnosticPayload())
+            });
+            const result = data.result || {};
+            const ok = Boolean(result.available);
+            const detail = result.detail || data.message || (ok ? "外部采集服务可用。" : "外部采集服务不可用。");
+            if (resultBox) {
+                resultBox.textContent = detail;
+                resultBox.className = `firecrawl-test-result ${ok ? "is-ok" : "is-error"}`;
+            }
+            showToast(ok ? "外部采集服务检测通过。" : "外部采集服务检测未通过。", ok ? "success" : "error");
+        } catch (error) {
+            if (resultBox) {
+                resultBox.textContent = error.message || "外部采集服务检测失败。";
+                resultBox.className = "firecrawl-test-result is-error";
+            }
+            showToast(error.message, "error");
+        } finally {
+            button.disabled = false;
+        }
+    }
+
     async function testFirecrawlConnection() {
         const button = els.settingsFirecrawlTestButton;
         const resultBox = els.settingsFirecrawlTestResult;
@@ -3334,7 +3438,7 @@
         } finally {
             if (submit) submit.disabled = false;
             if (els.merchantImportButtonLabel) {
-                els.merchantImportButtonLabel.textContent = originalLabel || "发现候选 URL";
+                els.merchantImportButtonLabel.textContent = originalLabel || "开始发现";
             }
         }
     }
@@ -4546,6 +4650,12 @@
     els.merchantForm?.addEventListener("change", renderMerchantReviewSummary);
     els.merchantForm?.addEventListener("input", updateMerchantWizardSummary);
     els.merchantForm?.addEventListener("change", updateMerchantWizardSummary);
+    els.merchantForm?.addEventListener("change", (event) => {
+        const preset = event.target.closest("[data-merchant-mode-preset]");
+        if (preset?.checked) {
+            applyMerchantModePreset(preset.value);
+        }
+    });
 
     els.groupRenameForm?.addEventListener("submit", submitTaskGroupRename);
     els.groupRenameCancel?.addEventListener("click", closeTaskGroupRenameModal);
@@ -4614,6 +4724,7 @@
         }
     });
     els.settingsFirecrawlTestButton?.addEventListener("click", testFirecrawlConnection);
+    els.settingsEnhancedCollectorTestButton?.addEventListener("click", testEnhancedCollectorConnection);
     els.settingsScraplingTestButton?.addEventListener("click", testScraplingRuntime);
 
     els.settingsForm?.addEventListener("submit", async (event) => {
@@ -4639,6 +4750,12 @@
             firecrawl_use_for_monitor: Boolean(els.settingsFirecrawlUseForMonitor?.checked),
             firecrawl_use_for_catalog: Boolean(els.settingsFirecrawlUseForCatalog?.checked),
             firecrawl_catalog_limit: Number(els.settingsFirecrawlCatalogLimit?.value || 50),
+            enhanced_collector_enabled: Boolean(els.settingsEnhancedCollectorEnabled?.checked),
+            enhanced_collector_api_url: els.settingsEnhancedCollectorApiUrl?.value.trim() || "",
+            enhanced_collector_timeout_seconds: Number(els.settingsEnhancedCollectorTimeout?.value || 90),
+            enhanced_collector_max_retries: Number(els.settingsEnhancedCollectorRetries?.value || 1),
+            enhanced_collector_use_for_monitor: Boolean(els.settingsEnhancedCollectorUseForMonitor?.checked),
+            enhanced_collector_use_for_catalog: Boolean(els.settingsEnhancedCollectorUseForCatalog?.checked),
             scrapling_enabled: Boolean(els.settingsScraplingEnabled?.checked),
             scrapling_default_mode: els.settingsScraplingDefaultMode?.value || "standard",
             scrapling_use_for_monitor: Boolean(els.settingsScraplingUseForMonitor?.checked),
@@ -4769,7 +4886,13 @@
         els.settingsFirecrawlZeroDataRetention,
         els.settingsFirecrawlUseForMonitor,
         els.settingsFirecrawlUseForCatalog,
-        els.settingsFirecrawlCatalogLimit
+        els.settingsFirecrawlCatalogLimit,
+        els.settingsEnhancedCollectorEnabled,
+        els.settingsEnhancedCollectorApiUrl,
+        els.settingsEnhancedCollectorTimeout,
+        els.settingsEnhancedCollectorRetries,
+        els.settingsEnhancedCollectorUseForMonitor,
+        els.settingsEnhancedCollectorUseForCatalog
     ].forEach(wireDirtyTracking);
     updateGroupVisibility(els.taskGroup, els.taskGroupCustomWrap, els.taskGroupCustom);
     updateGroupVisibility(els.taskSubgroup, els.taskSubgroupCustomWrap, els.taskSubgroupCustom);

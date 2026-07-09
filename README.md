@@ -22,10 +22,12 @@ NOAFF Restock Monitor 用来监控 IDC、VPS、独服、WHMCS 商店等公开商
 公开页面采集 -> 页面/规则解析 -> 库存状态机 -> Telegram send/edit/sold-out 推送
 ```
 
-当前版本采用 **Multi-engine-first** 采集架构：
+当前版本采用 **Data Collector + Multi-engine-first** 采集架构：
 
 - `multi_engine` 是默认采集策略：先用 `curl_cffi` 做低成本浏览器指纹 HTTP 抓取，失败后再升级到本地浏览器增强链路。
 - Scrapling 仍是本地浏览器增强层，用于标准、增强、高兼容模式。
+- Data Collector 层统一封装 `direct`、`curl_cffi`、`external_solver`、`webhook`、`manual`，后续增加采集后端不再直接污染监控状态机。
+- 外部增强采集服务可以通过 `ENHANCED_COLLECTOR_API_URL` 接入，用于个人自建的增强采集服务；默认不启用，不作为内置挑战绕过。
 - Firecrawl 保留为外部兜底/诊断能力，不再作为定时监控首选。
 - 旧 `browser`、`static_http`、Firecrawl pipeline 任务会在升级时平滑迁移到多引擎或本地增强策略。
 - `manual` / `webhook` 仍是完全受保护页面的可靠兜底方案。
@@ -49,8 +51,9 @@ NOAFF Restock Monitor 用来监控 IDC、VPS、独服、WHMCS 商店等公开商
 - WHMCS 解析：支持常见商店页、`pid`、`cart.php?gid=xx`、`configureproduct`、`Order Now`、`Out of Stock`。
 - 域名级调度：同域/同 URL 在同一轮内复用抓取结果，减少重复请求和高级模式消耗。
 - 受保护来源冷却：Cloudflare challenge 按 1 / 3 / 10 分钟递进冷却。
+- 外部增强采集：支持配置通用 solver endpoint，作为可选采集后端和健康检查入口。
 - Firecrawl 外部兜底：保留连接诊断、商品入库辅助和个别复杂页面手动兜底。
-- 商品入库工作台：来源 -> 采集模式 -> 解析规则 -> 执行发现 -> 候选 URL -> 商品预览 -> 创建任务。
+- 商品入库工作台：填页面 -> 自动发现 -> 预览确认 -> 创建任务。
 - 商品入库降噪：语言切换、导航、页脚、步骤标题、无价格/无规格候选会降级到人工确认。
 - 分组管理：主分组、多级子分组、重命名、删除、拖拽排序、批量移动、批量删除。
 - Telegram 状态机：补货发新消息，库存变化编辑原消息，售罄覆盖原消息并清空 `message_id`。
@@ -160,12 +163,37 @@ Out of Stock, Sold Out, Unavailable, disabled, 缺货, 售罄, 无货
 
 如果同一页面有多个产品，尽量把 `target_keyword` 写成目标产品独有的完整标题，避免误判到相邻产品。
 
+## Data Collector 层
+
+采集层已经从“任务直接调用某个 fetcher”收敛成 Data Collector：
+
+| Collector | 内部策略 | 用途 |
+| --- | --- | --- |
+| `direct` | `static_http` / legacy direct | 兼容旧任务 |
+| `curl_cffi` | browser-fingerprint HTTP | 低成本公开页面采集 |
+| `external_solver` | 外部增强采集服务 | 可选自建服务，不默认参与定时 |
+| `webhook` | 外部系统写入库存 | 完全不抓目标站 |
+| `manual` | 后台手动标记库存 | 完全不抓目标站 |
+
+`external_solver` 只接入用户自己配置的外部服务地址。NOAFF 不内置挑战求解，也不会在没有显式配置时自动调用外部服务。
+
+最小配置：
+
+```env
+ENHANCED_COLLECTOR_ENABLED=false
+ENHANCED_COLLECTOR_API_URL=
+ENHANCED_COLLECTOR_USE_FOR_MONITOR=false
+ENHANCED_COLLECTOR_USE_FOR_CATALOG=true
+```
+
+后台“外部兜底”页可以做一次连接检测；检测不会把密钥或敏感配置写入日志/snapshot。
+
 ## 商品入库
 
 商品入库适合 IDC 商家没有公开 API、但有公开价格页 / WHMCS 商店页 / sitemap / 商品列表页的场景。当前工作流是：
 
 ```text
-来源 -> 采集模式 -> 解析规则 -> 执行发现 -> 候选 URL -> 商品预览 -> 创建任务
+填页面 -> 自动发现 -> 预览确认 -> 创建任务
 ```
 
 默认路径是多引擎优先：
@@ -173,6 +201,9 @@ Out of Stock, Sold Out, Unavailable, disabled, 缺货, 售罄, 无货
 - discovery 默认 `local`，从入口页和链接关系发现候选 URL。
 - scrape 默认 `multi_engine`。
 - 创建任务默认 `multi_engine`。
+- 普通用户只需要填商家页面、分组和可选目标关键词。
+- 自动 / JS 页面 / 高兼容三个预设会同步底层发现、抓取、任务采集和解析器配置。
+- 高级采集参数、去重策略、URL 上限、超时等折叠在高级区，默认不打扰用户。
 - Firecrawl Map/Scrape 只作为外部兜底选项，不默认消耗 credits。
 
 工作台会先发现候选 URL，再让你抓取选中 URL，最后在商品预览里确认可入库商品。默认不会把语言切换、导航、页脚、分类/步骤标题、无价格/无规格候选直接写入任务；这些内容会进入“需要人工确认 / 已过滤候选”。
@@ -182,12 +213,12 @@ Out of Stock, Sold Out, Unavailable, disabled, 缺货, 售罄, 无货
 | 字段 | 说明 |
 | --- | --- |
 | 商家 URL | 入口页，例如 pricing、store、cart.php?gid=xx |
-| discovery strategy | `local` / `firecrawl_map` / `hybrid` |
-| scrape strategy | `multi_engine` / `curl_cffi` / `scrapling_standard` / `scrapling_dynamic` / `scrapling_stealth` / legacy / Firecrawl |
+| 采集预设 | 自动推荐 / JS 页面 / 高兼容 |
+| discovery strategy | 默认 `local`，高级区可调 |
+| scrape strategy | 默认 `multi_engine`，高级区可调 |
 | extractor | `generic_pricing_table` / `whmcs` / `fallback_keyword_parser` / `firecrawl_product_hint` |
-| search keyword | Firecrawl Map 搜索词，例如 `vps`、`hk`、`pricing` |
-| target keyword | 目标商品关键词，建议用完整产品名 |
-| dedupe policy | `by_url` / `by_title_url` / `by_pid` |
+| target keyword | 可选目标商品关键词，建议用完整产品名 |
+| dedupe policy | 高级区：`by_url` / `by_title_url` / `by_pid` |
 | include sold out | 是否把售罄商品也放进入库预览 |
 | auto create tasks | 是否导入后直接生成监控任务 |
 

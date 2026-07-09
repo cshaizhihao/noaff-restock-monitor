@@ -3100,6 +3100,97 @@ class PortalAppTestCase(unittest.TestCase):
         self.assertIn("headed_detail", result)
         self.assertNotIn("api_key", json.dumps(payload, ensure_ascii=False).lower())
 
+    def test_enhanced_collector_settings_save_and_snapshot(self) -> None:
+        _, headers = self.login()
+
+        response = self.client.post(
+            f"{app_module.PORTAL_PATH}/api/settings/telegram",
+            headers=headers,
+            base_url=BASE_URL,
+            json={
+                "enhanced_collector_enabled": True,
+                "enhanced_collector_api_url": "http://127.0.0.1:8191/",
+                "enhanced_collector_timeout_seconds": 91,
+                "enhanced_collector_max_retries": 2,
+                "enhanced_collector_use_for_monitor": False,
+                "enhanced_collector_use_for_catalog": True,
+            },
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.get_json()["ok"])
+
+        snapshot = self.client.get(
+            f"{app_module.PORTAL_PATH}/api/snapshot",
+            headers=self.browser_headers(),
+            base_url=BASE_URL,
+        )
+        self.assertEqual(snapshot.status_code, 200)
+        settings = snapshot.get_json()["settings"]
+        self.assertTrue(settings["enhanced_collector_enabled"])
+        self.assertEqual(settings["enhanced_collector_api_url"], "http://127.0.0.1:8191")
+        self.assertEqual(settings["enhanced_collector_timeout_seconds"], 91)
+        self.assertEqual(settings["enhanced_collector_max_retries"], 2)
+        self.assertFalse(settings["enhanced_collector_use_for_monitor"])
+        self.assertTrue(settings["enhanced_collector_use_for_catalog"])
+        self.assertEqual(settings["enhanced_collector_status"]["status"], "configured")
+
+    def test_enhanced_collector_diagnostic_reports_success(self) -> None:
+        _, headers = self.login()
+        calls: list[dict[str, object]] = []
+
+        class FakeEnhancedCollectorManager:
+            def __init__(self, settings_payload: dict[str, object]) -> None:
+                calls.append(dict(settings_payload))
+
+            def health_check(self, probe_candidates: bool = True) -> dict[str, object]:
+                return {
+                    "status": "ok",
+                    "available": True,
+                    "api_url": "http://127.0.0.1:8191",
+                    "detail": "增强采集服务可用。",
+                    "probe_candidates": probe_candidates,
+                }
+
+        original_manager = app_module.EnhancedCollectorManager
+        app_module.EnhancedCollectorManager = FakeEnhancedCollectorManager
+        try:
+            response = self.client.post(
+                f"{app_module.PORTAL_PATH}/api/settings/enhanced-collector-test",
+                headers=headers,
+                base_url=BASE_URL,
+                json={
+                    "enhanced_collector_enabled": True,
+                    "enhanced_collector_api_url": "http://127.0.0.1:8191/",
+                    "enhanced_collector_timeout_seconds": 17,
+                    "enhanced_collector_max_retries": 1,
+                },
+            )
+        finally:
+            app_module.EnhancedCollectorManager = original_manager
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.get_json()
+        self.assertTrue(payload["ok"])
+        self.assertEqual(payload["message"], "增强采集服务检测完成。")
+        self.assertEqual(payload["result"]["status"], "ok")
+        self.assertTrue(payload["result"]["available"])
+        self.assertTrue(calls[0]["enhanced_collector_enabled"])
+        self.assertEqual(calls[0]["enhanced_collector_api_url"], "http://127.0.0.1:8191")
+        self.assertEqual(calls[0]["enhanced_collector_timeout_seconds"], 17)
+
+    def test_enhanced_collector_diagnostic_rejects_bad_url(self) -> None:
+        _, headers = self.login()
+
+        response = self.client.post(
+            f"{app_module.PORTAL_PATH}/api/settings/enhanced-collector-test",
+            headers=headers,
+            base_url=BASE_URL,
+            json={"enhanced_collector_api_url": "ftp://127.0.0.1:8191"},
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("增强采集服务地址", response.get_json()["message"])
+
     def test_scrapling_invalid_mode_falls_back_to_standard(self) -> None:
         _, headers = self.login()
         response = self.client.post(
@@ -3388,6 +3479,310 @@ class PortalAppTestCase(unittest.TestCase):
         self.assertEqual(result.detail, "curl_cffi 复用域名会话成功")
         self.assertEqual(client.headers["User-Agent"], "Mozilla/5.0 Session Chrome")
         self.assertEqual(client.cookies, {"cf_clearance": "secret-cookie"})
+
+    def test_collector_strategy_maps_legacy_fetch_strategies(self) -> None:
+        cases = [
+            ("multi_engine", "{}", app_module.COLLECTOR_DIRECT),
+            ("static_http", "{}", app_module.COLLECTOR_DIRECT),
+            ("browser", "{}", app_module.COLLECTOR_DIRECT),
+            ("curl_cffi", "{}", app_module.COLLECTOR_CURL_CFFI),
+            ("firecrawl", "{}", app_module.COLLECTOR_DIRECT),
+            ("firecrawl_then_browser", "{}", app_module.COLLECTOR_DIRECT),
+            ("manual", "{}", app_module.COLLECTOR_MANUAL),
+            ("webhook", "{}", app_module.COLLECTOR_WEBHOOK),
+            ("multi_engine", json.dumps({"collector_strategy": "external_solver"}), app_module.COLLECTOR_EXTERNAL_SOLVER),
+        ]
+
+        for fetch_strategy, source_config, expected in cases:
+            with self.subTest(fetch_strategy=fetch_strategy, source_config=source_config):
+                self.assertEqual(
+                    app_module.collector_strategy_for_task(
+                        {
+                            "fetch_strategy": fetch_strategy,
+                            "monitor_url": "https://example.com/product",
+                            "target_keyword": "Example Product",
+                            "source_config": source_config,
+                        }
+                    ),
+                    expected,
+                )
+
+    def test_collector_result_from_fetch_pipeline_preserves_attempts_and_protected_state(self) -> None:
+        attempt = app_module.FetchAttempt(
+            backend="curl_cffi",
+            started_at="2026-07-09T00:00:00+00:00",
+            ended_at="2026-07-09T00:00:01+00:00",
+            status="failed",
+            error_kind="cloudflare_challenge",
+            detail="challenge",
+            final_url="https://example.com/protected",
+        )
+        result = app_module.collector_result_from_fetch_pipeline(
+            app_module.FetchPipelineResult(
+                html="",
+                final_url="https://example.com/protected",
+                status_code=403,
+                backend_used="curl_cffi",
+                attempts=[attempt],
+                error_kind="cloudflare_challenge",
+                detail="受保护页面",
+            )
+        )
+
+        self.assertFalse(result.ok)
+        self.assertTrue(result.protected)
+        self.assertEqual(result.backend, app_module.COLLECTOR_CURL_CFFI)
+        self.assertEqual(result.attempts, [attempt])
+
+    def test_task_payload_exposes_collector_strategy_for_simple_ui(self) -> None:
+        _, headers = self.login()
+        response = self.client.post(
+            "/api/tasks",
+            headers=headers,
+            base_url=BASE_URL,
+            json={
+                "name": "External Enhanced Task",
+                "group_name": "Default",
+                "monitor_url": "https://example.com/protected",
+                "target_keyword": "Example",
+                "fetch_strategy": "multi_engine",
+                "source_config": {"collector_strategy": "external_solver"},
+                "restock_template": "有货 {name}",
+                "soldout_template": "售罄 {name}",
+                "enabled": True,
+            },
+        )
+        self.assertEqual(response.status_code, 200)
+
+        snapshot = self.client.get("/api/snapshot", headers=headers, base_url=BASE_URL).get_json()
+        task = next(item for item in snapshot["tasks"] if item["name"] == "External Enhanced Task")
+
+        self.assertEqual(task["fetch_strategy"], "multi_engine")
+        self.assertEqual(task["collector_strategy"], app_module.COLLECTOR_EXTERNAL_SOLVER)
+
+    def test_external_solver_collector_returns_html_from_solver_solution(self) -> None:
+        class FakeResponse:
+            status_code = 200
+
+            def json(self):
+                return {
+                    "status": "ok",
+                    "solution": {
+                        "url": "https://example.com/products",
+                        "status": 200,
+                        "response": "<html><body>Example VPS <button>Order Now</button></body></html>",
+                    },
+                }
+
+        class FakeSession:
+            def __init__(self) -> None:
+                self.url = ""
+                self.payload: dict[str, object] | None = None
+                self.timeout = None
+
+            def post(self, url, json=None, timeout=None):
+                self.url = url
+                self.payload = json
+                self.timeout = timeout
+                return FakeResponse()
+
+        session = FakeSession()
+        collector = app_module.ExternalSolverCollector(session)
+        result = collector.collect(
+            app_module.CollectorRequest(
+                url="https://example.com/products",
+                strategy=app_module.COLLECTOR_EXTERNAL_SOLVER,
+                timeout_seconds=25,
+                context="monitor",
+            ),
+            {
+                "enhanced_collector_enabled": True,
+                "enhanced_collector_api_url": "http://127.0.0.1:8191",
+                "enhanced_collector_timeout_seconds": 30,
+                "enhanced_collector_use_for_monitor": True,
+            },
+        )
+
+        self.assertTrue(result.ok)
+        self.assertEqual(result.backend, app_module.COLLECTOR_EXTERNAL_SOLVER)
+        self.assertIn("Order Now", result.html)
+        self.assertEqual(result.status_code, 200)
+        self.assertEqual(session.url, "http://127.0.0.1:8191/v1")
+        self.assertEqual(session.payload["cmd"], "request.get")
+        self.assertEqual(session.payload["url"], "https://example.com/products")
+        self.assertEqual(session.payload["maxTimeout"], 25000)
+        self.assertEqual(session.timeout, 30)
+
+    def test_external_solver_collector_monitor_disabled_by_default(self) -> None:
+        class FakeSession:
+            def post(self, url, json=None, timeout=None):
+                raise AssertionError("external solver should not be called")
+
+        collector = app_module.ExternalSolverCollector(FakeSession())
+        result = collector.collect(
+            app_module.CollectorRequest(
+                url="https://example.com/products",
+                strategy=app_module.COLLECTOR_EXTERNAL_SOLVER,
+                context="monitor",
+            ),
+            {
+                "enhanced_collector_enabled": True,
+                "enhanced_collector_api_url": "http://127.0.0.1:8191",
+                "enhanced_collector_use_for_monitor": False,
+            },
+        )
+
+        self.assertFalse(result.ok)
+        self.assertEqual(result.error_kind, "external_solver_monitor_disabled")
+        self.assertEqual(result.attempts[0].status, "failed")
+
+    def test_external_solver_collector_classifies_returned_challenge(self) -> None:
+        class FakeResponse:
+            status_code = 200
+
+            def json(self):
+                return {
+                    "status": "ok",
+                    "solution": {
+                        "url": "https://example.com/protected",
+                        "status": 403,
+                        "response": "<html><title>Just a moment...</title><body>Cloudflare</body></html>",
+                    },
+                }
+
+        class FakeSession:
+            def post(self, url, json=None, timeout=None):
+                return FakeResponse()
+
+        collector = app_module.ExternalSolverCollector(FakeSession())
+        result = collector.collect(
+            app_module.CollectorRequest(
+                url="https://example.com/protected",
+                strategy=app_module.COLLECTOR_EXTERNAL_SOLVER,
+                context="catalog",
+            ),
+            {
+                "enhanced_collector_enabled": True,
+                "enhanced_collector_api_url": "http://127.0.0.1:8191",
+                "enhanced_collector_use_for_catalog": True,
+            },
+        )
+
+        self.assertFalse(result.ok)
+        self.assertTrue(result.protected)
+        self.assertEqual(result.error_kind, "cloudflare_challenge")
+        self.assertEqual(result.status_code, 403)
+
+    def test_fetch_pipeline_uses_external_solver_collector_when_configured(self) -> None:
+        class ExplodingFetcher:
+            def fetch(self, url: str, timeout_seconds: int) -> app_module.FetchResult:
+                raise AssertionError("legacy fetcher should not be used")
+
+        class FakeExternalSolverCollector:
+            def __init__(self) -> None:
+                self.calls: list[app_module.CollectorRequest] = []
+
+            def collect(
+                self,
+                request_payload: app_module.CollectorRequest,
+                settings_payload: dict[str, object],
+            ) -> app_module.CollectorResult:
+                self.calls.append(request_payload)
+                attempt = app_module.FetchAttempt(
+                    backend=app_module.COLLECTOR_EXTERNAL_SOLVER,
+                    started_at=app_module.now_iso(),
+                    ended_at=app_module.now_iso(),
+                    status="success",
+                    final_url=request_payload.url,
+                    detail="ok",
+                )
+                return app_module.CollectorResult(
+                    ok=True,
+                    html="<html><body>Example Product <button>Order Now</button></body></html>",
+                    final_url=request_payload.url,
+                    status_code=200,
+                    backend=app_module.COLLECTOR_EXTERNAL_SOLVER,
+                    detail="ok",
+                    attempts=[attempt],
+                )
+
+        collector = FakeExternalSolverCollector()
+        selector = app_module.FetcherSelector(
+            static_http_fetcher=ExplodingFetcher(),
+            curl_cffi_fetcher=ExplodingFetcher(),
+            firecrawl_fetcher=ExplodingFetcher(),
+            external_solver_collector=collector,
+        )
+        task = {
+            "id": 91,
+            "monitor_url": "https://example.com/products",
+            "target_keyword": "Example Product",
+            "fetch_strategy": "multi_engine",
+            "source_config": json.dumps({"collector_strategy": "external_solver"}),
+        }
+
+        result = selector.fetch_pipeline(
+            task,
+            object(),
+            {
+                "request_timeout_seconds": 25,
+                "enhanced_collector_enabled": True,
+                "enhanced_collector_api_url": "http://127.0.0.1:8191",
+                "enhanced_collector_use_for_monitor": True,
+            },
+            context="monitor",
+        )
+
+        self.assertEqual(result.error_kind, "")
+        self.assertEqual(result.backend_used, app_module.COLLECTOR_EXTERNAL_SOLVER)
+        self.assertIn("Order Now", result.html)
+        self.assertEqual([attempt.backend for attempt in result.attempts or []], [app_module.COLLECTOR_EXTERNAL_SOLVER])
+        self.assertEqual(len(collector.calls), 1)
+        self.assertEqual(collector.calls[0].strategy, app_module.COLLECTOR_EXTERNAL_SOLVER)
+        self.assertEqual(collector.calls[0].context, "monitor")
+
+    def test_fetch_pipeline_reports_external_solver_monitor_disabled(self) -> None:
+        class FakeExternalSolverCollector:
+            def collect(
+                self,
+                request_payload: app_module.CollectorRequest,
+                settings_payload: dict[str, object],
+            ) -> app_module.CollectorResult:
+                attempt = app_module.FetchAttempt(
+                    backend=app_module.COLLECTOR_EXTERNAL_SOLVER,
+                    started_at=app_module.now_iso(),
+                    ended_at=app_module.now_iso(),
+                    status="failed",
+                    error_kind="external_solver_monitor_disabled",
+                    detail="disabled",
+                )
+                return app_module.CollectorResult(
+                    ok=False,
+                    final_url=request_payload.url,
+                    backend=app_module.COLLECTOR_EXTERNAL_SOLVER,
+                    error_kind="external_solver_monitor_disabled",
+                    detail="disabled",
+                    attempts=[attempt],
+                )
+
+        selector = app_module.FetcherSelector(external_solver_collector=FakeExternalSolverCollector())
+        task = {
+            "monitor_url": "https://example.com/products",
+            "target_keyword": "Example Product",
+            "fetch_strategy": "multi_engine",
+            "source_config": json.dumps({"collector_strategy": "external_solver"}),
+        }
+
+        result = selector.fetch_pipeline(
+            task,
+            object(),
+            {"request_timeout_seconds": 25, "enhanced_collector_use_for_monitor": False},
+            context="monitor",
+        )
+
+        self.assertEqual(result.error_kind, "external_solver_monitor_disabled")
+        self.assertEqual(result.detail, "disabled")
+        self.assertEqual([attempt.backend for attempt in result.attempts or []], [app_module.COLLECTOR_EXTERNAL_SOLVER])
 
     def test_parse_cookie_header_for_domain_session_import(self) -> None:
         cookies = app_module.parse_cookie_header("cf_clearance=abc; PHPSESSID=xyz; empty=", "example.com")
@@ -5143,7 +5538,7 @@ class PortalAppTestCase(unittest.TestCase):
         self.assertEqual(second.error_kind, "cloudflare_challenge")
         self.assertTrue(second.cooldown_skip)
         self.assertEqual(second.domain_cooldown_until, first.domain_cooldown_until)
-        self.assertIn("同域名保护等待", second.detail)
+        self.assertIn("本轮已暂停重复请求", second.detail)
 
     def test_generic_pricing_table_extractor_handles_order_and_soldout_buttons(self) -> None:
         fetch_result = app_module.FetchResult(html="", final_url="https://example.com/pricing")
@@ -5375,6 +5770,53 @@ class PortalAppTestCase(unittest.TestCase):
 
         self.assertEqual(result.stock, 1)
         self.assertIn("HKG.AS3.Pro.TINY", result.fragment)
+        self.assertIn("按有货处理", result.detail)
+
+    def test_generic_pricing_table_treats_idc_price_spec_card_as_available_in_selector_page(self) -> None:
+        fetch_result = app_module.FetchResult(
+            html="",
+            final_url="https://www.dmit.io/cart.php?region=hong-kong&network=premium&generation=as3",
+        )
+        html_text = """
+        <main>
+          <section>
+            <h2>選擇實例類型</h2>
+            <article class="product-card">
+              <h3>HKG.AS3.Pro.STARTER</h3>
+              <p>$ 12.90 USD / Monthly</p>
+              <p>1 vCores 2.0GB RAM 40GB SSD Routing Profile Premium</p>
+            </article>
+            <article class="product-card">
+              <h3>HKG.AS3.Pro.TINY</h3>
+              <p>$ 6.90 USD / Monthly</p>
+              <p>1 vCores 1.0GB RAM 20GB SSD Routing Profile Premium</p>
+            </article>
+            <article class="product-card">
+              <h3>HKG.AS3.Pro.MINI</h3>
+              <p>$ 21.90 USD / Monthly</p>
+              <p>2 vCores 2.0GB RAM 60GB SSD Routing Profile Premium</p>
+            </article>
+          </section>
+          <footer class="cart-summary">
+            <button type="button">Continue</button>
+          </footer>
+        </main>
+        """
+
+        result = app_module.extract_stock_for_strategy(
+            "generic_pricing_table",
+            html_text,
+            "DMIT Hong Kong HKG.AS3.Pro.TINY",
+            {
+                "fetch_strategy": "multi_engine",
+                "monitor_url": "https://www.dmit.io/cart.php?region=hong-kong&network=premium&generation=as3",
+            },
+            fetch_result,
+        )
+
+        self.assertEqual(result.stock, 1)
+        self.assertIn("HKG.AS3.Pro.TINY", result.fragment)
+        self.assertNotIn("HKG.AS3.Pro.STARTER", result.fragment)
         self.assertIn("按有货处理", result.detail)
 
     def test_generic_pricing_table_does_not_override_target_soldout_with_continue_button(self) -> None:

@@ -256,7 +256,7 @@ select.input-dark {
 
 .task-strategy-card-grid {
     display: grid;
-    grid-template-columns: repeat(5, minmax(0, 1fr));
+    grid-template-columns: repeat(3, minmax(0, 1fr));
     gap: 0.75rem;
 }
 
@@ -266,7 +266,7 @@ select.input-dark {
 }
 
 .task-strategy-card {
-    min-height: 8.25rem;
+    min-height: 6.6rem;
     border: 1px solid rgba(51, 65, 85, 0.86);
     border-radius: var(--radius);
     background: rgba(10, 15, 23, 0.78);
@@ -337,6 +337,41 @@ select.input-dark {
     color: var(--color-muted);
     font-size: 0.84rem;
     line-height: 1.6;
+}
+
+.task-auto-rule-card {
+    display: grid;
+    gap: 0.35rem;
+    border: 1px solid rgba(34, 197, 94, 0.22);
+    border-radius: var(--radius);
+    background: rgba(5, 150, 105, 0.08);
+    padding: 1rem;
+}
+
+.task-auto-rule-card strong {
+    color: #dcfce7;
+    font-size: 1rem;
+    font-weight: 850;
+}
+
+.task-auto-rule-card span {
+    color: #94a3b8;
+    font-size: 0.86rem;
+    line-height: 1.6;
+}
+
+.task-rule-advanced {
+    border: 1px solid rgba(51, 65, 85, 0.72);
+    border-radius: var(--radius);
+    background: rgba(2, 6, 23, 0.38);
+    padding: 0.95rem 1rem;
+}
+
+.task-rule-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 1rem;
+    margin-top: 1rem;
 }
 
 .task-strategy-help,
@@ -791,6 +826,26 @@ button:disabled,
 
 .settings-scrapling-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.external-collector-box {
+    display: grid;
+    gap: 1rem;
+    border: 1px solid rgba(34, 197, 94, 0.18);
+    border-radius: var(--radius-lg);
+    background: rgba(5, 150, 105, 0.06);
+    padding: 1rem;
+}
+
+.external-collector-box-muted {
+    border-color: rgba(148, 163, 184, 0.18);
+    background: rgba(15, 23, 42, 0.35);
+}
+
+.external-collector-box h4 {
+    color: var(--color-text);
+    font-size: 1rem;
+    font-weight: 850;
 }
 
 .settings-field {
@@ -1313,6 +1368,7 @@ button:disabled,
 
 .task-products-panel .task-list-stack {
     max-height: none;
+    overflow: visible;
 }
 
 .task-empty-state {
@@ -1387,7 +1443,7 @@ button:disabled,
     align-content: start;
     align-items: start;
     justify-content: start;
-    grid-template-columns: repeat(auto-fill, minmax(20rem, 23rem));
+    grid-template-columns: repeat(auto-fill, minmax(18.5rem, 22.5rem));
     gap: 1rem;
     padding: 0.4rem;
 }
@@ -1398,6 +1454,7 @@ button:disabled,
     align-self: start;
     container-type: inline-size;
     width: 100%;
+    max-width: 22.5rem;
     min-height: 0;
     height: auto;
     flex-direction: column;
@@ -1418,7 +1475,7 @@ button:disabled,
 
 .task-product-card {
     min-width: 0;
-    max-width: 23rem;
+    max-width: 22.5rem;
 }
 
 .task-row:hover {
@@ -1552,6 +1609,14 @@ button:disabled,
     line-height: 1.2;
 }
 
+.task-tag span,
+.task-tag strong {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
 .domain-session-chip {
     border-color: rgba(56, 189, 248, 0.28);
     background: rgba(56, 189, 248, 0.08);
@@ -1637,8 +1702,8 @@ button:disabled,
 
 .task-row-log {
     min-width: 0;
-    min-height: 3.55rem;
-    max-height: 8.5rem;
+    min-height: 3.35rem;
+    max-height: 7.25rem;
     overflow: hidden;
     padding: 0.7rem 0.75rem 0.55rem;
 }
@@ -1646,7 +1711,9 @@ button:disabled,
 .task-log-text {
     font-size: 0.72rem;
     line-height: 1.38;
-    min-height: 1.95rem;
+    min-height: 1.9rem;
+    max-height: 2.8rem;
+    overflow: hidden;
     word-break: break-word;
 }
 
@@ -1664,7 +1731,7 @@ button:disabled,
 }
 
 .task-row-details[open] {
-    max-height: 9rem;
+    max-height: 7.5rem;
     overflow: auto;
 }
 
@@ -1784,9 +1851,11 @@ button:disabled,
 }
 
 .task-actions {
-    display: grid;
-    grid-template-columns: 1fr;
-    align-items: stretch;
+    display: flex;
+    min-width: 0;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
     gap: 0.65rem;
     margin-top: auto;
 }
@@ -1830,8 +1899,8 @@ button:disabled,
 }
 
 .task-actions .task-primary-actions {
-    justify-content: flex-start;
-    order: -1;
+    justify-content: flex-end;
+    margin-left: auto;
 }
 
 .task-row:hover .task-actions .task-secondary-actions,
@@ -1846,22 +1915,25 @@ button:disabled,
 
 @container (max-width: 21rem) {
     .task-actions {
-        grid-template-columns: 1fr;
+        align-items: stretch;
+        flex-direction: column-reverse;
     }
 
     .task-actions .task-primary-actions,
     .task-actions .task-secondary-actions {
         justify-content: flex-start;
+        margin-left: 0;
     }
 }
 
 @media (max-width: 760px) {
     .task-list-stack {
-        grid-template-columns: minmax(0, 1fr);
+        grid-template-columns: repeat(auto-fill, minmax(17.5rem, 1fr));
         padding: 0;
     }
 
     .task-row {
+        max-width: none;
         padding: 0.9rem;
     }
 
@@ -1961,6 +2033,118 @@ button:disabled,
     font-size: 0.76rem;
     font-weight: 800;
     padding: 0.28rem 0.58rem;
+}
+
+.merchant-quick-flow {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 0.75rem;
+}
+
+.merchant-quick-flow div {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    align-items: center;
+    gap: 0.65rem;
+    border: 1px solid rgba(51, 65, 85, 0.78);
+    border-radius: 0.9rem;
+    background: rgba(15, 23, 42, 0.58);
+    padding: 0.8rem;
+}
+
+.merchant-quick-flow strong {
+    display: inline-flex;
+    height: 1.65rem;
+    width: 1.65rem;
+    align-items: center;
+    justify-content: center;
+    border-radius: 999px;
+    background: rgba(34, 197, 94, 0.14);
+    color: #86efac;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+    font-size: 0.75rem;
+    font-weight: 900;
+}
+
+.merchant-quick-flow span {
+    min-width: 0;
+    color: #dbeafe;
+    font-size: 0.82rem;
+    font-weight: 800;
+    line-height: 1.35;
+}
+
+.merchant-mode-cards {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 0.75rem;
+}
+
+.merchant-mode-card {
+    position: relative;
+    display: grid;
+    min-height: 5.7rem;
+    cursor: pointer;
+}
+
+.merchant-mode-card input {
+    position: absolute;
+    inset: 0;
+    opacity: 0;
+}
+
+.merchant-mode-card span {
+    display: grid;
+    align-content: start;
+    gap: 0.3rem;
+    border: 1px solid rgba(51, 65, 85, 0.78);
+    border-radius: 0.95rem;
+    background: rgba(13, 19, 29, 0.72);
+    padding: 0.95rem;
+    transition: border-color 160ms ease, background 160ms ease, box-shadow 160ms ease;
+}
+
+.merchant-mode-card strong {
+    color: #f8fafc;
+    font-size: 0.95rem;
+    font-weight: 900;
+}
+
+.merchant-mode-card small {
+    color: var(--color-muted);
+    font-size: 0.78rem;
+    font-weight: 700;
+    line-height: 1.55;
+}
+
+.merchant-mode-card input:checked + span {
+    border-color: rgba(34, 197, 94, 0.58);
+    background: rgba(20, 83, 45, 0.18);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06), 0 14px 28px rgba(0, 0, 0, 0.16);
+}
+
+.merchant-mode-card input:focus-visible + span {
+    border-color: rgba(34, 197, 94, 0.8);
+    box-shadow: 0 0 0 3px rgba(34, 197, 94, 0.14);
+}
+
+.merchant-advanced-options {
+    border: 1px solid rgba(51, 65, 85, 0.72);
+    border-radius: 0.9rem;
+    background: rgba(2, 6, 23, 0.32);
+    padding: 0.85rem;
+}
+
+.merchant-advanced-options summary {
+    cursor: pointer;
+    color: #cbd5e1;
+    font-size: 0.82rem;
+    font-weight: 900;
+}
+
+.merchant-advanced-options[open] summary {
+    margin-bottom: 0.85rem;
+    color: #f8fafc;
 }
 
 .merchant-step-button {
@@ -2352,6 +2536,8 @@ button:disabled,
     }
 
     .merchant-stepper,
+    .merchant-quick-flow,
+    .merchant-mode-cards,
     .merchant-field-grid.two,
     .merchant-field-grid.three,
     .merchant-field-grid.four,
@@ -2555,6 +2741,10 @@ button:disabled,
 
     .task-strategy-card-grid,
     .task-strategy-card-grid.compact {
+        grid-template-columns: 1fr;
+    }
+
+    .task-rule-grid {
         grid-template-columns: 1fr;
     }
 

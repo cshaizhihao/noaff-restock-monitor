@@ -140,6 +140,12 @@ DEFAULT_FIRECRAWL_ZERO_DATA_RETENTION = env_bool("FIRECRAWL_ZERO_DATA_RETENTION"
 DEFAULT_FIRECRAWL_USE_FOR_MONITOR = env_bool("FIRECRAWL_USE_FOR_MONITOR", False)
 DEFAULT_FIRECRAWL_USE_FOR_CATALOG = env_bool("FIRECRAWL_USE_FOR_CATALOG", True)
 DEFAULT_FIRECRAWL_CATALOG_LIMIT = int(os.getenv("FIRECRAWL_CATALOG_LIMIT", "50"))
+DEFAULT_ENHANCED_COLLECTOR_ENABLED = env_bool("ENHANCED_COLLECTOR_ENABLED", False)
+DEFAULT_ENHANCED_COLLECTOR_API_URL = os.getenv("ENHANCED_COLLECTOR_API_URL", "").strip().rstrip("/")
+DEFAULT_ENHANCED_COLLECTOR_TIMEOUT_SECONDS = int(os.getenv("ENHANCED_COLLECTOR_TIMEOUT_SECONDS", "90"))
+DEFAULT_ENHANCED_COLLECTOR_MAX_RETRIES = int(os.getenv("ENHANCED_COLLECTOR_MAX_RETRIES", "1"))
+DEFAULT_ENHANCED_COLLECTOR_USE_FOR_MONITOR = env_bool("ENHANCED_COLLECTOR_USE_FOR_MONITOR", False)
+DEFAULT_ENHANCED_COLLECTOR_USE_FOR_CATALOG = env_bool("ENHANCED_COLLECTOR_USE_FOR_CATALOG", True)
 DEFAULT_SCRAPLING_ENABLED = env_bool("SCRAPLING_ENABLED", True)
 DEFAULT_SCRAPLING_DEFAULT_MODE = os.getenv("SCRAPLING_DEFAULT_MODE", "standard").strip().lower() or "standard"
 DEFAULT_SCRAPLING_USE_FOR_MONITOR = env_bool("SCRAPLING_USE_FOR_MONITOR", True)
@@ -284,6 +290,12 @@ SETTINGS_DEFAULTS = {
     "firecrawl_use_for_monitor": settings_bool_text(DEFAULT_FIRECRAWL_USE_FOR_MONITOR),
     "firecrawl_use_for_catalog": settings_bool_text(DEFAULT_FIRECRAWL_USE_FOR_CATALOG),
     "firecrawl_catalog_limit": str(DEFAULT_FIRECRAWL_CATALOG_LIMIT),
+    "enhanced_collector_enabled": settings_bool_text(DEFAULT_ENHANCED_COLLECTOR_ENABLED),
+    "enhanced_collector_api_url": DEFAULT_ENHANCED_COLLECTOR_API_URL,
+    "enhanced_collector_timeout_seconds": str(DEFAULT_ENHANCED_COLLECTOR_TIMEOUT_SECONDS),
+    "enhanced_collector_max_retries": str(DEFAULT_ENHANCED_COLLECTOR_MAX_RETRIES),
+    "enhanced_collector_use_for_monitor": settings_bool_text(DEFAULT_ENHANCED_COLLECTOR_USE_FOR_MONITOR),
+    "enhanced_collector_use_for_catalog": settings_bool_text(DEFAULT_ENHANCED_COLLECTOR_USE_FOR_CATALOG),
     "scrapling_enabled": settings_bool_text(DEFAULT_SCRAPLING_ENABLED),
     "scrapling_default_mode": DEFAULT_SCRAPLING_DEFAULT_MODE,
     "scrapling_use_for_monitor": settings_bool_text(DEFAULT_SCRAPLING_USE_FOR_MONITOR),
@@ -333,6 +345,11 @@ FETCH_STRATEGY_SCRAPLING_STEALTH = "scrapling_stealth"
 FETCH_STRATEGY_SCRAPLING_ADAPTIVE = "scrapling_adaptive"
 FETCH_STRATEGY_MANUAL = "manual"
 FETCH_STRATEGY_WEBHOOK = "webhook"
+COLLECTOR_DIRECT = "direct"
+COLLECTOR_CURL_CFFI = "curl_cffi"
+COLLECTOR_EXTERNAL_SOLVER = "external_solver"
+COLLECTOR_MANUAL = "manual"
+COLLECTOR_WEBHOOK = "webhook"
 DEFAULT_TASK_FETCH_STRATEGY = FETCH_STRATEGY_MULTI_ENGINE
 SUPPORTED_FETCH_STRATEGIES = {
     FETCH_STRATEGY_BROWSER,
@@ -392,6 +409,13 @@ LEGACY_FETCH_STRATEGY_MIGRATIONS = {
 }
 EXTERNAL_INPUT_FETCH_STRATEGIES = {FETCH_STRATEGY_MANUAL, FETCH_STRATEGY_WEBHOOK}
 EXTERNAL_INPUT_PENDING_ERROR_KINDS = {"manual_pending", "webhook_pending"}
+SUPPORTED_COLLECTOR_STRATEGIES = {
+    COLLECTOR_DIRECT,
+    COLLECTOR_CURL_CFFI,
+    COLLECTOR_EXTERNAL_SOLVER,
+    COLLECTOR_MANUAL,
+    COLLECTOR_WEBHOOK,
+}
 CATALOG_DISCOVERY_LOCAL = "local"
 CATALOG_DISCOVERY_FIRECRAWL_MAP = "firecrawl_map"
 CATALOG_DISCOVERY_HYBRID = "hybrid"
@@ -1418,7 +1442,7 @@ def fetch_cache_key(task: Any) -> str:
 def shared_fetch_detail(result: "FetchPipelineResult") -> str:
     backend = result.backend_used or last_fetch_attempt_backend(result.attempts, result.error_kind)
     if result.error_kind:
-        return f"复用同轮抓取失败结果：{result.error_kind}（{backend or 'unknown'}）。"
+        return f"同站点本轮已失败，跳过重复请求：{result.error_kind}（{backend or 'unknown'}）。"
     return f"复用同轮抓取结果（{backend or 'unknown'}）。"
 
 
@@ -1443,14 +1467,14 @@ def domain_cooldown_until(backend: str, error_kind: str, settings_payload: dict[
 
 
 def domain_cooldown_message(domain: str, cooldown_until: str, detail: str = "") -> str:
-    base = f"{domain or '同域名'} 正在同域名保护等待，至 {cooldown_until} 后恢复请求。本轮不会重复请求该域名。"
+    base = f"{domain or '同站点'} 本轮已暂停重复请求，{cooldown_until} 后自动再试。"
     return f"{base}{detail}" if detail else base
 
 
 def protected_source_cooldown_message(cooldown_until: str) -> str:
     return (
-        f"Cloudflare 受保护站点冷却中，冷却至 {cooldown_until}。"
-        "建议改用 Webhook、手动录入或替代公开页面。"
+        f"受保护站点冷却中：目标页返回保护页，{cooldown_until} 后自动再试。"
+        "如果持续失败，可改用 Webhook、手动录入或替代公开页面。"
     )
 
 
@@ -2083,6 +2107,144 @@ def validate_http_url(candidate: str) -> bool:
     return parsed.scheme in {"http", "https"} and bool(parsed.netloc)
 
 
+class EnhancedCollectorManager:
+    CANDIDATE_URLS = (
+        "http://127.0.0.1:8191",
+        "http://localhost:8191",
+        "http://flaresolverr:8191",
+    )
+
+    def __init__(self, settings_payload: dict[str, Any], session: requests.Session | None = None) -> None:
+        self.settings = settings_payload
+        self.session = session or requests.Session()
+
+    def configured_url(self) -> str:
+        return str(self.settings.get("enhanced_collector_api_url") or "").strip().rstrip("/")
+
+    def candidate_urls(self) -> list[str]:
+        candidates: list[str] = []
+        configured = self.configured_url()
+        if configured:
+            candidates.append(configured)
+        for url in self.CANDIDATE_URLS:
+            if url not in candidates:
+                candidates.append(url)
+        return candidates
+
+    def health_check(self, probe_candidates: bool = True) -> dict[str, Any]:
+        enabled = bool(self.settings.get("enhanced_collector_enabled"))
+        configured = self.configured_url()
+        if not enabled and not configured:
+            return {
+                "status": "disabled",
+                "available": False,
+                "api_url": "",
+                "detail": "增强采集未启用。",
+            }
+
+        if not probe_candidates:
+            if configured:
+                return {
+                    "status": "configured",
+                    "available": False,
+                    "api_url": configured,
+                    "detail": "增强采集服务已配置，点击检测确认可用。",
+                }
+            return {
+                "status": "not_configured",
+                "available": False,
+                "api_url": "",
+                "detail": "未配置增强采集服务地址。",
+            }
+
+        urls = self.candidate_urls() if probe_candidates else ([configured] if configured else [])
+        if not urls:
+            return {
+                "status": "not_configured",
+                "available": False,
+                "api_url": "",
+                "detail": "未配置增强采集服务地址。",
+            }
+
+        timeout = max(3, min(30, int(self.settings.get("enhanced_collector_timeout_seconds") or DEFAULT_ENHANCED_COLLECTOR_TIMEOUT_SECONDS)))
+        last_detail = ""
+        for api_url in urls:
+            if not validate_http_url(api_url):
+                last_detail = f"增强采集地址无效：{api_url}"
+                continue
+            result = self._probe(api_url, timeout)
+            if result["available"]:
+                return result
+            last_detail = result["detail"]
+
+        return {
+            "status": "unreachable",
+            "available": False,
+            "api_url": configured or urls[0],
+            "detail": last_detail or "增强采集服务不可用。",
+        }
+
+    def _probe(self, api_url: str, timeout: int) -> dict[str, Any]:
+        try:
+            response = self.session.post(
+                f"{api_url.rstrip('/')}/v1",
+                json={"cmd": "sessions.list"},
+                timeout=timeout,
+            )
+        except requests.Timeout:
+            return {
+                "status": "timeout",
+                "available": False,
+                "api_url": api_url,
+                "detail": "增强采集服务连接超时。",
+            }
+        except requests.RequestException as exc:
+            return {
+                "status": "unreachable",
+                "available": False,
+                "api_url": api_url,
+                "detail": f"增强采集服务无法访问：{str(exc)[:180]}",
+            }
+
+        status_code = int(getattr(response, "status_code", 0) or 0)
+        if status_code >= 400:
+            return {
+                "status": "http_error",
+                "available": False,
+                "api_url": api_url,
+                "status_code": status_code,
+                "detail": f"增强采集服务 HTTP {status_code}。",
+            }
+        try:
+            payload = response.json()
+        except ValueError:
+            payload = {}
+        if isinstance(payload, dict) and payload.get("status") in {"ok", "success"}:
+            return {
+                "status": "ok",
+                "available": True,
+                "api_url": api_url,
+                "status_code": status_code,
+                "detail": "增强采集服务可用。",
+            }
+        text = str(getattr(response, "text", "") or "")
+        if "flaresolverr" in text.lower() or "ready" in text.lower():
+            return {
+                "status": "ok",
+                "available": True,
+                "api_url": api_url,
+                "status_code": status_code,
+                "detail": "增强采集服务可用。",
+            }
+        return {
+            "status": "bad_response",
+            "available": False,
+            "api_url": api_url,
+            "status_code": status_code,
+            "detail": "增强采集服务响应结构不正确。",
+        }
+
+
 def find_browser_binary() -> str:
     if DEFAULT_BROWSER_PATH and Path(DEFAULT_BROWSER_PATH).exists():
         return DEFAULT_BROWSER_PATH
@@ -2228,6 +2390,32 @@ def normalize_settings(raw: dict[str, str]) -> dict[str, Any]:
             DEFAULT_FIRECRAWL_USE_FOR_CATALOG,
         ),
         "firecrawl_catalog_limit": max(1, min(250, int(raw.get("firecrawl_catalog_limit") or DEFAULT_FIRECRAWL_CATALOG_LIMIT))),
+        "enhanced_collector_enabled": parse_setting_bool(
+            raw.get("enhanced_collector_enabled"),
+            DEFAULT_ENHANCED_COLLECTOR_ENABLED,
+        ),
+        "enhanced_collector_api_url": str(
+            raw.get("enhanced_collector_api_url") or DEFAULT_ENHANCED_COLLECTOR_API_URL
+        ).strip().rstrip("/"),
+        "enhanced_collector_timeout_seconds": max(
+            5,
+            min(
+                180,
+                int(raw.get("enhanced_collector_timeout_seconds") or DEFAULT_ENHANCED_COLLECTOR_TIMEOUT_SECONDS),
+            ),
+        ),
+        "enhanced_collector_max_retries": max(
+            0,
+            min(5, int(raw.get("enhanced_collector_max_retries") or DEFAULT_ENHANCED_COLLECTOR_MAX_RETRIES)),
+        ),
+        "enhanced_collector_use_for_monitor": parse_setting_bool(
+            raw.get("enhanced_collector_use_for_monitor"),
+            DEFAULT_ENHANCED_COLLECTOR_USE_FOR_MONITOR,
+        ),
+        "enhanced_collector_use_for_catalog": parse_setting_bool(
+            raw.get("enhanced_collector_use_for_catalog"),
+            DEFAULT_ENHANCED_COLLECTOR_USE_FOR_CATALOG,
+        ),
         "catalog_discovery_strategy": catalog_discovery_strategy,
         "catalog_scrape_strategy": catalog_scrape_strategy,
         "catalog_default_fetch_strategy": catalog_default_fetch_strategy,
@@ -2585,6 +2773,7 @@ def to_task_payload(row: sqlite3.Row) -> dict[str, Any]:
     last_fetch_attempts = parse_fetch_attempts_text(row["last_fetch_attempts"] if "last_fetch_attempts" in keys else "")
     last_error_kind = task_error_kind_from_attempts(last_error, last_fetch_attempts)
     task_domain = fetch_domain_for_url(row["monitor_url"])
+    normalized_fetch_strategy = normalize_fetch_strategy(row["fetch_strategy"] if "fetch_strategy" in keys else "")
     return {
         "id": row["id"],
         "name": row["name"],
@@ -2595,7 +2784,8 @@ def to_task_payload(row: sqlite3.Row) -> dict[str, Any]:
         "monitor_domain": task_domain,
         "domain_session": get_domain_session(task_domain, safe=True),
         "target_keyword": row["target_keyword"],
-        "fetch_strategy": normalize_fetch_strategy(row["fetch_strategy"] if "fetch_strategy" in keys else ""),
+        "fetch_strategy": normalized_fetch_strategy,
+        "collector_strategy": collector_strategy_for_task(row),
         "source_config": normalize_source_config_text(row["source_config"] if "source_config" in keys else "{}"),
         "restock_template": row["restock_template"],
         "soldout_template": row["soldout_template"],
@@ -2633,7 +2823,7 @@ def to_task_payload(row: sqlite3.Row) -> dict[str, Any]:
         "last_blocked_at": (row["last_blocked_at"] or "") if "last_blocked_at" in keys else "",
         "cooldown_until": (row["cooldown_until"] or "") if "cooldown_until" in keys else "",
         "ingest_token_hint": (row["ingest_token_hint"] or "") if "ingest_token_hint" in keys else "",
-        "webhook_endpoint": webhook_endpoint_for_task(row["id"]) if normalize_fetch_strategy(row["fetch_strategy"] if "fetch_strategy" in keys else "") == FETCH_STRATEGY_WEBHOOK else "",
+        "webhook_endpoint": webhook_endpoint_for_task(row["id"]) if normalized_fetch_strategy == FETCH_STRATEGY_WEBHOOK else "",
         "created_at": row["created_at"],
         "updated_at": row["updated_at"],
     }
@@ -3209,6 +3399,380 @@ class FetchPipelineResult:
     attempts: list[FetchAttempt] | None = None
     error_kind: str = ""
     detail: str = ""
+
+
+@dataclass
+class CollectorRequest:
+    url: str
+    strategy: str
+    task_id: int | None = None
+    target_keyword: str = ""
+    source_config: dict[str, Any] = field(default_factory=dict)
+    timeout_seconds: int = DEFAULT_TIMEOUT_SECONDS
+    headers: dict[str, str] = field(default_factory=dict)
+    proxy: str = ""
+    context: str = "monitor"
+
+
+@dataclass
+class CollectorResult:
+    ok: bool
+    html: str = ""
+    final_url: str = ""
+    status_code: int = 0
+    backend: str = ""
+    error_kind: str = ""
+    detail: str = ""
+    protected: bool = False
+    attempts: list[FetchAttempt] = field(default_factory=list)
+
+
+class BaseCollector:
+    name = "base"
+
+    def collect(self, request_payload: CollectorRequest, settings_payload: dict[str, Any]) -> CollectorResult:
+        raise NotImplementedError
+
+
+class FetcherCollectorAdapter(BaseCollector):
+    def __init__(self, name: str, fetcher: Any) -> None:
+        self.name = name
+        self.fetcher = fetcher
+
+    def collect(self, request_payload: CollectorRequest, settings_payload: dict[str, Any]) -> CollectorResult:
+        try:
+            result = self.fetcher.fetch(request_payload.url, request_payload.timeout_seconds)
+        except ProtectedSourceError as exc:
+            return CollectorResult(
+                ok=False,
+                final_url=request_payload.url,
+                backend=self.name,
+                error_kind=exc.error_kind,
+                detail=str(exc),
+                protected=True,
+            )
+        except Exception as exc:
+            detail = str(exc)
+            return CollectorResult(
+                ok=False,
+                final_url=request_payload.url,
+                backend=self.name,
+                error_kind=classify_browser_error(detail) or "request_error",
+                detail=detail,
+            )
+        return CollectorResult(
+            ok=not result.error_kind and bool(result.html),
+            html=result.html,
+            final_url=result.final_url,
+            status_code=result.status_code,
+            backend=self.name,
+            error_kind=result.error_kind,
+            detail=result.detail,
+            protected=result.error_kind in {"cloudflare_challenge", "protected_source"},
+        )
+
+
+def sanitize_external_solver_detail(value: Any) -> str:
+    text = re.sub(r"\s+", " ", str(value or "")).strip()
+    if not text:
+        return ""
+    return text[:500]
+
+
+def classify_external_solver_error(message: Any, status_code: int = 0) -> str:
+    lowered = normalize_signal_text(message)
+    if any(token in lowered for token in ("timeout", "timedout", "etimedout")):
+        return "timeout"
+    if any(token in lowered for token in ("unauthorized", "forbidden", "permission", "authentication")):
+        return "external_solver_auth_error"
+    if any(token in lowered for token in ("ratelimit", "toomanyrequests", "429")):
+        return "external_solver_rate_limited"
+    if any(token in lowered for token in ("cloudflare", "turnstile", "captcha", "challenge", "justamoment")):
+        return "cloudflare_challenge"
+    if status_code in {401, 403}:
+        return "external_solver_auth_error"
+    if status_code == 429:
+        return "external_solver_rate_limited"
+    if status_code >= 500:
+        return "external_solver_upstream_error"
+    if status_code >= 400:
+        return "external_solver_http_error"
+    return "external_solver_failed"
+
+
+class ExternalSolverCollector(BaseCollector):
+    name = COLLECTOR_EXTERNAL_SOLVER
+
+    def __init__(self, session: requests.Session | None = None) -> None:
+        self.session = session or requests.Session()
+
+    def collect(self, request_payload: CollectorRequest, settings_payload: dict[str, Any]) -> CollectorResult:
+        attempt = FetchAttempt(backend=self.name, started_at=now_iso())
+        api_url = str(settings_payload.get("enhanced_collector_api_url") or "").strip().rstrip("/")
+        if not settings_payload.get("enhanced_collector_enabled") and not api_url:
+            attempt.ended_at = now_iso()
+            attempt.status = "failed"
+            attempt.error_kind = "external_solver_disabled"
+            attempt.detail = "增强采集服务未启用。"
+            return CollectorResult(
+                ok=False,
+                final_url=request_payload.url,
+                backend=self.name,
+                error_kind=attempt.error_kind,
+                detail=attempt.detail,
+                attempts=[attempt],
+            )
+        if request_payload.context == "monitor" and not settings_payload.get("enhanced_collector_use_for_monitor", False):
+            attempt.ended_at = now_iso()
+            attempt.status = "failed"
+            attempt.error_kind = "external_solver_monitor_disabled"
+            attempt.detail = "增强采集默认不用于定时监控，请在设置中明确开启。"
+            return CollectorResult(
+                ok=False,
+                final_url=request_payload.url,
+                backend=self.name,
+                error_kind=attempt.error_kind,
+                detail=attempt.detail,
+                attempts=[attempt],
+            )
+        if request_payload.context == "catalog" and not settings_payload.get("enhanced_collector_use_for_catalog", True):
+            attempt.ended_at = now_iso()
+            attempt.status = "failed"
+            attempt.error_kind = "external_solver_catalog_disabled"
+            attempt.detail = "增强采集未启用于商品入库。"
+            return CollectorResult(
+                ok=False,
+                final_url=request_payload.url,
+                backend=self.name,
+                error_kind=attempt.error_kind,
+                detail=attempt.detail,
+                attempts=[attempt],
+            )
+        if not api_url or not validate_http_url(api_url):
+            attempt.ended_at = now_iso()
+            attempt.status = "failed"
+            attempt.error_kind = "external_solver_not_configured"
+            attempt.detail = "未配置可用的增强采集服务地址。"
+            return CollectorResult(
+                ok=False,
+                final_url=request_payload.url,
+                backend=self.name,
+                error_kind=attempt.error_kind,
+                detail=attempt.detail,
+                attempts=[attempt],
+            )
+
+        payload: dict[str, Any] = {
+            "cmd": "request.get",
+            "url": request_payload.url,
+            "maxTimeout": max(5000, int(request_payload.timeout_seconds or DEFAULT_TIMEOUT_SECONDS) * 1000),
+        }
+        if request_payload.headers:
+            payload["headers"] = request_payload.headers
+        proxy_url = request_payload.proxy or str(request_payload.source_config.get("proxy") or "")
+        if proxy_url:
+            payload["proxy"] = {"url": proxy_url}
+
+        timeout_seconds = max(
+            5,
+            min(
+                180,
+                int(settings_payload.get("enhanced_collector_timeout_seconds") or request_payload.timeout_seconds or DEFAULT_TIMEOUT_SECONDS),
+            ),
+        )
+        try:
+            response = self.session.post(f"{api_url}/v1", json=payload, timeout=timeout_seconds)
+        except requests.Timeout:
+            attempt.ended_at = now_iso()
+            attempt.status = "failed"
+            attempt.error_kind = "timeout"
+            attempt.detail = "增强采集服务请求超时。"
+            return CollectorResult(
+                ok=False,
+                final_url=request_payload.url,
+                backend=self.name,
+                error_kind=attempt.error_kind,
+                detail=attempt.detail,
+                attempts=[attempt],
+            )
+        except requests.RequestException as exc:
+            attempt.ended_at = now_iso()
+            attempt.status = "failed"
+            attempt.error_kind = "external_solver_request_error"
+            attempt.detail = sanitize_external_solver_detail(exc)
+            return CollectorResult(
+                ok=False,
+                final_url=request_payload.url,
+                backend=self.name,
+                error_kind=attempt.error_kind,
+                detail=attempt.detail,
+                attempts=[attempt],
+            )
+
+        status_code = int(getattr(response, "status_code", 0) or 0)
+        try:
+            data = response.json()
+        except ValueError:
+            data = {}
+        if status_code >= 400:
+            detail = sanitize_external_solver_detail(data.get("message") if isinstance(data, dict) else getattr(response, "text", ""))
+            attempt.ended_at = now_iso()
+            attempt.status = "failed"
+            attempt.error_kind = classify_external_solver_error(detail, status_code)
+            attempt.detail = detail or f"增强采集服务 HTTP {status_code}。"
+            return CollectorResult(
+                ok=False,
+                final_url=request_payload.url,
+                status_code=status_code,
+                backend=self.name,
+                error_kind=attempt.error_kind,
+                detail=attempt.detail,
+                protected=attempt.error_kind == "cloudflare_challenge",
+                attempts=[attempt],
+            )
+
+        if not isinstance(data, dict):
+            attempt.ended_at = now_iso()
+            attempt.status = "failed"
+            attempt.error_kind = "external_solver_bad_response"
+            attempt.detail = "增强采集服务响应不是 JSON 对象。"
+            return CollectorResult(
+                ok=False,
+                final_url=request_payload.url,
+                status_code=status_code,
+                backend=self.name,
+                error_kind=attempt.error_kind,
+                detail=attempt.detail,
+                attempts=[attempt],
+            )
+
+        solver_status = str(data.get("status") or "").lower()
+        if solver_status and solver_status not in {"ok", "success"}:
+            detail = sanitize_external_solver_detail(data.get("message") or data.get("error") or "增强采集服务返回失败。")
+            attempt.ended_at = now_iso()
+            attempt.status = "failed"
+            attempt.error_kind = classify_external_solver_error(detail, status_code)
+            attempt.detail = detail
+            return CollectorResult(
+                ok=False,
+                final_url=request_payload.url,
+                status_code=status_code,
+                backend=self.name,
+                error_kind=attempt.error_kind,
+                detail=detail,
+                protected=attempt.error_kind == "cloudflare_challenge",
+                attempts=[attempt],
+            )
+
+        solution = data.get("solution") if isinstance(data.get("solution"), dict) else {}
+        html_text = str(solution.get("response") or data.get("html") or data.get("response") or "")
+        final_url = str(solution.get("url") or data.get("url") or request_payload.url)
+        target_status = int(solution.get("status") or data.get("statusCode") or 0) if str(solution.get("status") or data.get("statusCode") or "").isdigit() else 0
+        if not html_text:
+            attempt.ended_at = now_iso()
+            attempt.status = "failed"
+            attempt.error_kind = "empty_response"
+            attempt.detail = "增强采集服务返回了空页面。"
+            return CollectorResult(
+                ok=False,
+                final_url=final_url,
+                status_code=target_status or status_code,
+                backend=self.name,
+                error_kind=attempt.error_kind,
+                detail=attempt.detail,
+                attempts=[attempt],
+            )
+        if looks_like_cloudflare_challenge(html_text, url=final_url):
+            attempt.ended_at = now_iso()
+            attempt.status = "failed"
+            attempt.error_kind = "cloudflare_challenge"
+            attempt.detail = "增强采集服务仍返回受保护页面。"
+            attempt.final_url = final_url
+            return CollectorResult(
+                ok=False,
+                html="",
+                final_url=final_url,
+                status_code=target_status or status_code,
+                backend=self.name,
+                error_kind=attempt.error_kind,
+                detail=attempt.detail,
+                protected=True,
+                attempts=[attempt],
+            )
+
+        attempt.ended_at = now_iso()
+        attempt.status = "success"
+        attempt.final_url = final_url
+        attempt.detail = "增强采集服务返回 HTML。"
+        return CollectorResult(
+            ok=True,
+            html=html_text,
+            final_url=final_url,
+            status_code=target_status or status_code,
+            backend=self.name,
+            detail=attempt.detail,
+            attempts=[attempt],
+        )
+
+
+def normalize_collector_strategy(value: Any, fallback: str = COLLECTOR_DIRECT) -> str:
+    strategy = str(value or "").strip().lower()
+    if strategy in SUPPORTED_COLLECTOR_STRATEGIES:
+        return strategy
+    return fallback
+
+
+def collector_strategy_for_fetch_backend(backend: Any) -> str:
+    strategy = str(backend or "").strip().lower()
+    if strategy == COLLECTOR_EXTERNAL_SOLVER:
+        return COLLECTOR_EXTERNAL_SOLVER
+    if strategy == FETCH_STRATEGY_CURL_CFFI:
+        return COLLECTOR_CURL_CFFI
+    if strategy == FETCH_STRATEGY_MANUAL:
+        return COLLECTOR_MANUAL
+    if strategy == FETCH_STRATEGY_WEBHOOK:
+        return COLLECTOR_WEBHOOK
+    return COLLECTOR_DIRECT
+
+
+def collector_strategy_for_task(task: Any) -> str:
+    source_config = task_source_config(task)
+    configured = normalize_collector_strategy(source_config.get("collector_strategy"), "")
+    if configured:
+        return configured
+    return collector_strategy_for_fetch_backend(task_fetch_strategy(task))
+
+
+def collector_result_from_fetch_pipeline(result: FetchPipelineResult) -> CollectorResult:
+    backend = result.backend_used or last_fetch_attempt_backend(result.attempts, result.error_kind)
+    return CollectorResult(
+        ok=not result.error_kind and bool(result.html),
+        html=result.html,
+        final_url=result.final_url,
+        status_code=result.status_code,
+        backend=collector_strategy_for_fetch_backend(backend),
+        error_kind=result.error_kind,
+        detail=result.detail,
+        protected=result.error_kind in {"cloudflare_challenge", "protected_source"},
+        attempts=result.attempts or [],
+    )
+
+
+def collector_request_for_task(
+    task: Any,
+    settings_payload: dict[str, Any],
+    context: str = "monitor",
+) -> CollectorRequest:
+    source_config = task_source_config(task)
+    return CollectorRequest(
+        url=monitor_url_for_fetch(task),
+        strategy=collector_strategy_for_task(task),
+        task_id=parse_int_value(mapping_value(task, "id", "")),
+        target_keyword=str(mapping_value(task, "target_keyword", "") or ""),
+        source_config=source_config,
+        timeout_seconds=int(settings_payload.get("request_timeout_seconds") or DEFAULT_TIMEOUT_SECONDS),
+        context=context,
+    )
 
 
 @dataclass
@@ -4689,11 +5253,13 @@ class FetcherSelector:
         static_http_fetcher: StaticHttpFetcher | None = None,
         curl_cffi_fetcher: CurlCffiFetcher | None = None,
         firecrawl_fetcher: FirecrawlFetcher | None = None,
+        external_solver_collector: ExternalSolverCollector | None = None,
         scrapling_client: Any = None,
     ) -> None:
         self.static_http_fetcher = static_http_fetcher or StaticHttpFetcher()
         self.curl_cffi_fetcher = curl_cffi_fetcher or CurlCffiFetcher()
         self.firecrawl_fetcher = firecrawl_fetcher
+        self.external_solver_collector = external_solver_collector or ExternalSolverCollector()
         self.scrapling_client = scrapling_client
 
     def settings_for_task(self, settings_payload: dict[str, Any] | None, task: Any) -> dict[str, Any]:
@@ -4751,6 +5317,8 @@ class FetcherSelector:
         strategy = task_fetch_strategy(task)
         settings_payload = settings_payload or {}
         firecrawl_allowed = firecrawl_allowed_for_context(settings_payload, context)
+        if collector_strategy_for_task(task) == COLLECTOR_EXTERNAL_SOLVER:
+            return [COLLECTOR_EXTERNAL_SOLVER]
         if strategy in EXTERNAL_INPUT_FETCH_STRATEGIES:
             return [strategy]
         if strategy in {
@@ -4853,6 +5421,18 @@ class FetcherSelector:
             }
         if next_backend == FETCH_STRATEGY_FIRECRAWL and not settings_payload.get("firecrawl_enabled"):
             return False
+        if next_backend == COLLECTOR_EXTERNAL_SOLVER:
+            return result.error_kind in {
+                "cloudflare_challenge",
+                "timeout",
+                "request_error",
+                "empty_response",
+                "http_error",
+                "scrapling_browser_failed",
+                "scrapling_unavailable",
+                "scrapling_disabled",
+                "curl_cffi_unavailable",
+            }
         return result.error_kind in {
             "timeout",
             "request_error",
@@ -4885,6 +5465,33 @@ class FetcherSelector:
         last_result = FetchResult(html="", final_url=url, error_kind="request_error", detail="未执行抓取。")
 
         for index, backend in enumerate(backends):
+            if backend == COLLECTOR_EXTERNAL_SOLVER:
+                collector_result = self.external_solver_collector.collect(
+                    collector_request_for_task(task, settings_payload, context=context),
+                    settings_payload,
+                )
+                attempts.extend(collector_result.attempts)
+                last_result = FetchResult(
+                    html=collector_result.html,
+                    final_url=collector_result.final_url or url,
+                    status_code=collector_result.status_code,
+                    error_kind=collector_result.error_kind,
+                    detail=collector_result.detail,
+                )
+                if collector_result.ok and collector_result.html:
+                    return FetchPipelineResult(
+                        html=collector_result.html,
+                        final_url=collector_result.final_url or url,
+                        status_code=collector_result.status_code,
+                        backend_used=COLLECTOR_EXTERNAL_SOLVER,
+                        attempts=attempts,
+                        detail=collector_result.detail,
+                    )
+                next_backend = backends[index + 1] if index + 1 < len(backends) else ""
+                if not next_backend or not self.should_try_next_backend(last_result, next_backend, settings_payload):
+                    break
+                continue
+
             fetcher = self.fetcher_for_backend(backend, browser_harness, settings_payload)
             max_backend_attempts = 3 if backend == FETCH_STRATEGY_BROWSER and hasattr(fetcher, "rebuild") else 1
             for backend_attempt in range(max_backend_attempts):
@@ -6582,6 +7189,8 @@ def classify_browser_error(message: str) -> str:
     lowered = normalize_signal_text(message)
     if not lowered:
         return ""
+    if "受保护站点冷却中" in message or "目标页返回保护页" in message:
+        return "cloudflare_challenge"
     if any(token in lowered for token in ("telegram", "sendmessage", "editmessage", "botcantsendmessagestobot")):
         return "telegram_error"
     for kind, markers in BROWSER_ERROR_KINDS.items():
@@ -7355,6 +7964,10 @@ def page_level_orderable_for_target(
         return False
     if has_generic_sold_out_marker(fragment, clean_fragment_text(fragment)):
         return False
+    if has_idc_sellable_card_signal(fragment) and (
+        selected_by_url or selected_by_fragment or page_has_idc_product_selector_context(html_text)
+    ):
+        return True
     page_cleaned = clean_fragment_text(html_text)
     if has_generic_sold_out_marker(html_text, page_cleaned) and not selected_by_url:
         return False
@@ -7371,6 +7984,22 @@ def has_generic_pricing_signal(fragment: str) -> bool:
         return True
     cleaned = clean_fragment_text(fragment)
     return has_generic_sold_out_marker(fragment, cleaned) or has_generic_orderable_marker(fragment, cleaned)
+
+
+def page_has_idc_product_selector_context(html_text: str) -> bool:
+    if not html_text:
+        return False
+    card_like_matches = re.findall(
+        r"(?is)<(?:article|div|plan-card|product-card|package-card|pricing-card)\b[^>]*(?:product-card|plan-card|pricing-card|package-card|selected|active)[^>]*>",
+        html_text,
+    )
+    if len(card_like_matches) >= 2:
+        return True
+    product_heading_matches = re.findall(
+        r"(?is)<h[1-6]\b[^>]*>\s*[^<]*[A-Z]{2,6}\.[A-Z0-9]+(?:\.[A-Z0-9]+){1,5}[^<]*</h[1-6]>",
+        html_text,
+    )
+    return len(product_heading_matches) >= 2
 
 
 def has_idc_product_card_signal(fragment: str) -> bool:
@@ -7841,6 +8470,24 @@ def catalog_signal(signal_type: str, weight: int, text: str) -> dict[str, Any]:
 
 def has_resource_spec_signal(text: str) -> bool:
     return any(pattern.search(text or "") for pattern in DISCOVERY_RESOURCE_PATTERNS)
+
+
+def has_idc_sellable_card_signal(fragment: str) -> bool:
+    """Return true when a target IDC product card has enough local buyability evidence.
+
+    This intentionally ignores page-level footer buttons such as Continue/Checkout.
+    A product card with a price and server resources is selectable on many IDC cart
+    pages; a sold-out marker inside that same card is handled before this helper.
+    """
+
+    if not fragment:
+        return False
+    cleaned = clean_fragment_text(fragment)
+    if has_generic_sold_out_marker(fragment, cleaned):
+        return False
+    if has_generic_orderable_marker(fragment, cleaned):
+        return True
+    return bool(extract_price_hint(fragment) and has_resource_spec_signal(cleaned))
 
 
 def normalized_title_token(value: Any) -> str:
@@ -8778,6 +9425,15 @@ def make_app() -> Flask:
                     "firecrawl_use_for_monitor": settings_payload["firecrawl_use_for_monitor"],
                     "firecrawl_use_for_catalog": settings_payload["firecrawl_use_for_catalog"],
                     "firecrawl_catalog_limit": settings_payload["firecrawl_catalog_limit"],
+                    "enhanced_collector_status": EnhancedCollectorManager(settings_payload).health_check(
+                        probe_candidates=False
+                    ),
+                    "enhanced_collector_enabled": settings_payload["enhanced_collector_enabled"],
+                    "enhanced_collector_api_url": settings_payload["enhanced_collector_api_url"],
+                    "enhanced_collector_timeout_seconds": settings_payload["enhanced_collector_timeout_seconds"],
+                    "enhanced_collector_max_retries": settings_payload["enhanced_collector_max_retries"],
+                    "enhanced_collector_use_for_monitor": settings_payload["enhanced_collector_use_for_monitor"],
+                    "enhanced_collector_use_for_catalog": settings_payload["enhanced_collector_use_for_catalog"],
                     "scrapling_status": scrapling_runtime_status(),
                     "scrapling_enabled": settings_payload["scrapling_enabled"],
                     "scrapling_default_mode": settings_payload["scrapling_default_mode"],
@@ -9952,6 +10608,8 @@ def make_app() -> Flask:
             ("scrapling_max_concurrency_standard", 1, 10),
             ("scrapling_max_concurrency_dynamic", 1, 5),
             ("scrapling_max_concurrency_stealth", 1, 3),
+            ("enhanced_collector_timeout_seconds", 5, 180),
+            ("enhanced_collector_max_retries", 0, 5),
         ):
             if key in payload:
                 try:
@@ -9976,6 +10634,9 @@ def make_app() -> Flask:
             "scrapling_session_reuse",
             "scrapling_adaptive_selector",
             "scrapling_headless",
+            "enhanced_collector_enabled",
+            "enhanced_collector_use_for_monitor",
+            "enhanced_collector_use_for_catalog",
         ):
             if key in payload:
                 updates[key] = settings_bool_text(parse_setting_bool(payload.get(key)))
@@ -9992,6 +10653,12 @@ def make_app() -> Flask:
 
         if "firecrawl_api_key" in payload:
             updates["firecrawl_api_key"] = str(payload.get("firecrawl_api_key", "")).strip()
+
+        if "enhanced_collector_api_url" in payload:
+            api_url = str(payload.get("enhanced_collector_api_url") or "").strip().rstrip("/")
+            if api_url and not validate_http_url(api_url):
+                return jsonify({"ok": False, "message": "增强采集服务地址必须是有效的 http(s) 地址。"}), 400
+            updates["enhanced_collector_api_url"] = api_url
 
         if "firecrawl_proxy_mode" in payload:
             proxy_mode = str(payload.get("firecrawl_proxy_mode") or "").strip().lower()
@@ -10111,6 +10778,55 @@ def make_app() -> Flask:
             {
                 "ok": True,
                 "message": "Scrapling 检测完成。",
+                "result": result,
+            }
+        )
+
+    @app.route("/api/settings/enhanced-collector-test", methods=["POST"])
+    @login_required
+    @limiter.limit("20 per minute")
+    def test_enhanced_collector_settings():
+        payload = read_json()
+        current_settings = dict(app.extensions["monitor_engine"].get_runtime_settings())
+        settings_payload = dict(current_settings)
+
+        api_url = str(
+            payload.get("enhanced_collector_api_url")
+            or current_settings.get("enhanced_collector_api_url")
+            or ""
+        ).strip().rstrip("/")
+        if api_url and not validate_http_url(api_url):
+            return jsonify({"ok": False, "message": "增强采集服务地址必须是有效的 http(s) 地址。"}), 400
+        settings_payload["enhanced_collector_api_url"] = api_url
+
+        for key in (
+            "enhanced_collector_enabled",
+            "enhanced_collector_use_for_monitor",
+            "enhanced_collector_use_for_catalog",
+        ):
+            if key in payload:
+                settings_payload[key] = parse_setting_bool(payload.get(key))
+
+        for key, default_value, minimum, maximum in (
+            ("enhanced_collector_timeout_seconds", DEFAULT_ENHANCED_COLLECTOR_TIMEOUT_SECONDS, 5, 180),
+            ("enhanced_collector_max_retries", DEFAULT_ENHANCED_COLLECTOR_MAX_RETRIES, 0, 5),
+        ):
+            if key in payload:
+                try:
+                    value = int(payload[key])
+                except (TypeError, ValueError):
+                    return jsonify({"ok": False, "message": "增强采集诊断配置必须是整数。"}), 400
+                if value < minimum or value > maximum:
+                    return jsonify({"ok": False, "message": f"{key} 超出允许范围。"}), 400
+                settings_payload[key] = value
+            else:
+                settings_payload[key] = int(settings_payload.get(key) or default_value)
+
+        result = EnhancedCollectorManager(settings_payload).health_check(probe_candidates=True)
+        return jsonify(
+            {
+                "ok": True,
+                "message": "增强采集服务检测完成。",
                 "result": result,
             }
         )

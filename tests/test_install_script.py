@@ -121,6 +121,24 @@ class InstallScriptTestCase(unittest.TestCase):
         self.assertIn("FQDN:              IP mode", output)
         self.assertIn("ENABLE_TLS:        false", output)
 
+    def test_validate_only_reports_enhanced_collector_config(self) -> None:
+        output = self.assert_shell_ok(
+            "ACCESS_MODE=ip ENHANCED_COLLECTOR_ENABLED=true "
+            "ENHANCED_COLLECTOR_API_URL=http://127.0.0.1:8191 "
+            "bash install.sh --validate-only"
+        )
+
+        self.assertIn("SCRAPLING:         true mode=standard", output)
+        self.assertIn("ENHANCED_COLLECTOR:true http://127.0.0.1:8191", output)
+
+    def test_validate_only_rejects_invalid_enhanced_collector_url(self) -> None:
+        result = self.run_bash(
+            "ACCESS_MODE=ip ENHANCED_COLLECTOR_API_URL=ftp://127.0.0.1:8191 bash install.sh --validate-only"
+        )
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("ENHANCED_COLLECTOR_API_URL must be an http(s) URL", result.stderr)
+
     def test_validate_only_does_not_bootstrap_python_runtime(self) -> None:
         output = self.assert_shell_ok(
             textwrap.dedent(
@@ -149,6 +167,39 @@ class InstallScriptTestCase(unittest.TestCase):
         self.assertIn("NOAFF installer validation passed.", output)
         self.assertNotIn("bootstrap-called", output)
         self.assertNotIn("python3-called", output)
+
+    def test_write_env_file_includes_collector_settings(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir).as_posix()
+            output = self.assert_shell_ok(
+                textwrap.dedent(
+                    f"""
+                    set -Eeuo pipefail
+                    export NOAFF_INSTALL_LIBRARY_MODE=true
+                    source ./install.sh
+                    ensure_python_runtime() {{ :; }}
+                    APP_DIR='{temp_path}'
+                    SECRET_KEY=test-secret
+                    ADMIN_PASSWORD=test-password
+                    ENHANCED_COLLECTOR_ENABLED=true
+                    ENHANCED_COLLECTOR_API_URL=http://127.0.0.1:8191
+                    ENHANCED_COLLECTOR_TIMEOUT_SECONDS=88
+                    ENHANCED_COLLECTOR_MAX_RETRIES=2
+                    SCRAPLING_DEFAULT_MODE=stealth
+                    FIRECRAWL_API_KEY=fc-secret
+                    mkdir -p "$APP_DIR"
+                    write_env_file
+                    cat "$APP_DIR/.env"
+                    """
+                )
+            )
+
+        self.assertIn("ENHANCED_COLLECTOR_ENABLED=true", output)
+        self.assertIn("ENHANCED_COLLECTOR_API_URL=http://127.0.0.1:8191", output)
+        self.assertIn("ENHANCED_COLLECTOR_TIMEOUT_SECONDS=88", output)
+        self.assertIn("ENHANCED_COLLECTOR_MAX_RETRIES=2", output)
+        self.assertIn("SCRAPLING_DEFAULT_MODE=stealth", output)
+        self.assertIn("FIRECRAWL_API_KEY=fc-secret", output)
 
     def test_validate_only_accepts_docker_mode_without_domain(self) -> None:
         output = self.assert_shell_ok("DEPLOY_MODE=docker PUBLIC_APP_PORT=7777 bash install.sh --validate-only")
@@ -643,7 +694,7 @@ class InstallScriptTestCase(unittest.TestCase):
         self.assertNotIn('value="browser"', task_strategy_block)
         self.assertNotIn('value="static_http"', task_strategy_block)
         self.assertNotIn('value="firecrawl"', task_strategy_block)
-        self.assertIn("智能多引擎（推荐）", task_strategy_block)
+        self.assertIn("自动（推荐）", task_strategy_block)
         self.assertIn('id="task-strategy-cards"', portal_html)
         self.assertIn('data-task-strategy-card="multi_engine"', portal_html)
         self.assertIn('data-task-strategy-card="curl_cffi"', portal_html)
@@ -654,6 +705,8 @@ class InstallScriptTestCase(unittest.TestCase):
         self.assertNotIn('data-task-strategy-card="firecrawl"', portal_html)
         self.assertNotIn("外部兜底 / 旧版采集方式", portal_html)
         self.assertIn('id="task-rule-details"', portal_html)
+        self.assertIn('id="task-rule-advanced"', portal_html)
+        self.assertIn('class="task-auto-rule-card"', portal_html)
         self.assertIn('id="task-stock-rule-type"', portal_html)
         self.assertIn('id="task-target-scope-selector"', portal_html)
         self.assertIn('id="task-stock-selector"', portal_html)
@@ -662,7 +715,7 @@ class InstallScriptTestCase(unittest.TestCase):
         self.assertIn('id="task-json-path"', portal_html)
         self.assertIn('id="task-strategy-help"', portal_html)
         self.assertIn('id="task-strategy-summary"', portal_html)
-        self.assertIn("默认使用智能多引擎采集", portal_html)
+        self.assertIn("默认使用自动采集", portal_html)
         self.assertIn('id="task-webhook-hint"', portal_html)
         self.assertIn('id="task-first-check-hint"', portal_html)
         self.assertIn('id="task-wizard-summary"', portal_html)
@@ -679,11 +732,11 @@ class InstallScriptTestCase(unittest.TestCase):
         self.assertIn('id="task-step-next-button"', portal_html)
         self.assertIn("首次创建建议点", portal_html)
         self.assertIn("function fetchStrategyHelp", app_js)
-        self.assertIn("智能多引擎：先用 curl_cffi", app_js)
+        self.assertIn("自动模式：系统优先使用低成本采集", app_js)
         self.assertIn("标准模式：轻量抓取", app_js)
         self.assertIn("高兼容模式：适合复杂页面", app_js)
         self.assertIn('return "multi_engine";', app_js)
-        self.assertIn("新任务建议使用智能多引擎", app_js)
+        self.assertIn("新任务建议使用自动模式", app_js)
         self.assertIn("function updateTaskStrategyUi", app_js)
         self.assertIn("function setTaskStrategy", app_js)
         self.assertIn("function setTaskFormStep", app_js)
@@ -742,11 +795,11 @@ class InstallScriptTestCase(unittest.TestCase):
         self.assertIn('case "catalog_browser_port_busy":', app_js)
         self.assertIn("商品入库浏览器端口被占用", app_js)
         self.assertIn('case "domain_cooldown":', app_js)
-        self.assertIn("同域名保护等待", app_js)
+        self.assertIn("同站点本轮跳过", app_js)
         self.assertIn('case "scrapling_browser_failed":', app_js)
-        self.assertIn("Scrapling 浏览器依赖异常", app_js)
+        self.assertIn("高兼容浏览器启动失败", app_js)
         self.assertIn("function cleanTaskErrorDetail", app_js)
-        self.assertIn("同域名刚刚失败", app_js)
+        self.assertIn("同一站点刚刚失败", app_js)
         self.assertIn("高兼容浏览器启动失败", app_js)
 
     def test_dashboard_template_editor_controls_are_wired(self) -> None:
@@ -996,6 +1049,15 @@ class InstallScriptTestCase(unittest.TestCase):
         self.assertIn('id="settings-scrapling-test-button"', portal_html)
         self.assertIn("普通用户只需要选择默认模式", portal_html)
         self.assertIn("外部兜底", portal_html)
+        self.assertIn("通用外部增强采集", portal_html)
+        self.assertIn('id="settings-enhanced-collector-enabled"', portal_html)
+        self.assertIn('id="settings-enhanced-collector-api-url"', portal_html)
+        self.assertIn('id="settings-enhanced-collector-timeout"', portal_html)
+        self.assertIn('id="settings-enhanced-collector-retries"', portal_html)
+        self.assertIn('id="settings-enhanced-collector-use-for-monitor"', portal_html)
+        self.assertIn('id="settings-enhanced-collector-use-for-catalog"', portal_html)
+        self.assertIn('id="settings-enhanced-collector-test-button"', portal_html)
+        self.assertIn('id="settings-enhanced-collector-test-result"', portal_html)
         self.assertIn("settings-home-note", portal_html)
         self.assertIn('id="settings-firecrawl-api-key" type="password"', portal_html)
         self.assertIn('id="settings-firecrawl-test-button"', portal_html)
@@ -1016,11 +1078,20 @@ class InstallScriptTestCase(unittest.TestCase):
         self.assertIn("scrapling_default_mode: els.settingsScraplingDefaultMode?.value || \"standard\"", app_js)
         self.assertIn("scrapling_timeout_stealth", app_js)
         self.assertIn('settingsFirecrawlTestButton: document.getElementById("settings-firecrawl-test-button")', app_js)
+        self.assertIn('settingsEnhancedCollectorEnabled: document.getElementById("settings-enhanced-collector-enabled")', app_js)
+        self.assertIn('settingsEnhancedCollectorApiUrl: document.getElementById("settings-enhanced-collector-api-url")', app_js)
+        self.assertIn('settingsEnhancedCollectorTestButton: document.getElementById("settings-enhanced-collector-test-button")', app_js)
         self.assertIn("function collectFirecrawlDiagnosticPayload", app_js)
+        self.assertIn("function collectEnhancedCollectorDiagnosticPayload", app_js)
+        self.assertIn("function testEnhancedCollectorConnection", app_js)
+        self.assertIn("/api/settings/enhanced-collector-test", app_js)
         self.assertIn("function testFirecrawlConnection", app_js)
         self.assertIn("/api/settings/firecrawl-test", app_js)
         self.assertIn('settingsFirecrawlTestButton?.addEventListener("click", testFirecrawlConnection)', app_js)
+        self.assertIn('settingsEnhancedCollectorTestButton?.addEventListener("click", testEnhancedCollectorConnection)', app_js)
         self.assertIn("firecrawl_api_key", app_js)
+        self.assertIn("enhanced_collector_enabled", app_js)
+        self.assertIn("enhanced_collector_api_url", app_js)
         self.assertIn(".settings-layout", app_css)
         self.assertIn(".settings-nav-item", app_css)
         self.assertIn(".settings-entry-secondary", app_css)
@@ -1049,6 +1120,7 @@ class InstallScriptTestCase(unittest.TestCase):
         self.assertIn("https://www.firecrawl.dev/app", portal_html)
         self.assertIn("settings-firecrawl", app_js)
         self.assertIn(".settings-firecrawl-grid", app_css)
+        self.assertIn(".external-collector-box", app_css)
         self.assertIn(".firecrawl-test-box", app_css)
         self.assertIn(".firecrawl-test-result.is-ok", app_css)
         self.assertIn(".firecrawl-test-result.is-error", app_css)
@@ -1086,12 +1158,14 @@ class InstallScriptTestCase(unittest.TestCase):
 
         self.assertIn("task-list-stack", app_js)
         self.assertIn(".task-list-stack", app_css)
-        self.assertIn("grid-template-columns: repeat(auto-fill, minmax(20rem, 23rem));", app_css)
+        self.assertIn("grid-template-columns: repeat(auto-fill, minmax(18.5rem, 22.5rem));", app_css)
         self.assertIn("justify-content: start;", app_css)
         self.assertIn("width: 100%;", app_css)
-        self.assertIn("max-width: 23rem;", app_css)
+        self.assertIn("max-width: 22.5rem;", app_css)
         self.assertIn("max-height: none;", app_css)
         self.assertIn("overflow: visible;", app_css)
+        self.assertNotIn("grid-template-columns: repeat(auto-fill, minmax(20rem, 23rem));", app_css)
+        self.assertNotIn("max-width: 23rem;", app_css)
         self.assertNotIn("grid-template-columns: repeat(auto-fill, minmax(min(100%, 20rem), 1fr));", app_css)
         self.assertNotIn("width: min(100%, 21.25rem);", app_css)
         self.assertNotIn("scrollbar-gutter: stable both-edges;", app_css)
@@ -1106,10 +1180,13 @@ class InstallScriptTestCase(unittest.TestCase):
         self.assertIn("data-task-log-details", app_js)
         self.assertIn(".task-row-details", app_css)
         self.assertIn(".task-row-log", app_css)
-        self.assertIn("min-height: 3.55rem;", app_css)
-        self.assertIn("max-height: 8.5rem;", app_css)
+        self.assertIn("min-height: 3.35rem;", app_css)
+        self.assertIn("max-height: 7.25rem;", app_css)
+        self.assertIn("max-height: 2.8rem;", app_css)
         self.assertIn("max-height: none;", app_css)
         self.assertNotIn("height: 3.05rem;", app_css)
+        self.assertNotIn("min-height: 3.55rem;", app_css)
+        self.assertNotIn("max-height: 8.5rem;", app_css)
         self.assertIn(".task-card-header", app_css)
         self.assertIn(".task-card-tags", app_css)
         self.assertIn(".task-status-dot", app_css)
@@ -1117,7 +1194,8 @@ class InstallScriptTestCase(unittest.TestCase):
         self.assertIn(".sortable-drag", app_css)
         self.assertIn("cubic-bezier(0.25, 1, 0.5, 1)", app_css)
         self.assertIn("card.classList.add(\"is-dragging\", \"sortable-drag\")", app_js)
-        self.assertIn("grid-template-columns: minmax(0, 1fr) auto;", app_css)
+        self.assertIn("justify-content: space-between;", app_css)
+        self.assertIn("flex-wrap: wrap;", app_css)
         self.assertIn("container-type: inline-size;", app_css)
         self.assertIn("@container (max-width: 21rem)", app_css)
         self.assertIn("min-height: 7.25rem;", app_css)
@@ -1211,11 +1289,14 @@ class InstallScriptTestCase(unittest.TestCase):
         self.assertIn("发现结果", portal_html)
         self.assertIn("商品预览", portal_html)
         self.assertIn("错误恢复建议", portal_html)
-        self.assertIn("按“来源 → 采集 → 规则 → 执行 → 发现结果 → 商品预览”逐步入库", portal_html)
-        self.assertIn("第一步只发现候选 URL", portal_html)
-        self.assertIn("进入“发现结果”后再抓取选中 URL", portal_html)
-        self.assertIn("语言切换、导航、步骤标题、页脚、无价格/无规格的候选", portal_html)
-        self.assertIn("导入异常时优先填写商品型号、地区或线路关键词", portal_html)
+        self.assertIn("填页面 → 自动发现 → 预览确认 → 创建任务", portal_html)
+        self.assertIn("merchant-quick-flow", portal_html)
+        self.assertIn("merchant-mode-card", portal_html)
+        self.assertIn("data-merchant-mode-preset", portal_html)
+        self.assertIn("高级采集参数", portal_html)
+        self.assertIn("高级筛选参数", portal_html)
+        self.assertIn("先发现候选 URL，再让你选择要抓取的页面", portal_html)
+        self.assertIn("系统会自动过滤语言、导航、页脚、步骤标题和没有价格/规格的候选", portal_html)
         discovery_block = portal_html.split('id="merchant-discovery-strategy"', 1)[1].split("</select>", 1)[0]
         scrape_block = portal_html.split('id="merchant-scrape-strategy"', 1)[1].split("</select>", 1)[0]
         task_strategy_block = portal_html.split('id="merchant-default-fetch-strategy"', 1)[1].split("</select>", 1)[0]
@@ -1250,9 +1331,16 @@ class InstallScriptTestCase(unittest.TestCase):
         self.assertIn("function merchantStockStatusMeta", app_js)
         self.assertIn("function extractorLabel", app_js)
         self.assertIn("function catalogDiscoveryLabel", app_js)
+        self.assertIn("function applyMerchantModePreset", app_js)
+        self.assertIn('data-merchant-mode-preset', app_js)
         self.assertIn("/api/merchant/items/bulk-promote", app_js)
         self.assertIn("backend_used", app_js)
         self.assertIn("任务采集", app_js)
+
+        app_css = (ROOT_DIR / "static" / "app.css").read_text(encoding="utf-8")
+        self.assertIn(".merchant-quick-flow", app_css)
+        self.assertIn(".merchant-mode-cards", app_css)
+        self.assertIn(".merchant-advanced-options", app_css)
 
     def test_docker_publish_port_conflict_is_reported_cleanly(self) -> None:
         result = self.run_bash(

@@ -12,7 +12,7 @@ Complete multi-engine IDC monitoring, product intake, and grouped task managemen
 
 ## Summary
 
-This PR moves NOAFF from a Firecrawl/browser-heavy collector into a multi-engine IDC restock monitor. The default `multi_engine` path uses `curl_cffi` browser-fingerprint HTTP first, then escalates to Scrapling standard, dynamic, and stealth modes only when needed. Firecrawl remains available as an optional external fallback / diagnostics tool, but it is no longer the default high-frequency polling path.
+This PR moves NOAFF from a Firecrawl/browser-heavy collector into a Data Collector + multi-engine IDC restock monitor. The default `multi_engine` path uses `curl_cffi` browser-fingerprint HTTP first, then escalates to Scrapling standard, dynamic, and stealth modes only when needed. Firecrawl remains available as an optional external fallback / diagnostics tool, but it is no longer the default high-frequency polling path.
 
 The project still only monitors public pages. It does not bypass Cloudflare / Turnstile / CAPTCHA. Challenge pages are classified as protected sources and cooled down without changing stock state or sending Telegram messages.
 
@@ -26,6 +26,8 @@ The project still only monitors public pages. It does not bypass Cloudflare / Tu
   - `scrapling_stealth`
   - `scrapling_adaptive`
 - Made `multi_engine` the default strategy for new tasks and product-intake-created tasks.
+- Added a Data Collector layer with `direct`, `curl_cffi`, `external_solver`, `webhook`, and `manual`.
+- Added optional external enhanced collector settings and diagnostics.
 - Added bounded fallback: curl_cffi -> standard -> dynamic -> stealth.
 - Added domain-level result sharing and cooldown to avoid repeatedly fetching the same IDC page/domain in one polling cycle.
 - Added configurable stock parsing rules:
@@ -37,15 +39,12 @@ The project still only monitors public pages. It does not bypass Cloudflare / Tu
   - stock/sold-out selectors
   - button/disabled selector
   - custom keyword lists
-- Rebuilt product intake around a guided multi-engine workflow:
-  - source
-  - collection mode
-  - parsing rules
-  - discovery
-  - candidate URLs
-  - preview
+- Rebuilt product intake around a low-friction workflow:
+  - fill merchant page
+  - automatic discovery
+  - preview and confirm
   - create tasks
-  - recovery suggestions
+  - advanced options collapsed by default
 - Reduced product-intake junk by filtering language switches, navigation, footer links, category/step labels, empty titles, and no-price/no-spec candidates.
 - Added task movement:
   - single-product move
@@ -126,6 +125,13 @@ No manual SQLite migration is required for databases initialized by the app.
 - Firecrawl diagnostics can test current form values without saving the key.
 - Firecrawl API keys are masked in snapshots, logs, and backups.
 - Inventory-sensitive Firecrawl settings keep `FIRECRAWL_MAX_AGE_MS=0` and cache-disabled behavior.
+
+## External Enhanced Collector Notes
+
+- External enhanced collectors are operator-configured and disabled by default.
+- Scheduled monitoring does not call an external collector unless explicitly enabled.
+- The integration is an adapter layer, not built-in challenge-solving logic.
+- Diagnostics can test connectivity without exposing sensitive configuration in snapshots or logs.
 
 ## Protected Source Behavior
 

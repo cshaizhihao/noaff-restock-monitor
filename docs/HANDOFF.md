@@ -12,9 +12,10 @@ Project: NOAFF IDC restock monitor
 
 - Flask dashboard
 - SQLite storage
-- Multi-engine-first fetch pipeline
+- Data Collector + multi-engine-first fetch pipeline
 - `curl_cffi` browser-fingerprint HTTP first layer
 - Legacy DrissionPage / Chromium fallback
+- Optional external enhanced collector adapter
 - Optional Firecrawl external fallback / diagnostics
 - Telegram send/edit/sold-out state machine
 
@@ -29,6 +30,16 @@ Primary user-facing modes:
 - `scrapling_stealth`: high-compatibility browser mode, low concurrency
 - `manual`: dashboard-managed stock state
 - `webhook`: external stock writes
+
+Collector layer:
+
+- `direct`: compatibility wrapper for legacy direct/static/browser fetchers
+- `curl_cffi`: low-cost browser-fingerprint HTTP
+- `external_solver`: optional operator-configured external enhanced collector endpoint
+- `webhook`: external stock write path
+- `manual`: dashboard-managed stock write path
+
+`external_solver` is configuration-only. It can call an operator-owned endpoint such as a compatible solver API, but NOAFF core does not implement challenge solving and does not call an external solver unless explicitly enabled.
 
 Legacy/compatibility modes still exist but are not the default:
 
@@ -75,13 +86,11 @@ The migration is marked by `scrapling_fetch_strategy_migration_v1` and runs once
 - `webhook` tasks accept external stock writes at `POST /api/webhooks/restock/<task_id>`.
 - Webhook token plaintext is returned only once when reset. Database, snapshot, and logs do not expose plaintext tokens.
 - Product intake is guided and multi-engine-first:
-  - source
-  - collection mode
-  - parsing rules
-  - discovery
-  - candidate URLs
-  - product preview
-  - task creation
+  - fill merchant page
+  - automatic discovery
+  - preview and confirm
+  - create tasks
+  - advanced collection/filter parameters are collapsed by default
 - Product intake filters locale switches, navigation, footers, step/category headings, duplicate URLs, and no-price/no-spec candidates.
 - Task dashboard supports hierarchical group/subgroup browsing, subgroup rename/delete, drag sorting, bulk delete, and moving tasks across groups/subgroups.
 - System settings is split into concise 4+4 entry cards and system-level panels only.
@@ -95,6 +104,7 @@ The migration is marked by `scrapling_fetch_strategy_migration_v1` and runs once
   - `FetchResult`, `FetchPipelineResult`, `FetchAttempt`, `ScrapeResult`
   - `CurlCffiFetcher`, `ScraplingFetcher`, `ScraplingSessionManager`
   - `FirecrawlClient`, `FirecrawlFetcher`, `FirecrawlCatalogProvider`
+  - `CollectorRequest`, `CollectorResult`, `ExternalSolverCollector`
   - `BrowserFetcher`, `StaticHttpFetcher`, `ExternalInputFetcher`
   - `FetcherSelector` and bounded fallback pipeline
   - `MonitoringEngine.scrape_task`
@@ -186,6 +196,7 @@ Selector-based rule:
 
 - Sites behind Cloudflare / Turnstile / CAPTCHA are treated as protected sources.
 - The app intentionally does not bypass protected source challenges.
+- External enhanced collectors are optional operator-owned integrations, not built-in challenge bypass.
 - Scrapling improves local collection reliability but does not guarantee protected-site access.
 - Extractors are heuristic and should be extended with offline HTML fixtures for each new IDC merchant pattern.
 - Do not add live-network dependent tests for merchant pages.

@@ -6,7 +6,7 @@ Multi-engine-first IDC monitoring and grouped task management
 
 ## Summary
 
-This release moves NOAFF to a multi-engine-first collection model for public IDC product pages. The default `multi_engine` path uses `curl_cffi` browser-fingerprint HTTP first, then escalates to Scrapling standard, dynamic, and stealth modes only when needed. Firecrawl is kept as an optional external fallback / diagnostics path instead of a high-frequency default.
+This release moves NOAFF to a Data Collector + multi-engine-first collection model for public IDC product pages. The default `multi_engine` path uses `curl_cffi` browser-fingerprint HTTP first, then escalates to Scrapling standard, dynamic, and stealth modes only when needed. Firecrawl is kept as an optional external fallback / diagnostics path instead of a high-frequency default.
 
 The project intentionally does not bypass Cloudflare / Turnstile / CAPTCHA challenges. Cloudflare / Turnstile / CAPTCHA challenge pages are treated as protected sources, cooled down, and reported to the user without changing inventory state or sending Telegram messages.
 
@@ -22,6 +22,8 @@ The project intentionally does not bypass Cloudflare / Turnstile / CAPTCHA chall
   - `manual`
   - `webhook`
 - Reworked the default task and product-intake strategy to `multi_engine`.
+- Added a Data Collector abstraction for `direct`, `curl_cffi`, `external_solver`, `webhook`, and `manual`.
+- Added optional external enhanced collector configuration and diagnostics without making it a hard dependency.
 - Added bounded adaptive escalation: curl_cffi -> standard -> dynamic -> stealth.
 - Added domain-level fetch sharing so one polling cycle can reuse page results across tasks on the same URL/domain.
 - Added domain-level cooldown so protected or failing domains are not repeatedly hit by every task in the same group.
@@ -34,15 +36,12 @@ The project intentionally does not bypass Cloudflare / Turnstile / CAPTCHA chall
   - stock/sold-out selectors
   - button/disabled selector
   - custom in-stock and sold-out keyword lists
-- Upgraded product intake to a guided multi-engine-first workflow:
-  - source URL
-  - collection mode
-  - parsing rules
-  - discovery
-  - candidate URLs
-  - product preview
-  - task creation
-  - recovery suggestions
+- Upgraded product intake to a low-friction guided workflow:
+  - fill merchant page
+  - automatic discovery
+  - preview and confirm
+  - create monitor tasks
+  - advanced collection and filter parameters are collapsed by default
 - Product intake noise filtering now demotes locale switches, navigation, footers, category headings, empty titles, and no-price/no-spec candidates instead of creating junk products.
 - Added hierarchical task browsing with main groups, nested subgroups, current-layer product lists, drag sorting, bulk delete, subgroup rename/delete, and cross-group task movement.
 - Added `POST /api/tasks/move` for moving one or more products to another main group or subgroup without losing state, Telegram message IDs, or source metadata.
@@ -63,6 +62,7 @@ The project intentionally does not bypass Cloudflare / Turnstile / CAPTCHA chall
 - System settings entry cards are constrained to a compact 4+4 layout, avoiding waterfall/masonry layouts and oversized one-page setting stacks.
 - Added Scrapling install/runtime verification to native install, upgrade, and Docker build paths.
 - Firecrawl connection diagnostics remain available, but Firecrawl is no longer the recommended realtime monitor backend.
+- External enhanced collector diagnostics remain available for operator-owned endpoints, but they are opt-in and disabled for scheduled monitoring by default.
 
 ## Migration Notes
 
@@ -145,6 +145,19 @@ FIRECRAWL_USE_FOR_CATALOG=true
 
 Firecrawl hosted can improve some complex page captures, but it is an external provider with cost and privacy tradeoffs. It should not be the default high-frequency monitor backend for an open-source self-hosted restock monitor.
 
+## External Enhanced Collector
+
+NOAFF can optionally call an operator-configured external enhanced collector endpoint:
+
+```env
+ENHANCED_COLLECTOR_ENABLED=false
+ENHANCED_COLLECTOR_API_URL=
+ENHANCED_COLLECTOR_USE_FOR_MONITOR=false
+ENHANCED_COLLECTOR_USE_FOR_CATALOG=true
+```
+
+The integration is deliberately opt-in. The core app does not implement challenge solving, does not call a solver when no URL is configured, and keeps scheduled monitoring disabled by default for external collectors.
+
 ## Product Intake Defaults
 
 Product intake now prefers the local multi-engine path:
@@ -157,7 +170,7 @@ CATALOG_DEFAULT_EXTRACTOR=generic_pricing_table
 CATALOG_DEDUPE_POLICY=by_url
 ```
 
-Firecrawl map/scrape can still be exposed as an external fallback button when the operator explicitly configures it, but the normal flow is local link discovery, multi-engine scraping, extractor/rule preview, and then task creation.
+Firecrawl map/scrape can still be exposed as an external fallback button when the operator explicitly configures it, but the normal flow is: fill page, auto-discover candidates, preview confirmed products, and create tasks.
 
 ## Verification
 
