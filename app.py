@@ -427,6 +427,14 @@ CATALOG_DISCOVERY_STRATEGIES = {
     CATALOG_DISCOVERY_FIRECRAWL_MAP,
     CATALOG_DISCOVERY_HYBRID,
 }
+CATALOG_HIDDEN_PROBE_AUTO = "auto"
+CATALOG_HIDDEN_PROBE_WHMCS = "whmcs"
+CATALOG_HIDDEN_PROBE_HOSTBILL = "hostbill"
+CATALOG_HIDDEN_PROBE_PLATFORMS = {
+    CATALOG_HIDDEN_PROBE_AUTO,
+    CATALOG_HIDDEN_PROBE_WHMCS,
+    CATALOG_HIDDEN_PROBE_HOSTBILL,
+}
 CATALOG_SCRAPE_STATIC_HTTP = FETCH_STRATEGY_STATIC_HTTP
 CATALOG_SCRAPE_BROWSER = FETCH_STRATEGY_BROWSER
 CATALOG_SCRAPE_FIRECRAWL = FETCH_STRATEGY_FIRECRAWL
@@ -1015,6 +1023,18 @@ def normalize_catalog_options(
         "exclude_paths": split_catalog_paths(payload.get("exclude_paths")),
         "allow_subdomains": parse_setting_bool(payload.get("allow_subdomains"), False),
         "ignore_query_parameters": parse_setting_bool(payload.get("ignore_query_parameters"), False),
+        "enable_hidden_product_probe": parse_setting_bool(
+            payload.get("enable_hidden_product_probe") or payload.get("hidden_product_probe"),
+            False,
+        ),
+        "hidden_probe_platform": normalize_catalog_choice(
+            payload.get("hidden_probe_platform") or payload.get("hidden_product_platform"),
+            CATALOG_HIDDEN_PROBE_PLATFORMS,
+            CATALOG_HIDDEN_PROBE_AUTO,
+        ),
+        "hidden_probe_start": catalog_option_int(payload.get("hidden_probe_start"), 1, 0, 5000),
+        "hidden_probe_end": catalog_option_int(payload.get("hidden_probe_end"), 60, 0, 5000),
+        "hidden_probe_limit": catalog_option_int(payload.get("hidden_probe_limit"), 40, 1, 250),
     }
 
 
@@ -1414,6 +1434,49 @@ def whmcs_add_url_from_pid(url: str, pid: int) -> str:
     if not parsed.scheme or not parsed.netloc:
         return url
     return parsed._replace(path="/cart.php", query=urlencode({"a": "add", "pid": int(pid)}), fragment="").geturl()
+
+
+def hostbill_product_url_from_id(url: str, product_id: int) -> str:
+    parsed = urlparse(str(url or ""))
+    if not parsed.scheme or not parsed.netloc:
+        return url
+    return parsed._replace(path="/cart/", query=urlencode({"action": "add", "id": int(product_id)}), fragment="").geturl()
+
+
+def hostbill_category_url_from_id(url: str, category_id: int) -> str:
+    parsed = urlparse(str(url or ""))
+    if not parsed.scheme or not parsed.netloc:
+        return url
+    return parsed._replace(path=parsed.path or "/", query=urlencode({"cmd": "cart", "cat_id": int(category_id)}), fragment="").geturl()
+
+
+def hidden_probe_ids(options: dict[str, Any]) -> list[int]:
+    start = catalog_option_int(options.get("hidden_probe_start"), 1, 0, 5000)
+    end = catalog_option_int(options.get("hidden_probe_end"), 60, 0, 5000)
+    limit = catalog_option_int(options.get("hidden_probe_limit"), 40, 1, 250)
+    if end < start:
+        start, end = end, start
+    return list(range(start, min(end, start + limit - 1) + 1))
+
+
+def hidden_catalog_probe_candidates(source_url: str, options: dict[str, Any]) -> list[dict[str, str]]:
+    if not parse_setting_bool(options.get("enable_hidden_product_probe"), False):
+        return []
+    platform = normalize_catalog_choice(
+        options.get("hidden_probe_platform"),
+        CATALOG_HIDDEN_PROBE_PLATFORMS,
+        CATALOG_HIDDEN_PROBE_AUTO,
+    )
+    candidates: list[dict[str, str]] = []
+    for probe_id in hidden_probe_ids(options):
+        if probe_id <= 0:
+            continue
+        if platform in {CATALOG_HIDDEN_PROBE_AUTO, CATALOG_HIDDEN_PROBE_WHMCS}:
+            candidates.append({"url": whmcs_add_url_from_pid(source_url, probe_id), "source": "whmcs_pid_probe"})
+        if platform in {CATALOG_HIDDEN_PROBE_AUTO, CATALOG_HIDDEN_PROBE_HOSTBILL}:
+            candidates.append({"url": hostbill_product_url_from_id(source_url, probe_id), "source": "hostbill_product_probe"})
+            candidates.append({"url": hostbill_category_url_from_id(source_url, probe_id), "source": "hostbill_category_probe"})
+    return candidates
 
 
 def monitor_url_for_fetch(task: Any) -> str:
@@ -6107,6 +6170,9 @@ class MonitoringEngine:
             for link in parse_firecrawl_map_links(map_result):
                 add_candidate(link, "firecrawl_map")
 
+        for candidate in hidden_catalog_probe_candidates(source_url, options):
+            add_candidate(str(candidate.get("url") or ""), str(candidate.get("source") or "hidden_probe"))
+
         return candidates[: int(options.get("max_discovered_urls") or 50)]
 
     def catalog_source_title(self, source_url: str, source_name: str, html_text: str = "") -> str:
@@ -8819,9 +8885,26 @@ def catalog_url_key(candidate_url: str, dedupe_policy: str = "by_url", ignore_qu
     if dedupe_policy == "by_pid" and (query_values.get("pid") or query_values.get("gid")):
         marker = query_values.get("pid", query_values.get("gid", [""]))[0]
         return f"{parsed.scheme}://{parsed.netloc}{parsed.path}?{('pid' if query_values.get('pid') else 'gid')}={marker}".lower()
+    if dedupe_policy == "by_pid" and (query_values.get("id") or query_values.get("cat_id")):
+        marker_key = "id" if query_values.get("id") else "cat_id"
+        marker = query_values.get(marker_key, [""])[0]
+        return f"{parsed.scheme}://{parsed.netloc}{parsed.path}?{marker_key}={marker}".lower()
     if ignore_query_parameters:
         query = ""
     return parsed._replace(fragment="", query=query).geturl().rstrip("/").lower()
+
+
+def is_hidden_catalog_probe_url(candidate_url: str) -> bool:
+    parsed = urlparse(candidate_url)
+    path = (parsed.path or "").lower()
+    query = parse_qs(parsed.query, keep_blank_values=True)
+    action = first_non_empty(*(query.get("a") or query.get("action") or [])).lower()
+    command = first_non_empty(*(query.get("cmd") or [])).lower()
+    if path.endswith("cart.php") and action == "add" and query.get("pid"):
+        return True
+    if path.rstrip("/").endswith("/cart") and action == "add" and query.get("id"):
+        return True
+    return bool(command == "cart" and query.get("cat_id"))
 
 
 def is_catalog_candidate_url(source_url: str, candidate_url: str, options: dict[str, Any]) -> bool:
@@ -8837,6 +8920,8 @@ def is_catalog_candidate_url(source_url: str, candidate_url: str, options: dict[
         return False
     if exclude_paths and any(part in haystack for part in exclude_paths):
         return False
+    if is_hidden_catalog_probe_url(candidate_url):
+        return True
     if any(marker in haystack for marker in CATALOG_URL_DROP_MARKERS):
         return False
     if any(marker in haystack for marker in CATALOG_URL_KEEP_MARKERS):
@@ -8925,18 +9010,37 @@ def prepare_catalog_item(item: dict[str, Any], source_url: str, page_url: str, d
     prepared["monitor_url"] = normalize_candidate_url(page_url, prepared.get("monitor_url", "")) or page_url
     prepared["item_url"] = normalize_candidate_url(page_url, prepared.get("item_url", "")) or prepared["monitor_url"]
     prepared["fetch_strategy"] = options.get("default_fetch_strategy") or DEFAULT_TASK_FETCH_STRATEGY
+    configured_extractor = options.get("default_extractor") or CATALOG_EXTRACTOR_GENERIC
     prepared["source_config"] = {
-        "extractor": options.get("default_extractor") or CATALOG_EXTRACTOR_GENERIC,
+        "extractor": configured_extractor,
         "catalog_backend": backend_used,
         "catalog_discovery_source": discovery_source,
         "catalog_source_url": source_url,
     }
+    probe_urls = [prepared["monitor_url"], prepared["item_url"], page_url]
+    pid = next((value for value in (extract_query_int(url, "pid") for url in probe_urls) if value is not None), None)
+    gid = next((value for value in (extract_query_int(url, "gid") for url in probe_urls) if value is not None), None)
+    hostbill_id = next((value for value in (extract_query_int(url, "id") for url in probe_urls) if value is not None), None)
+    hostbill_cat_id = next((value for value in (extract_query_int(url, "cat_id") for url in probe_urls) if value is not None), None)
+    if pid is not None:
+        prepared["source_config"]["pid"] = pid
+        prepared["source_config"]["enable_whmcs_pid_probe"] = True
+        if configured_extractor == CATALOG_EXTRACTOR_GENERIC:
+            prepared["source_config"]["extractor"] = CATALOG_EXTRACTOR_WHMCS
+    if gid is not None:
+        prepared["source_config"]["gid"] = gid
+        if configured_extractor == CATALOG_EXTRACTOR_GENERIC:
+            prepared["source_config"]["extractor"] = CATALOG_EXTRACTOR_WHMCS
+    if hostbill_id is not None and ("hostbill" in discovery_source or is_hidden_catalog_probe_url(prepared["monitor_url"])):
+        prepared["source_config"]["hostbill_id"] = hostbill_id
+    if hostbill_cat_id is not None:
+        prepared["source_config"]["hostbill_cat_id"] = hostbill_cat_id
     payload = {
         "catalog_backend": backend_used,
         "catalog_discovery_source": discovery_source,
         "catalog_page_url": page_url,
         "fetch_strategy": prepared["fetch_strategy"],
-        "extractor": options.get("default_extractor") or CATALOG_EXTRACTOR_GENERIC,
+        "extractor": prepared["source_config"]["extractor"],
         "source_config": prepared["source_config"],
         "confidence": prepared.get("confidence", 0),
         "candidate_type": prepared.get("candidate_type", ""),

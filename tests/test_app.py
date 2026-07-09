@@ -860,6 +860,95 @@ class PortalAppTestCase(unittest.TestCase):
         self.assertEqual(result.items[0]["fetch_strategy"], "scrapling_adaptive")
         self.assertEqual(result.items[0]["backend_used"], "scrapling_adaptive")
 
+    def test_hidden_catalog_probe_candidates_include_whmcs_and_hostbill_shapes(self) -> None:
+        options = {
+            "enable_hidden_product_probe": True,
+            "hidden_probe_platform": "auto",
+            "hidden_probe_start": 7,
+            "hidden_probe_end": 8,
+            "hidden_probe_limit": 2,
+        }
+
+        candidates = app_module.hidden_catalog_probe_candidates("https://billing.example.com/store/vps", options)
+        urls_by_source = {(candidate["source"], candidate["url"]) for candidate in candidates}
+
+        self.assertIn(("whmcs_pid_probe", "https://billing.example.com/cart.php?a=add&pid=7"), urls_by_source)
+        self.assertIn(("whmcs_pid_probe", "https://billing.example.com/cart.php?a=add&pid=8"), urls_by_source)
+        self.assertIn(("hostbill_product_probe", "https://billing.example.com/cart/?action=add&id=7"), urls_by_source)
+        self.assertIn(("hostbill_category_probe", "https://billing.example.com/store/vps?cmd=cart&cat_id=8"), urls_by_source)
+
+    def test_catalog_candidate_filter_allows_hidden_product_probe_urls(self) -> None:
+        options = {"allow_subdomains": False, "dedupe_policy": "by_pid"}
+
+        self.assertTrue(
+            app_module.is_catalog_candidate_url(
+                "https://billing.example.com/store/vps",
+                "https://billing.example.com/cart.php?a=add&pid=42",
+                options,
+            )
+        )
+        self.assertTrue(
+            app_module.is_catalog_candidate_url(
+                "https://billing.example.com/store/vps",
+                "https://billing.example.com/cart/?action=add&id=42",
+                options,
+            )
+        )
+
+    def test_prepare_catalog_item_preserves_whmcs_pid_probe_metadata(self) -> None:
+        item = {
+            "title": "HK VPS",
+            "keyword": "HK VPS",
+            "monitor_url": "https://billing.example.com/cart.php?a=add&pid=42",
+            "item_url": "https://billing.example.com/cart.php?a=add&pid=42",
+        }
+        prepared = app_module.prepare_catalog_item(
+            item,
+            "https://billing.example.com/store/vps",
+            "https://billing.example.com/cart.php?a=add&pid=42",
+            "whmcs_pid_probe",
+            "scrapling_adaptive",
+            {
+                "default_fetch_strategy": "multi_engine",
+                "default_extractor": app_module.CATALOG_EXTRACTOR_GENERIC,
+            },
+        )
+
+        self.assertEqual(prepared["source_config"]["pid"], 42)
+        self.assertTrue(prepared["source_config"]["enable_whmcs_pid_probe"])
+        self.assertEqual(prepared["source_config"]["extractor"], app_module.CATALOG_EXTRACTOR_WHMCS)
+        self.assertEqual(app_module.monitor_url_for_fetch(prepared), "https://billing.example.com/cart.php?a=add&pid=42")
+
+    def test_catalog_discovery_adds_hidden_whmcs_pid_candidates_when_enabled(self) -> None:
+        engine = self.app.extensions["monitor_engine"]
+        options = app_module.normalize_catalog_options(
+            {
+                "catalog_discovery_strategy": "local",
+                "enable_hidden_product_probe": True,
+                "hidden_probe_platform": "whmcs",
+                "hidden_probe_start": 41,
+                "hidden_probe_end": 43,
+                "hidden_probe_limit": 3,
+                "dedupe_policy": "by_pid",
+                "max_discovered_urls": 10,
+            },
+            engine.get_runtime_settings(),
+            "Example",
+            False,
+        )
+
+        candidates = engine.discover_catalog_candidate_urls(
+            "https://billing.example.com/store/vps",
+            "<html><body><main>No visible products</main></body></html>",
+            engine.get_runtime_settings(),
+            options,
+        )
+        candidate_pairs = {(candidate["source"], candidate["url"]) for candidate in candidates}
+
+        self.assertIn(("entry", "https://billing.example.com/store/vps"), candidate_pairs)
+        self.assertIn(("whmcs_pid_probe", "https://billing.example.com/cart.php?a=add&pid=41"), candidate_pairs)
+        self.assertIn(("whmcs_pid_probe", "https://billing.example.com/cart.php?a=add&pid=43"), candidate_pairs)
+
     def test_catalog_discovery_scores_products_and_filters_locale_navigation_noise(self) -> None:
         html_text = """
         <html>
