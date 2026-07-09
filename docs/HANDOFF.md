@@ -41,6 +41,14 @@ Collector layer:
 
 `external_solver` is configuration-only. It can call an operator-owned endpoint such as a compatible solver API, but NOAFF core does not implement challenge solving and does not call an external solver unless explicitly enabled.
 
+External collector URLs are normalized before use. Supported operator input examples:
+
+- `127.0.0.1:8191`
+- `http://127.0.0.1:8191`
+- `http://127.0.0.1:8191/v1/`
+
+All normalize to the service root so diagnostics and runtime calls do not accidentally double-append API paths.
+
 Legacy/compatibility modes still exist but are not the default:
 
 - `scrapling_adaptive`
@@ -128,6 +136,7 @@ The migration is marked by `scrapling_fetch_strategy_migration_v1` and runs once
 - `install.sh`
   - native/Docker installer
   - safe.directory handling
+  - enhanced collector URL normalization in generated `.env`
   - Scrapling runtime verification
   - panel upgrade service
 - `Dockerfile`
@@ -156,7 +165,7 @@ git diff --check
 
 Current baseline:
 
-- 177 tests passing
+- 233 tests passing
 - Python compile check passing
 - `static/app.js` syntax check passing
 - `install.sh` bash syntax check passing

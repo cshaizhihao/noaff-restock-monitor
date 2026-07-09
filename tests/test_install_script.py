@@ -870,7 +870,7 @@ class InstallScriptTestCase(unittest.TestCase):
         self.assertIn("does not bypass Cloudflare / Turnstile / CAPTCHA", release_notes)
         self.assertIn("Cloudflare / Turnstile / CAPTCHA challenge pages are treated as protected sources", release_notes)
         self.assertIn("Webhook tokens are stored as HMAC hashes", release_notes)
-        self.assertIn("177 tests passing", release_notes)
+        self.assertIn("233 tests passing", release_notes)
         self.assertIn("Multi-engine-first", release_notes)
         self.assertIn("multi_engine", release_notes)
         self.assertIn("scrapling_fetch_strategy_migration_v1", release_notes)

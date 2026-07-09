@@ -63,6 +63,8 @@ The project intentionally does not bypass Cloudflare / Turnstile / CAPTCHA chall
 - Added Scrapling install/runtime verification to native install, upgrade, and Docker build paths.
 - Firecrawl connection diagnostics remain available, but Firecrawl is no longer the recommended realtime monitor backend.
 - External enhanced collector diagnostics remain available for operator-owned endpoints, but they are opt-in and disabled for scheduled monitoring by default.
+- External enhanced collector URLs are normalized, so `127.0.0.1:8191`, `http://127.0.0.1:8191`, and `http://127.0.0.1:8191/v1/` resolve to the same service root.
+- The upgrade service now marks the app checkout as Git `safe.directory` before fetching, avoiding `dubious ownership` failures on older installs.
 
 ## Migration Notes
 
@@ -158,6 +160,8 @@ ENHANCED_COLLECTOR_USE_FOR_CATALOG=true
 
 The integration is deliberately opt-in. The core app does not implement challenge solving, does not call a solver when no URL is configured, and keeps scheduled monitoring disabled by default for external collectors.
 
+The URL field accepts a host/port or full HTTP(S) URL. The installer and backend normalize compatible forms such as `127.0.0.1:8191/v1/` to the service root before saving or calling diagnostics.
+
 ## Product Intake Defaults
 
 Product intake now prefers the local multi-engine path:
@@ -186,7 +190,7 @@ git diff --check
 
 Current baseline:
 
-- 177 tests passing
+- 233 tests passing
 - Python compile check passing
 - `static/app.js` syntax check passing
 - `install.sh` bash syntax check passing

@@ -81,6 +81,8 @@ The project still only monitors public pages. It does not bypass Cloudflare / Tu
   - runtime logs
 - Kept settings entry cards constrained to a compact 4+4 layout; no masonry/waterfall layout.
 - Added Scrapling/curl_cffi runtime checks in native install, upgrade, and Docker build flows.
+- Normalized external enhanced collector URLs in installer/backend configuration handling.
+- Hardened the upgrade service by adding Git `safe.directory` before fetch.
 - Updated README, handoff notes, release notes, PR draft, and environment documentation.
 
 ## Database Migration
@@ -132,6 +134,7 @@ No manual SQLite migration is required for databases initialized by the app.
 - Scheduled monitoring does not call an external collector unless explicitly enabled.
 - The integration is an adapter layer, not built-in challenge-solving logic.
 - Diagnostics can test connectivity without exposing sensitive configuration in snapshots or logs.
+- The URL field accepts `host:port`, `http(s)://host:port`, and `/v1`-suffixed forms; the app normalizes these to the service root.
 
 ## Protected Source Behavior
 
@@ -156,7 +159,7 @@ git diff --check
 
 Current result:
 
-- 177 tests passing
+- 233 tests passing
 - Python compile check passing
 - `static/app.js` syntax check passing
 - `install.sh` bash syntax check passing

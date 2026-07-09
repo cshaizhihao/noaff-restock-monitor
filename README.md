@@ -28,6 +28,7 @@ NOAFF Restock Monitor 用来监控 IDC、VPS、独服、WHMCS 商店等公开商
 - Scrapling 仍是本地浏览器增强层，用于标准、增强、高兼容模式。
 - Data Collector 层统一封装 `direct`、`curl_cffi`、`external_solver`、`webhook`、`manual`，后续增加采集后端不再直接污染监控状态机。
 - 外部增强采集服务可以通过 `ENHANCED_COLLECTOR_API_URL` 接入，用于个人自建的增强采集服务；默认不启用，不作为内置挑战绕过。
+- 外部增强采集地址会自动规范化，`127.0.0.1:8191`、`http://127.0.0.1:8191`、`http://127.0.0.1:8191/v1/` 都会归一到同一个服务根地址。
 - Firecrawl 保留为外部兜底/诊断能力，不再作为定时监控首选。
 - 旧 `browser`、`static_http`、Firecrawl pipeline 任务会在升级时平滑迁移到多引擎或本地增强策略。
 - `manual` / `webhook` 仍是完全受保护页面的可靠兜底方案。
@@ -185,6 +186,14 @@ ENHANCED_COLLECTOR_API_URL=
 ENHANCED_COLLECTOR_USE_FOR_MONITOR=false
 ENHANCED_COLLECTOR_USE_FOR_CATALOG=true
 ```
+
+如果你自建了兼容 solver 服务，地址可以填写：
+
+```env
+ENHANCED_COLLECTOR_API_URL=127.0.0.1:8191
+```
+
+系统会自动补齐 `http://` 并去掉 `/v1` 这类 API 路径后缀。只有显式开启 `ENHANCED_COLLECTOR_ENABLED=true`，并允许对应场景使用时，后台才会调用它。
 
 后台“外部兜底”页可以做一次连接检测；检测不会把密钥或敏感配置写入日志/snapshot。
 
@@ -402,6 +411,7 @@ sudo journalctl -u noaff-monitor -n 100 --no-pager
 - 安装 `requirements.txt`
 - 检测 Scrapling runtime
 - 重启服务
+- 在拉取代码前自动为应用目录写入 Git `safe.directory`，兼容老版本 root / service 用户混用造成的 `dubious ownership` 拦截。
 
 如果遇到 Git `dubious ownership`，新版安装/升级脚本会自动配置 safe.directory。老版本可手动执行：
 
@@ -423,7 +433,7 @@ git diff --check
 
 当前基线：
 
-- 177 tests passing
+- 233 tests passing
 - Python compile check passing
 - `static/app.js` syntax check passing
 - `install.sh` bash syntax check passing
