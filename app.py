@@ -343,6 +343,7 @@ FETCH_STRATEGY_SCRAPLING_STANDARD = "scrapling_standard"
 FETCH_STRATEGY_SCRAPLING_DYNAMIC = "scrapling_dynamic"
 FETCH_STRATEGY_SCRAPLING_STEALTH = "scrapling_stealth"
 FETCH_STRATEGY_SCRAPLING_ADAPTIVE = "scrapling_adaptive"
+FETCH_STRATEGY_HEADED_SESSION = "headed_session"
 FETCH_STRATEGY_MANUAL = "manual"
 FETCH_STRATEGY_WEBHOOK = "webhook"
 COLLECTOR_DIRECT = "direct"
@@ -367,6 +368,7 @@ SUPPORTED_FETCH_STRATEGIES = {
     FETCH_STRATEGY_SCRAPLING_DYNAMIC,
     FETCH_STRATEGY_SCRAPLING_STEALTH,
     FETCH_STRATEGY_SCRAPLING_ADAPTIVE,
+    FETCH_STRATEGY_HEADED_SESSION,
     FETCH_STRATEGY_MANUAL,
     FETCH_STRATEGY_WEBHOOK,
 }
@@ -396,6 +398,7 @@ SCRAPLING_FETCH_STRATEGIES = {
     FETCH_STRATEGY_SCRAPLING_STEALTH,
     FETCH_STRATEGY_SCRAPLING_ADAPTIVE,
 }
+HEADED_SESSION_FETCH_STRATEGIES = {FETCH_STRATEGY_HEADED_SESSION}
 LEGACY_FETCH_STRATEGY_MIGRATIONS = {
     FETCH_STRATEGY_BROWSER: FETCH_STRATEGY_SCRAPLING_DYNAMIC,
     FETCH_STRATEGY_STATIC_HTTP: FETCH_STRATEGY_CURL_CFFI,
@@ -1406,9 +1409,20 @@ def product_query_slug_from_keyword(value: Any) -> str:
     return ""
 
 
+def whmcs_add_url_from_pid(url: str, pid: int) -> str:
+    parsed = urlparse(str(url or ""))
+    if not parsed.scheme or not parsed.netloc:
+        return url
+    return parsed._replace(path="/cart.php", query=urlencode({"a": "add", "pid": int(pid)}), fragment="").geturl()
+
+
 def monitor_url_for_fetch(task: Any) -> str:
     url = str(mapping_value(task, "monitor_url", "") or "").strip()
     source_config = task_source_config(task)
+    if parse_setting_bool(source_config.get("enable_whmcs_pid_probe"), False):
+        pid = parse_int_value(source_config.get("pid") or source_config.get("product_id") or source_config.get("productId"))
+        if pid is not None:
+            return whmcs_add_url_from_pid(url, pid)
     if not parse_setting_bool(source_config.get("enable_product_query"), False):
         return url
     if parse_setting_bool(source_config.get("disable_product_query"), False) or parse_setting_bool(
@@ -4971,6 +4985,50 @@ class ScraplingSessionManager:
         return ScraplingFetcher(self.settings, mode, self.client)
 
 
+class HeadedSessionFetcher:
+    def __init__(self, settings_payload: dict[str, Any], unlocker: DomainSessionUnlocker | None = None) -> None:
+        self.settings = settings_payload
+        self.unlocker = unlocker or DomainSessionUnlocker()
+
+    def fetch(self, url: str, timeout_seconds: int) -> FetchResult:
+        timeout = int(
+            self.settings.get("scrapling_timeout_stealth")
+            or self.settings.get("domain_session_unlock_timeout_seconds")
+            or timeout_seconds
+            or DOMAIN_SESSION_UNLOCK_TIMEOUT_SECONDS
+        )
+        source_config = raw_source_config(self.settings.get("source_config", {}))
+        target_keyword = str(source_config.get("target_keyword") or self.settings.get("target_keyword") or "").strip()
+        result = self.unlocker.unlock(url, target_keyword=target_keyword, timeout_seconds=timeout)
+        html_text = result.html or ""
+        final_url = result.final_url or url
+        if result.status == DOMAIN_SESSION_STATUS_READY and html_text:
+            if looks_like_cloudflare_challenge(html_text, extract_page_title(html_text), final_url):
+                return FetchResult(
+                    html="",
+                    final_url=final_url,
+                    error_kind="cloudflare_challenge",
+                    detail="有头会话仍停留在受保护页面，未拿到商品内容。",
+                )
+            return FetchResult(
+                html=html_text,
+                final_url=final_url,
+                detail="headed_session ok",
+            )
+        if html_text and looks_like_cloudflare_challenge(html_text, extract_page_title(html_text), final_url):
+            return FetchResult(
+                html="",
+                final_url=final_url,
+                error_kind="cloudflare_challenge",
+                detail=result.detail or "有头会话仍停留在受保护页面，未拿到商品内容。",
+            )
+        detail = result.detail or "有头会话没有拿到可解析商品页。"
+        error_kind = classify_browser_error(detail) or "headed_session_failed"
+        if any(token in detail.lower() for token in ("timeout", "timed out", "超时")):
+            error_kind = "timeout"
+        return FetchResult(html="", final_url=final_url, error_kind=error_kind, detail=detail)
+
+
 def scrapling_response_html(response: Any) -> str:
     for attr in ("html_content", "text", "body", "content"):
         value = getattr(response, attr, "")
@@ -5291,16 +5349,21 @@ class FetcherSelector:
         firecrawl_fetcher: FirecrawlFetcher | None = None,
         external_solver_collector: ExternalSolverCollector | None = None,
         scrapling_client: Any = None,
+        headed_session_fetcher: HeadedSessionFetcher | None = None,
     ) -> None:
         self.static_http_fetcher = static_http_fetcher or StaticHttpFetcher()
         self.curl_cffi_fetcher = curl_cffi_fetcher or CurlCffiFetcher()
         self.firecrawl_fetcher = firecrawl_fetcher
         self.external_solver_collector = external_solver_collector or ExternalSolverCollector()
         self.scrapling_client = scrapling_client
+        self.headed_session_fetcher = headed_session_fetcher
 
     def settings_for_task(self, settings_payload: dict[str, Any] | None, task: Any) -> dict[str, Any]:
         effective = dict(settings_payload or {})
         effective["source_config"] = raw_source_config(mapping_value(task, "source_config", "{}"))
+        target_keyword = str(mapping_value(task, "target_keyword", "") or "").strip()
+        if target_keyword and isinstance(effective["source_config"], dict):
+            effective["source_config"].setdefault("target_keyword", target_keyword)
         return effective
 
     def select(
@@ -5308,7 +5371,7 @@ class FetcherSelector:
         task: Any,
         browser_harness: BrowserHarness,
         settings_payload: dict[str, Any] | None = None,
-    ) -> BrowserFetcher | StaticHttpFetcher | CurlCffiFetcher | FirecrawlFetcher | ExternalInputFetcher | ScraplingFetcher:
+    ) -> BrowserFetcher | StaticHttpFetcher | CurlCffiFetcher | FirecrawlFetcher | ExternalInputFetcher | ScraplingFetcher | HeadedSessionFetcher:
         strategy = task_fetch_strategy(task)
         if strategy == FETCH_STRATEGY_CURL_CFFI:
             return self.curl_cffi_fetcher
@@ -5318,6 +5381,8 @@ class FetcherSelector:
             return FirecrawlFetcher(settings_payload or {})
         if strategy in SCRAPLING_FETCH_STRATEGIES:
             return ScraplingFetcher(settings_payload or {}, scrapling_mode_for_backend(strategy), self.scrapling_client)
+        if strategy == FETCH_STRATEGY_HEADED_SESSION:
+            return self.headed_session_fetcher or HeadedSessionFetcher(settings_payload or {})
         if strategy in STATIC_HTTP_FETCH_STRATEGIES:
             return self.static_http_fetcher
         if strategy in EXTERNAL_INPUT_FETCH_STRATEGIES:
@@ -5329,7 +5394,7 @@ class FetcherSelector:
         backend: str,
         browser_harness: BrowserHarness,
         settings_payload: dict[str, Any] | None = None,
-    ) -> BrowserFetcher | StaticHttpFetcher | CurlCffiFetcher | FirecrawlFetcher | ExternalInputFetcher | ScraplingFetcher:
+    ) -> BrowserFetcher | StaticHttpFetcher | CurlCffiFetcher | FirecrawlFetcher | ExternalInputFetcher | ScraplingFetcher | HeadedSessionFetcher:
         if backend == FETCH_STRATEGY_CURL_CFFI:
             return self.curl_cffi_fetcher
         if backend == FETCH_STRATEGY_FIRECRAWL:
@@ -5338,6 +5403,8 @@ class FetcherSelector:
             return FirecrawlFetcher(settings_payload or {})
         if backend in SCRAPLING_FETCH_STRATEGIES:
             return ScraplingFetcher(settings_payload or {}, scrapling_mode_for_backend(backend), self.scrapling_client)
+        if backend == FETCH_STRATEGY_HEADED_SESSION:
+            return self.headed_session_fetcher or HeadedSessionFetcher(settings_payload or {})
         if backend == FETCH_STRATEGY_STATIC_HTTP:
             return self.static_http_fetcher
         if backend in EXTERNAL_INPUT_FETCH_STRATEGIES:
@@ -5362,6 +5429,7 @@ class FetcherSelector:
             FETCH_STRATEGY_SCRAPLING_DYNAMIC,
             FETCH_STRATEGY_SCRAPLING_STEALTH,
             FETCH_STRATEGY_CURL_CFFI,
+            FETCH_STRATEGY_HEADED_SESSION,
         }:
             return [strategy]
         if strategy == FETCH_STRATEGY_MULTI_ENGINE:
@@ -5370,6 +5438,7 @@ class FetcherSelector:
                 FETCH_STRATEGY_SCRAPLING_STANDARD,
                 FETCH_STRATEGY_SCRAPLING_DYNAMIC,
                 FETCH_STRATEGY_SCRAPLING_STEALTH,
+                FETCH_STRATEGY_HEADED_SESSION,
             ]
         if strategy == FETCH_STRATEGY_SCRAPLING_ADAPTIVE:
             return [
@@ -5430,7 +5499,7 @@ class FetcherSelector:
         if next_backend in SCRAPLING_FETCH_STRATEGIES and not settings_payload.get("scrapling_enabled", True):
             return False
         if result.error_kind == "domain_session_required":
-            return False
+            return next_backend in SCRAPLING_FETCH_STRATEGIES or next_backend == FETCH_STRATEGY_HEADED_SESSION
         if next_backend == FETCH_STRATEGY_SCRAPLING_STANDARD:
             return result.error_kind in {
                 "cloudflare_challenge",
@@ -5454,6 +5523,19 @@ class FetcherSelector:
                 "curl_cffi_unavailable",
                 "scrapling_browser_failed",
                 "scrapling_unavailable",
+            }
+        if next_backend == FETCH_STRATEGY_HEADED_SESSION:
+            return result.error_kind in {
+                "cloudflare_challenge",
+                "scrapling_challenge_upgrade_required",
+                "timeout",
+                "request_error",
+                "empty_response",
+                "http_error",
+                "curl_cffi_unavailable",
+                "scrapling_browser_failed",
+                "scrapling_unavailable",
+                "domain_session_required",
             }
         if next_backend == FETCH_STRATEGY_FIRECRAWL and not settings_payload.get("firecrawl_enabled"):
             return False
@@ -5587,7 +5669,7 @@ class FetcherSelector:
             if not next_backend or not self.should_try_next_backend(last_result, next_backend, settings_payload):
                 break
 
-        needs_domain_session = any(attempt.error_kind == "domain_session_required" for attempt in attempts)
+        needs_domain_session = last_result.error_kind == "domain_session_required"
         if needs_domain_session:
             domain = fetch_domain_for_url(last_result.final_url or url) or fetch_domain_for_url(url)
             return FetchPipelineResult(

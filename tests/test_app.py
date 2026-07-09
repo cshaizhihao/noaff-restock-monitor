@@ -4642,6 +4642,19 @@ class PortalAppTestCase(unittest.TestCase):
         self.assertIn("product=hkg.as3.pro.tiny", fetch_url)
         self.assertIn("region=hong-kong", fetch_url)
 
+    def test_monitor_url_for_fetch_uses_whmcs_pid_probe_when_enabled(self) -> None:
+        task = {
+            "monitor_url": "https://billing.example.com/index.php?rp=/store/hk-vps",
+            "target_keyword": "HK VPS",
+            "fetch_strategy": "multi_engine",
+            "source_config": {"enable_whmcs_pid_probe": True, "pid": 42},
+        }
+
+        self.assertEqual(
+            app_module.monitor_url_for_fetch(task),
+            "https://billing.example.com/cart.php?a=add&pid=42",
+        )
+
     def test_fetch_cache_key_preserves_idc_cart_category_url_by_default(self) -> None:
         base_url = "https://www.dmit.io/cart.php?region=hong-kong&network=premium&generation=as3"
         tiny_key = app_module.fetch_cache_key(
@@ -5077,6 +5090,151 @@ class PortalAppTestCase(unittest.TestCase):
         self.assertEqual(scrapling_client.calls, ["standard"])
         self.assertEqual(result.backend_used, "scrapling_standard")
         self.assertEqual([attempt.backend for attempt in result.fetch_attempts or []], ["curl_cffi", "scrapling_standard"])
+
+    def test_multi_engine_continues_after_domain_session_required(self) -> None:
+        class SessionRequiredCurlFetcher:
+            def __init__(self) -> None:
+                self.calls = 0
+
+            def fetch(self, url: str, timeout_seconds: int) -> app_module.FetchResult:
+                self.calls += 1
+                return app_module.FetchResult(
+                    html="",
+                    final_url=url,
+                    status_code=403,
+                    error_kind="domain_session_required",
+                    detail="www.dmit.io 需要先初始化采集会话。",
+                )
+
+        class FakeScraplingResponse:
+            url = "https://www.dmit.io/cart.php?region=hong-kong&network=premium&generation=as3"
+            status = 200
+            html_content = """
+            <html><body>
+              <section class="product-card">
+                <h2>HKG.AS3.Pro.TINY</h2>
+                <span>$ 6.90 USD</span>
+                <a href="/cart.php?a=confproduct&i=1">Order Now</a>
+              </section>
+            </body></html>
+            """
+
+        class FakeScraplingClient:
+            def __init__(self) -> None:
+                self.calls: list[str] = []
+
+            def fetch(self, mode: str, url: str, timeout_seconds: int):
+                self.calls.append(mode)
+                return FakeScraplingResponse()
+
+        curl_fetcher = SessionRequiredCurlFetcher()
+        scrapling_client = FakeScraplingClient()
+        engine = self.app.extensions["monitor_engine"]
+        original_selector = engine.fetcher_selector
+        try:
+            engine.fetcher_selector = app_module.FetcherSelector(
+                curl_cffi_fetcher=curl_fetcher,
+                scrapling_client=scrapling_client,
+            )
+            result = engine.scrape_task(
+                {
+                    "name": "DMIT Hong Kong HKG.AS3.Pro.TINY",
+                    "monitor_url": "https://www.dmit.io/cart.php?region=hong-kong&network=premium&generation=as3",
+                    "target_keyword": "HKG.AS3.Pro.TINY",
+                    "fetch_strategy": "multi_engine",
+                    "source_config": "{}",
+                },
+                {"request_timeout_seconds": 25, **self.scrapling_settings()},
+                use_test_browser=False,
+            )
+        finally:
+            engine.fetcher_selector = original_selector
+
+        self.assertEqual(result.stock, 1)
+        self.assertEqual(curl_fetcher.calls, 1)
+        self.assertEqual(scrapling_client.calls, ["standard"])
+        self.assertEqual(result.backend_used, "scrapling_standard")
+        self.assertEqual(
+            [attempt.backend for attempt in result.fetch_attempts or []],
+            ["curl_cffi", "scrapling_standard"],
+        )
+
+    def test_multi_engine_uses_headed_session_after_scrapling_challenge(self) -> None:
+        class SessionRequiredCurlFetcher:
+            def fetch(self, url: str, timeout_seconds: int) -> app_module.FetchResult:
+                return app_module.FetchResult(
+                    html="",
+                    final_url=url,
+                    status_code=403,
+                    error_kind="domain_session_required",
+                    detail="www.dmit.io 需要先初始化采集会话。",
+                )
+
+        class FakeScraplingResponse:
+            url = "https://www.dmit.io/cart.php?region=hong-kong&network=premium&generation=as3"
+            status = 200
+            html_content = "<html><title>Just a moment...</title><body>cf-turnstile Checking your browser</body></html>"
+
+        class FakeScraplingClient:
+            def __init__(self) -> None:
+                self.calls: list[str] = []
+
+            def fetch(self, mode: str, url: str, timeout_seconds: int):
+                self.calls.append(mode)
+                return FakeScraplingResponse()
+
+        class FakeHeadedSessionFetcher:
+            def __init__(self) -> None:
+                self.calls = 0
+
+            def fetch(self, url: str, timeout_seconds: int) -> app_module.FetchResult:
+                self.calls += 1
+                return app_module.FetchResult(
+                    html="""
+                    <html><body>
+                      <article>
+                        <h2>HKG.AS3.Pro.TINY</h2>
+                        <a href="/cart.php?a=confproduct&i=1">Order Now</a>
+                      </article>
+                    </body></html>
+                    """,
+                    final_url=url,
+                    status_code=200,
+                    detail="headed_session ok",
+                )
+
+        scrapling_client = FakeScraplingClient()
+        headed_fetcher = FakeHeadedSessionFetcher()
+        engine = self.app.extensions["monitor_engine"]
+        original_selector = engine.fetcher_selector
+        try:
+            engine.fetcher_selector = app_module.FetcherSelector(
+                curl_cffi_fetcher=SessionRequiredCurlFetcher(),
+                scrapling_client=scrapling_client,
+                headed_session_fetcher=headed_fetcher,
+            )
+            result = engine.scrape_task(
+                {
+                    "name": "DMIT Hong Kong HKG.AS3.Pro.TINY",
+                    "monitor_url": "https://www.dmit.io/cart.php?region=hong-kong&network=premium&generation=as3",
+                    "target_keyword": "HKG.AS3.Pro.TINY",
+                    "fetch_strategy": "multi_engine",
+                    "source_config": "{}",
+                },
+                {"request_timeout_seconds": 25, **self.scrapling_settings()},
+                use_test_browser=False,
+            )
+        finally:
+            engine.fetcher_selector = original_selector
+
+        self.assertEqual(result.stock, 1)
+        self.assertEqual(scrapling_client.calls, ["standard", "dynamic", "stealth"])
+        self.assertEqual(headed_fetcher.calls, 1)
+        self.assertEqual(result.backend_used, "headed_session")
+        self.assertEqual(
+            [attempt.backend for attempt in result.fetch_attempts or []],
+            ["curl_cffi", "scrapling_standard", "scrapling_dynamic", "scrapling_stealth", "headed_session"],
+        )
 
     def test_scrapling_stealth_challenge_failure_enters_protected_cooldown(self) -> None:
         class FakeScraplingResponse:
