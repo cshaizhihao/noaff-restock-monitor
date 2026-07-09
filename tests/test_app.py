@@ -3299,6 +3299,31 @@ class PortalAppTestCase(unittest.TestCase):
         self.assertTrue(settings["enhanced_collector_use_for_catalog"])
         self.assertEqual(settings["enhanced_collector_status"]["status"], "configured")
 
+    def test_enhanced_collector_settings_normalizes_common_url_shapes(self) -> None:
+        _, headers = self.login()
+
+        response = self.client.post(
+            f"{app_module.PORTAL_PATH}/api/settings/telegram",
+            headers=headers,
+            base_url=BASE_URL,
+            json={
+                "enhanced_collector_enabled": True,
+                "enhanced_collector_api_url": "127.0.0.1:8191/v1/",
+            },
+        )
+        self.assertEqual(response.status_code, 200)
+
+        snapshot = self.client.get(
+            f"{app_module.PORTAL_PATH}/api/snapshot",
+            headers=self.browser_headers(),
+            base_url=BASE_URL,
+        )
+        self.assertEqual(snapshot.status_code, 200)
+        self.assertEqual(
+            snapshot.get_json()["settings"]["enhanced_collector_api_url"],
+            "http://127.0.0.1:8191",
+        )
+
     def test_enhanced_collector_diagnostic_reports_success(self) -> None:
         _, headers = self.login()
         calls: list[dict[str, object]] = []
@@ -3343,6 +3368,41 @@ class PortalAppTestCase(unittest.TestCase):
         self.assertEqual(calls[0]["enhanced_collector_api_url"], "http://127.0.0.1:8191")
         self.assertEqual(calls[0]["enhanced_collector_timeout_seconds"], 17)
 
+    def test_enhanced_collector_diagnostic_normalizes_bare_v1_url(self) -> None:
+        _, headers = self.login()
+        calls: list[dict[str, object]] = []
+
+        class FakeEnhancedCollectorManager:
+            def __init__(self, settings_payload: dict[str, object]) -> None:
+                calls.append(dict(settings_payload))
+
+            def health_check(self, probe_candidates: bool = True) -> dict[str, object]:
+                return {
+                    "status": "configured",
+                    "available": False,
+                    "api_url": calls[-1]["enhanced_collector_api_url"],
+                    "detail": "ok",
+                    "setup_hint": "hint",
+                    "candidate_urls": [calls[-1]["enhanced_collector_api_url"]],
+                    "next_action": "next",
+                }
+
+        original_manager = app_module.EnhancedCollectorManager
+        app_module.EnhancedCollectorManager = FakeEnhancedCollectorManager
+        try:
+            response = self.client.post(
+                f"{app_module.PORTAL_PATH}/api/settings/enhanced-collector-test",
+                headers=headers,
+                base_url=BASE_URL,
+                json={"enhanced_collector_api_url": "127.0.0.1:8191/v1/"},
+            )
+        finally:
+            app_module.EnhancedCollectorManager = original_manager
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(calls[0]["enhanced_collector_api_url"], "http://127.0.0.1:8191")
+        self.assertEqual(response.get_json()["result"]["candidate_urls"], ["http://127.0.0.1:8191"])
+
     def test_enhanced_collector_diagnostic_rejects_bad_url(self) -> None:
         _, headers = self.login()
 
@@ -3355,6 +3415,19 @@ class PortalAppTestCase(unittest.TestCase):
 
         self.assertEqual(response.status_code, 400)
         self.assertIn("增强采集服务地址", response.get_json()["message"])
+
+    def test_stock_check_diagnostic_describes_external_solver_failures(self) -> None:
+        diagnostic = app_module.stock_check_diagnostic(
+            "external_solver_not_configured",
+            "missing",
+            attempts=[{"backend": "external_solver", "status": "failed", "error_kind": "external_solver_not_configured"}],
+            backend_used="external_solver",
+            domain="example.com",
+        )
+
+        self.assertEqual(diagnostic["title"], "外部兜底未配置")
+        self.assertIn("127.0.0.1:8191", diagnostic["advice"])
+        self.assertEqual(diagnostic["attempts"][0]["backend"], "external_solver")
 
     def test_scrapling_invalid_mode_falls_back_to_standard(self) -> None:
         _, headers = self.login()
@@ -3957,6 +4030,26 @@ class PortalAppTestCase(unittest.TestCase):
             [(cookie["name"], cookie["value"], cookie["domain"]) for cookie in cookies],
             [("cf_clearance", "abc", "example.com"), ("PHPSESSID", "xyz", "example.com"), ("empty", "", "example.com")],
         )
+
+    def test_domain_session_import_payload_accepts_console_json(self) -> None:
+        domain, user_agent, cookies, ttl_hours = app_module.normalize_domain_session_import_payload(
+            {
+                "import_json": json.dumps(
+                    {
+                        "domain": "www.dmit.io",
+                        "user_agent": "Mozilla/5.0 Console Chrome",
+                        "cookie_header": "cf_clearance=abc; PHPSESSID=xyz",
+                    }
+                ),
+                "ttl_hours": 8,
+            },
+            "fallback.example",
+        )
+
+        self.assertEqual(domain, "www.dmit.io")
+        self.assertEqual(user_agent, "Mozilla/5.0 Console Chrome")
+        self.assertEqual([(cookie["name"], cookie["value"]) for cookie in cookies], [("cf_clearance", "abc"), ("PHPSESSID", "xyz")])
+        self.assertEqual(ttl_hours, 8)
 
     def test_import_task_domain_session_api_saves_cookie_and_user_agent(self) -> None:
         _, headers = self.login()

@@ -1581,15 +1581,15 @@
                 <div class="domain-session-guide">
                     <div class="domain-session-step">
                         <strong>1</strong>
-                        <span>用自己的浏览器打开商品页，等待能看到真实商品卡片。</span>
+                        <span>用浏览器打开商品页，确认已经能看到真实商品卡片。</span>
                     </div>
                     <div class="domain-session-step">
                         <strong>2</strong>
-                        <span>复制该站点请求里的 Cookie 和当前 User-Agent。</span>
+                        <span>点击下方按钮复制脚本，在商品页控制台执行后复制输出。</span>
                     </div>
                     <div class="domain-session-step">
                         <strong>3</strong>
-                        <span>保存后点击检测，后台会复用会话判断有货或售罄。</span>
+                        <span>粘贴 JSON 并保存，再点击检测确认库存状态。</span>
                     </div>
                 </div>
 
@@ -1599,27 +1599,31 @@
                         <label for="domain-session-domain" class="form-label">域名</label>
                         <input id="domain-session-domain" type="text" class="input-dark" readonly>
                     </div>
-                    <div>
-                        <label for="domain-session-user-agent" class="form-label">User-Agent</label>
-                        <textarea id="domain-session-user-agent" class="input-dark min-h-[5rem]" placeholder="在浏览器控制台输入 navigator.userAgent 后复制结果"></textarea>
+                    <div class="domain-session-console">
+                        <div class="domain-session-console-header">
+                            <span>控制台一键脚本</span>
+                            <button id="domain-session-copy-script" type="button" class="ghost-button compact">复制脚本</button>
+                        </div>
+                        <code id="domain-session-script-preview">copy(JSON.stringify({domain:"",user_agent:navigator.userAgent,cookie_header:document.cookie},null,2))</code>
                     </div>
                     <div>
-                        <label for="domain-session-cookie-header" class="form-label">Cookie</label>
-                        <textarea id="domain-session-cookie-header" class="input-dark min-h-[8rem]" placeholder="例如 cf_clearance=...; PHPSESSID=..."></textarea>
+                        <label for="domain-session-import-json" class="form-label">粘贴脚本输出 JSON</label>
+                        <textarea id="domain-session-import-json" class="input-dark min-h-[7rem]" placeholder='{"user_agent":"Mozilla/5.0 ...","cookie_header":"cf_clearance=...; PHPSESSID=..."}'></textarea>
                     </div>
-                    <div class="grid gap-4 sm:grid-cols-2">
-                        <div>
-                            <label for="domain-session-ttl" class="form-label">有效期小时</label>
-                            <input id="domain-session-ttl" type="number" min="1" max="720" value="24" class="input-dark">
-                        </div>
-                        <div class="domain-session-console">
-                            <span>控制台快速获取</span>
-                            <code>copy(navigator.userAgent)</code>
-                            <code>copy(document.cookie)</code>
-                        </div>
+                    <div>
+                        <label for="domain-session-user-agent" class="form-label">User-Agent（可选，JSON 已包含时不用填）</label>
+                        <textarea id="domain-session-user-agent" class="input-dark min-h-[4rem]" placeholder="JSON 粘贴失败时，可单独填写 navigator.userAgent"></textarea>
+                    </div>
+                    <div>
+                        <label for="domain-session-cookie-header" class="form-label">Cookie（可选，JSON 已包含时不用填）</label>
+                        <textarea id="domain-session-cookie-header" class="input-dark min-h-[5rem]" placeholder="例如 cf_clearance=...; PHPSESSID=..."></textarea>
+                    </div>
+                    <div>
+                        <label for="domain-session-ttl" class="form-label">有效期小时</label>
+                        <input id="domain-session-ttl" type="number" min="1" max="720" value="24" class="input-dark">
                     </div>
                     <p class="rounded-lg border border-amber-500/20 bg-amber-500/10 px-4 py-3 text-sm leading-6 text-amber-100">
-                        DMIT 这类页面返回的是 Cloudflare Managed Challenge + Turnstile。后台不能凭空解析未返回的商品 HTML；导入真实浏览器会话后，后续定时检测会用轻量请求复用该会话。
+                        仅在普通采集无法拿到真实商品 HTML 时使用。保存后会复用该域名会话进行轻量检测，到期后可重新导入。
                     </p>
                     <div class="flex flex-wrap justify-end gap-3 pt-2">
                         <button id="domain-session-cancel" type="button" class="ghost-button">取消</button>

@@ -1513,6 +1513,22 @@ def build_candidate_domain_session_payload(
 
 
 def normalize_domain_session_import_payload(payload: dict[str, Any], fallback_domain: str = "") -> tuple[str, str, list[dict[str, Any]], int]:
+    payload = dict(payload or {})
+    embedded_payload = payload.get("session_payload")
+    if isinstance(embedded_payload, dict):
+        for key, value in embedded_payload.items():
+            payload.setdefault(key, value)
+    import_json = str(payload.get("import_json") or payload.get("importJson") or "").strip()
+    if import_json:
+        try:
+            imported = json.loads(import_json)
+        except json.JSONDecodeError as exc:
+            raise ValueError("会话 JSON 格式不正确，请重新复制控制台脚本输出。") from exc
+        if not isinstance(imported, dict):
+            raise ValueError("会话 JSON 必须是对象。")
+        for key, value in imported.items():
+            payload.setdefault(key, value)
+
     domain = normalize_domain_session_domain(payload.get("domain") or fallback_domain)
     if not domain:
         raise ValueError("无法识别要导入会话的域名。")
@@ -2397,6 +2413,18 @@ def validate_http_url(candidate: str) -> bool:
     return parsed.scheme in {"http", "https"} and bool(parsed.netloc)
 
 
+def normalize_enhanced_collector_api_url(value: Any) -> str:
+    raw = str(value or "").strip().rstrip("/")
+    if not raw:
+        return ""
+    if "://" not in raw:
+        raw = f"http://{raw}"
+    raw = raw.rstrip("/")
+    if raw.lower().endswith("/v1"):
+        raw = raw[:-3].rstrip("/")
+    return raw
+
+
 class EnhancedCollectorManager:
     CANDIDATE_URLS = (
         "http://127.0.0.1:8191",
@@ -2409,7 +2437,7 @@ class EnhancedCollectorManager:
         self.session = session or requests.Session()
 
     def configured_url(self) -> str:
-        return str(self.settings.get("enhanced_collector_api_url") or "").strip().rstrip("/")
+        return normalize_enhanced_collector_api_url(self.settings.get("enhanced_collector_api_url"))
 
     def candidate_urls(self) -> list[str]:
         candidates: list[str] = []
@@ -2430,6 +2458,9 @@ class EnhancedCollectorManager:
                 "available": False,
                 "api_url": "",
                 "detail": "增强采集未启用。",
+                "setup_hint": "可留空后点击检测，系统会尝试本机 127.0.0.1:8191、localhost:8191 和 Docker 服务名 flaresolverr:8191。",
+                "candidate_urls": list(self.CANDIDATE_URLS),
+                "next_action": "需要处理受保护页面时，再启用外部兜底采集。",
             }
 
         if not probe_candidates:
@@ -2439,12 +2470,18 @@ class EnhancedCollectorManager:
                     "available": False,
                     "api_url": configured,
                     "detail": "增强采集服务已配置，点击检测确认可用。",
+                    "setup_hint": "地址会自动兼容 host:port、http(s)://host:port 和以 /v1 结尾的写法。",
+                    "candidate_urls": [configured],
+                    "next_action": "检测通过后，可在任务采集模式中选择外部兜底。",
                 }
             return {
                 "status": "not_configured",
                 "available": False,
                 "api_url": "",
                 "detail": "未配置增强采集服务地址。",
+                "setup_hint": "如果外部服务运行在本机，通常填写 http://127.0.0.1:8191；Docker 同网络可填写 http://flaresolverr:8191。",
+                "candidate_urls": list(self.CANDIDATE_URLS),
+                "next_action": "先启动外部采集服务，或继续使用本地采集/会话导入。",
             }
 
         urls = self.candidate_urls() if probe_candidates else ([configured] if configured else [])
@@ -2454,6 +2491,9 @@ class EnhancedCollectorManager:
                 "available": False,
                 "api_url": "",
                 "detail": "未配置增强采集服务地址。",
+                "setup_hint": "如果外部服务运行在本机，通常填写 http://127.0.0.1:8191。",
+                "candidate_urls": [],
+                "next_action": "配置地址后重新检测。",
             }
 
         timeout = max(3, min(30, int(self.settings.get("enhanced_collector_timeout_seconds") or DEFAULT_ENHANCED_COLLECTOR_TIMEOUT_SECONDS)))
@@ -2464,6 +2504,9 @@ class EnhancedCollectorManager:
                 continue
             result = self._probe(api_url, timeout)
             if result["available"]:
+                result.setdefault("setup_hint", "外部采集服务已响应 sessions.list。")
+                result.setdefault("candidate_urls", urls)
+                result.setdefault("next_action", "可用于手动检测、商品入库，或明确开启后用于定时监控。")
                 return result
             last_detail = result["detail"]
 
@@ -2472,6 +2515,9 @@ class EnhancedCollectorManager:
             "available": False,
             "api_url": configured or urls[0],
             "detail": last_detail or "增强采集服务不可用。",
+            "setup_hint": "确认服务已启动、端口可访问，并且地址不要写成浏览器页面地址。",
+            "candidate_urls": urls,
+            "next_action": "先修复外部采集服务，再重新点击检测。",
         }
 
     def _probe(self, api_url: str, timeout: int) -> dict[str, Any]:
@@ -3831,7 +3877,7 @@ class ExternalSolverCollector(BaseCollector):
 
     def collect(self, request_payload: CollectorRequest, settings_payload: dict[str, Any]) -> CollectorResult:
         attempt = FetchAttempt(backend=self.name, started_at=now_iso())
-        api_url = str(settings_payload.get("enhanced_collector_api_url") or "").strip().rstrip("/")
+        api_url = normalize_enhanced_collector_api_url(settings_payload.get("enhanced_collector_api_url"))
         if not settings_payload.get("enhanced_collector_enabled") and not api_url:
             attempt.ended_at = now_iso()
             attempt.status = "failed"
@@ -3875,7 +3921,7 @@ class ExternalSolverCollector(BaseCollector):
             attempt.ended_at = now_iso()
             attempt.status = "failed"
             attempt.error_kind = "external_solver_not_configured"
-            attempt.detail = "未配置可用的增强采集服务地址。"
+            attempt.detail = "未配置可用的增强采集服务地址，示例：http://127.0.0.1:8191。"
             return CollectorResult(
                 ok=False,
                 final_url=request_payload.url,
@@ -4390,6 +4436,17 @@ def stock_check_diagnostic(
         "parse_unknown": ("无法判断库存", "页面已获取，但没有明确库存信号；请填写目标关键词或 CSS/XPath/正则规则。"),
         "firecrawl_credit_required": ("外部服务额度不足", "Firecrawl 额度不足，已停止继续消耗；建议改回本地采集或补充额度。"),
         "firecrawl_rate_limited": ("外部服务限流", "降低频率或稍后手动检测。"),
+        "external_solver_disabled": ("外部兜底未启用", "需要外部兜底时，先到系统设置启用并检测服务。"),
+        "external_solver_monitor_disabled": ("外部兜底未用于定时", "为避免误用资源，定时监控默认不调用外部兜底；可手动检测或明确开启。"),
+        "external_solver_catalog_disabled": ("外部兜底未用于入库", "商品入库没有启用外部兜底，可在系统设置中开启。"),
+        "external_solver_not_configured": ("外部兜底未配置", "填写外部采集服务地址，例如 http://127.0.0.1:8191，然后点击检测。"),
+        "external_solver_request_error": ("外部兜底不可达", "检查服务是否运行、端口是否开放，以及地址是否正确。"),
+        "external_solver_auth_error": ("外部兜底鉴权失败", "检查外部服务访问权限或反向代理鉴权设置。"),
+        "external_solver_rate_limited": ("外部兜底限流", "降低检测频率，或稍后重试。"),
+        "external_solver_upstream_error": ("外部兜底上游错误", "外部服务返回 5xx，先确认服务日志和运行状态。"),
+        "external_solver_bad_response": ("外部兜底响应异常", "服务返回结构不是预期格式，确认使用兼容的 /v1 API。"),
+        "external_solver_http_error": ("外部兜底 HTTP 错误", "检查外部服务状态码和访问路径。"),
+        "external_solver_failed": ("外部兜底失败", "查看详情后调整外部采集服务或改用会话导入。"),
     }
     title, advice = labels.get(kind, ("采集失败", "查看尝试链路后调整采集模式、目标关键词或备用数据源。"))
     if not kind:
@@ -11278,7 +11335,7 @@ def make_app() -> Flask:
             updates["firecrawl_api_key"] = str(payload.get("firecrawl_api_key", "")).strip()
 
         if "enhanced_collector_api_url" in payload:
-            api_url = str(payload.get("enhanced_collector_api_url") or "").strip().rstrip("/")
+            api_url = normalize_enhanced_collector_api_url(payload.get("enhanced_collector_api_url"))
             if api_url and not validate_http_url(api_url):
                 return jsonify({"ok": False, "message": "增强采集服务地址必须是有效的 http(s) 地址。"}), 400
             updates["enhanced_collector_api_url"] = api_url
@@ -11413,11 +11470,11 @@ def make_app() -> Flask:
         current_settings = dict(app.extensions["monitor_engine"].get_runtime_settings())
         settings_payload = dict(current_settings)
 
-        api_url = str(
+        api_url = normalize_enhanced_collector_api_url(
             payload.get("enhanced_collector_api_url")
             or current_settings.get("enhanced_collector_api_url")
             or ""
-        ).strip().rstrip("/")
+        )
         if api_url and not validate_http_url(api_url):
             return jsonify({"ok": False, "message": "增强采集服务地址必须是有效的 http(s) 地址。"}), 400
         settings_payload["enhanced_collector_api_url"] = api_url

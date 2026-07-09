@@ -261,6 +261,9 @@
         domainSessionDomain: document.getElementById("domain-session-domain"),
         domainSessionUserAgent: document.getElementById("domain-session-user-agent"),
         domainSessionCookieHeader: document.getElementById("domain-session-cookie-header"),
+        domainSessionImportJson: document.getElementById("domain-session-import-json"),
+        domainSessionCopyScript: document.getElementById("domain-session-copy-script"),
+        domainSessionScriptPreview: document.getElementById("domain-session-script-preview"),
         domainSessionTtl: document.getElementById("domain-session-ttl"),
         domainSessionCancel: document.getElementById("domain-session-cancel"),
         domainSessionSubmit: document.getElementById("domain-session-submit")
@@ -3591,7 +3594,13 @@
             const ok = Boolean(result.available);
             const detail = result.detail || data.message || (ok ? "外部采集服务可用。" : "外部采集服务不可用。");
             if (resultBox) {
-                resultBox.textContent = detail;
+                const lines = [detail];
+                if (result.setup_hint) lines.push(result.setup_hint);
+                if (Array.isArray(result.candidate_urls) && result.candidate_urls.length) {
+                    lines.push(`已尝试：${result.candidate_urls.join(" / ")}`);
+                }
+                if (result.next_action) lines.push(result.next_action);
+                resultBox.textContent = lines.filter(Boolean).join("\n");
                 resultBox.className = `firecrawl-test-result ${ok ? "is-ok" : "is-error"}`;
             }
             showToast(ok ? "外部采集服务检测通过。" : "外部采集服务检测未通过。", ok ? "success" : "error");
@@ -4018,15 +4027,35 @@
         syncInputValue(els.domainSessionDomain, domain || "");
         syncInputValue(els.domainSessionUserAgent, "");
         syncInputValue(els.domainSessionCookieHeader, "");
+        syncInputValue(els.domainSessionImportJson, "");
         syncInputValue(els.domainSessionTtl, "24");
+        renderDomainSessionConsoleScript(domain || "");
         els.domainSessionModal?.classList.remove("hidden");
         document.body.style.overflow = "hidden";
-        window.setTimeout(() => els.domainSessionUserAgent?.focus(), 40);
+        window.setTimeout(() => els.domainSessionImportJson?.focus(), 40);
     }
 
     function closeDomainSessionModal() {
         els.domainSessionModal?.classList.add("hidden");
         document.body.style.overflow = "";
+    }
+
+    function domainSessionConsoleScript(domain) {
+        const safeDomain = JSON.stringify(domain || "");
+        return `copy(JSON.stringify({domain:${safeDomain},user_agent:navigator.userAgent,cookie_header:document.cookie},null,2))`;
+    }
+
+    function renderDomainSessionConsoleScript(domain) {
+        const script = domainSessionConsoleScript(domain);
+        if (els.domainSessionScriptPreview) {
+            els.domainSessionScriptPreview.textContent = script;
+        }
+    }
+
+    async function copyDomainSessionConsoleScript() {
+        const domain = els.domainSessionDomain?.value || "";
+        const ok = await copyText(domainSessionConsoleScript(domain));
+        showToast(ok ? "会话采集脚本已复制。" : "复制失败，请手动复制脚本。", ok ? "success" : "error");
     }
 
     async function submitDomainSessionImport(event) {
@@ -4036,10 +4065,20 @@
             showToast("缺少任务 ID。", "error");
             return;
         }
-        const userAgent = String(els.domainSessionUserAgent?.value || "").trim();
-        const cookieHeader = String(els.domainSessionCookieHeader?.value || "").trim();
+        const importJson = String(els.domainSessionImportJson?.value || "").trim();
+        let imported = {};
+        if (importJson) {
+            try {
+                imported = JSON.parse(importJson);
+            } catch (_) {
+                showToast("会话 JSON 格式不正确，请重新复制控制台输出。", "error");
+                return;
+            }
+        }
+        const userAgent = String(els.domainSessionUserAgent?.value || imported.user_agent || imported.userAgent || "").trim();
+        const cookieHeader = String(els.domainSessionCookieHeader?.value || imported.cookie_header || imported.cookieHeader || "").trim();
         if (!userAgent || !cookieHeader) {
-            showToast("请填写 User-Agent 和 Cookie。", "error");
+            showToast("请粘贴会话 JSON，或填写 User-Agent 和 Cookie。", "error");
             return;
         }
         const submitButton = els.domainSessionSubmit;
@@ -4048,9 +4087,10 @@
             const data = await apiFetch(`/api/tasks/${taskId}/domain-session/import`, {
                 method: "POST",
                 body: JSON.stringify({
-                    domain: els.domainSessionDomain?.value || "",
+                    domain: imported.domain || els.domainSessionDomain?.value || "",
                     user_agent: userAgent,
                     cookie_header: cookieHeader,
+                    import_json: importJson,
                     ttl_hours: Number(els.domainSessionTtl?.value || 24)
                 })
             });
@@ -4993,6 +5033,7 @@
     els.domainSessionForm?.addEventListener("submit", submitDomainSessionImport);
     els.domainSessionCancel?.addEventListener("click", closeDomainSessionModal);
     els.domainSessionClose?.addEventListener("click", closeDomainSessionModal);
+    els.domainSessionCopyScript?.addEventListener("click", copyDomainSessionConsoleScript);
 
     els.taskForm?.addEventListener("click", (event) => {
         const strategyCard = event.target.closest("[data-task-strategy-card]");
