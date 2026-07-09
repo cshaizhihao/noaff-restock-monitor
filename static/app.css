@@ -470,6 +470,24 @@ select.input-dark {
     line-height: 1.7;
 }
 
+.task-strategy-recommendation {
+    margin-top: 0.55rem;
+    display: grid;
+    gap: 0.16rem;
+    color: #bbf7d0;
+    font-size: 0.8rem;
+    line-height: 1.6;
+}
+
+.task-strategy-recommendation strong,
+.task-strategy-recommendation span {
+    display: block;
+}
+
+.task-strategy-recommendation.is-warning {
+    color: #fde68a;
+}
+
 .task-strategy-pill {
     flex: 0 0 auto;
     border: 1px solid rgba(34, 211, 238, 0.24);
@@ -1769,6 +1787,12 @@ button:disabled,
     border-color: rgba(56, 189, 248, 0.28);
     background: rgba(56, 189, 248, 0.08);
     color: #bae6fd;
+}
+
+.site-profile-chip {
+    border-color: rgba(34, 197, 94, 0.24);
+    background: rgba(16, 185, 129, 0.08);
+    color: #bbf7d0;
 }
 
 .domain-session-ready {

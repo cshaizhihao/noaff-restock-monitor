@@ -639,6 +639,55 @@ class PortalAppTestCase(unittest.TestCase):
         )
         payload = snapshot.get_json()
         self.assertEqual(payload["tasks"][0]["fetch_strategy"], "multi_engine")
+        source_config = json.loads(payload["tasks"][0]["source_config"])
+        self.assertEqual(source_config["site_profile_id"], app_module.SITE_PROFILE_WHMCS_CART)
+        self.assertEqual(source_config["stock_rule_type"], "text_near_keyword")
+        self.assertEqual(payload["tasks"][0]["site_profile"]["profile_id"], app_module.SITE_PROFILE_WHMCS_CART)
+        self.assertEqual(payload["tasks"][0]["site_profile"]["recommended_fetch_mode"], app_module.FETCH_MODE_AUTO)
+
+    def test_dmit_site_profile_recommends_compatible_mode_and_rules(self) -> None:
+        profile = app_module.site_profile_for_url(
+            "https://www.dmit.io/cart.php?region=los-angeles&network=premium&generation=as3",
+            "LAX.AS3.Pro.TINY",
+            {},
+        )
+
+        self.assertEqual(profile["profile_id"], app_module.SITE_PROFILE_DMIT_CART)
+        self.assertEqual(profile["recommended_fetch_mode"], app_module.FETCH_MODE_COMPATIBLE)
+        self.assertGreaterEqual(profile["confidence"], 90)
+        self.assertIn("Out of Stock", profile["recommended_rule_config"]["soldout_keywords"])
+
+    def test_dmit_task_without_strategy_gets_site_profile_defaults(self) -> None:
+        _, headers = self.login()
+        create = self.client.post(
+            f"{app_module.PORTAL_PATH}/api/tasks",
+            headers=headers,
+            base_url=BASE_URL,
+            json={
+                "name": "LAX.AS3.Pro.TINY",
+                "group_name": "DMIT",
+                "monitor_url": "https://www.dmit.io/cart.php?region=los-angeles&network=premium&generation=as3",
+                "target_keyword": "LAX.AS3.Pro.TINY",
+                "restock_template": "<b>{name}</b> {stock}",
+                "soldout_template": "<b>{name}</b> sold out",
+                "enabled": True,
+            },
+        )
+        self.assertEqual(create.status_code, 200)
+
+        snapshot = self.client.get(
+            f"{app_module.PORTAL_PATH}/api/snapshot",
+            headers=self.browser_headers(),
+            base_url=BASE_URL,
+        ).get_json()
+        task = next(item for item in snapshot["tasks"] if item["name"] == "LAX.AS3.Pro.TINY")
+        source_config = json.loads(task["source_config"])
+
+        self.assertEqual(task["fetch_strategy"], app_module.FETCH_STRATEGY_SCRAPLING_STEALTH)
+        self.assertEqual(task["fetch_mode"], app_module.FETCH_MODE_COMPATIBLE)
+        self.assertEqual(source_config["site_profile_id"], app_module.SITE_PROFILE_DMIT_CART)
+        self.assertIn("Out of Stock", source_config["soldout_keywords"])
+        self.assertEqual(task["site_profile"]["profile_id"], app_module.SITE_PROFILE_DMIT_CART)
 
     def test_merchant_import_discovers_products_and_promotes_tasks(self) -> None:
         _, headers = self.login()
@@ -3675,6 +3724,7 @@ class PortalAppTestCase(unittest.TestCase):
 
         self.assertEqual(task["fetch_strategy"], "multi_engine")
         self.assertEqual(task["collector_strategy"], app_module.COLLECTOR_EXTERNAL_SOLVER)
+        self.assertEqual(task["site_profile"]["recommended_fetch_mode"], app_module.FETCH_MODE_EXTERNAL_SOLVER)
 
     def test_external_solver_collector_returns_html_from_solver_solution(self) -> None:
         class FakeResponse:

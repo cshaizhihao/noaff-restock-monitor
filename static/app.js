@@ -193,6 +193,7 @@
         taskFetchStrategy: document.getElementById("task-fetch-strategy"),
         taskStrategyCards: document.getElementById("task-strategy-cards"),
         taskStrategySummary: document.getElementById("task-strategy-summary"),
+        taskStrategyRecommendation: document.getElementById("task-strategy-recommendation"),
         taskWebhookHint: document.getElementById("task-webhook-hint"),
         taskRuleDetails: document.getElementById("task-rule-details"),
         taskRuleAdvanced: document.getElementById("task-rule-advanced"),
@@ -430,6 +431,39 @@
         }
     }
 
+    function recommendedStrategyForUrl(url, keyword, config = {}) {
+        const link = String(url || "").toLowerCase();
+        const hasKeyword = Boolean(String(keyword || "").trim());
+        let mode = "auto";
+        let label = "通用 IDC 页面";
+        let confidence = 45;
+        let reason = "建议先用自动模式，系统会按站点情况选择采集方式。";
+        const warnings = [];
+        if (link.includes("dmit.io") && link.includes("cart.php")) {
+            mode = "compatible";
+            label = "DMIT 购物车页";
+            confidence = 92;
+            reason = "同页多个产品，建议保留目标关键词并使用 IDC 商品卡片解析。";
+            warnings.push("不要只用整页购买按钮判断库存。");
+        } else if (link.includes("cart.php") || link.includes("/store") || link.includes("gid=") || link.includes("pid=")) {
+            mode = "auto";
+            label = "WHMCS / Store 商品页";
+            confidence = 82;
+            reason = "优先通过目标卡片附近的购买或售罄按钮判断库存。";
+        } else if (link.includes("/app") || link.includes("/order") || link.includes("/checkout")) {
+            mode = "dynamic";
+            label = "应用式商品页";
+            confidence = 62;
+            reason = "页面可能由前端渲染，建议从增强模式开始。";
+        }
+        if (config?.collector_strategy === "external_solver") {
+            mode = "external_solver";
+            warnings.push("外部兜底会依赖单独服务，建议只给少量重点任务使用。");
+        }
+        if (!hasKeyword) warnings.push("建议填写目标关键词，避免同页商品误判。");
+        return { mode, label, confidence, reason, warnings };
+    }
+
     function parseTaskSourceConfig(value) {
         if (!value) return {};
         if (typeof value === "object") return { ...value };
@@ -552,8 +586,21 @@
 
     function updateTaskStrategyUi() {
         const strategy = normalizeTaskFetchMode(els.taskFetchStrategy?.value);
+        const recommendation = recommendedStrategyForUrl(
+            els.taskUrl?.value,
+            els.taskKeyword?.value,
+            collectTaskSourceConfig()
+        );
         if (els.taskStrategySummary) {
             els.taskStrategySummary.textContent = fetchStrategyHelp(strategy);
+        }
+        if (els.taskStrategyRecommendation) {
+            const aligned = strategy === recommendation.mode || (strategy === "auto" && recommendation.mode === "auto");
+            els.taskStrategyRecommendation.innerHTML = `
+                <strong>${escapeHtml(recommendation.label)} · 建议 ${escapeHtml(fetchStrategyLabel(recommendation.mode))}</strong>
+                <span>${escapeHtml(recommendation.reason)}${recommendation.warnings.length ? ` ${escapeHtml(recommendation.warnings.join(" "))}` : ""}</span>
+            `;
+            els.taskStrategyRecommendation.classList.toggle("is-warning", !aligned);
         }
         if (els.taskWebhookHint) {
             els.taskWebhookHint.classList.toggle("hidden", strategy !== "webhook");
@@ -2033,6 +2080,14 @@
         if (fetchStrategy) {
             fetchStrategy.textContent = fetchStrategyText;
         }
+        const siteProfile = card.querySelector("[data-task-site-profile]");
+        if (siteProfile) {
+            const profile = task.site_profile || {};
+            const profileText = profile.label ? `${profile.label} · 建议 ${fetchStrategyLabel(profile.recommended_fetch_mode)}` : "";
+            siteProfile.textContent = profileText;
+            siteProfile.title = profile.reason || profileText;
+            siteProfile.classList.toggle("hidden", !profileText);
+        }
         const domainSession = card.querySelector("[data-task-domain-session]");
         if (domainSession) {
             domainSession.textContent = domainMeta.label;
@@ -3074,6 +3129,9 @@
                                 <span data-task-keyword-text>${escapeHtml(task.target_keyword || "未设置关键词")}</span>
                             </span>
                             <span class="task-tag" data-task-fetch-strategy>${escapeHtml(fetchStrategyLabel(task.fetch_mode || task.fetch_strategy))}</span>
+                            <span class="task-tag site-profile-chip ${task.site_profile?.label ? "" : "hidden"}" data-task-site-profile title="${escapeHtml(task.site_profile?.reason || "")}">
+                                ${escapeHtml(task.site_profile?.label ? `${task.site_profile.label} · 建议 ${fetchStrategyLabel(task.site_profile.recommended_fetch_mode)}` : "")}
+                            </span>
                             <span class="task-tag domain-session-chip ${domainMeta.className}" data-task-domain-session title="${escapeHtml(domainMeta.detail)}">${escapeHtml(domainMeta.label)}</span>
                             <span class="task-tag task-row-stock font-mono">
                                 库存:
@@ -5003,6 +5061,10 @@
     });
     [els.taskName, els.taskUrl, els.taskKeyword, els.taskGroupCustom, els.taskSubgroupCustom]
         .forEach((element) => element?.addEventListener("input", updateTaskWizardSummary));
+    [els.taskUrl, els.taskKeyword].forEach((element) => {
+        element?.addEventListener("input", updateTaskStrategyUi);
+        element?.addEventListener("change", updateTaskStrategyUi);
+    });
     els.taskForm?.addEventListener("click", (event) => {
         const stepTarget = event.target.closest("[data-task-step-target]");
         if (stepTarget && els.taskForm.contains(stepTarget)) {

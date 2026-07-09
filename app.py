@@ -435,6 +435,12 @@ SUPPORTED_TASK_FETCH_MODES = {
     FETCH_MODE_MANUAL,
     FETCH_MODE_WEBHOOK,
 }
+SITE_PROFILE_GENERIC_IDC = "generic_idc"
+SITE_PROFILE_WHMCS_CART = "whmcs_cart"
+SITE_PROFILE_HOSTBILL_CART = "hostbill_cart"
+SITE_PROFILE_DMIT_CART = "dmit_cart"
+SITE_PROFILE_JS_APP = "js_app"
+SITE_PROFILE_PROTECTED = "protected_site"
 CATALOG_DISCOVERY_LOCAL = "local"
 CATALOG_DISCOVERY_FIRECRAWL_MAP = "firecrawl_map"
 CATALOG_DISCOVERY_HYBRID = "hybrid"
@@ -874,6 +880,133 @@ def strategy_config_for_task_fetch_mode(mode: Any, source_config: Any = None) ->
         FETCH_MODE_WEBHOOK: FETCH_STRATEGY_WEBHOOK,
     }
     return mapping.get(normalized_mode, DEFAULT_TASK_FETCH_STRATEGY), config
+
+
+def recommended_rule_config(profile_id: str) -> dict[str, Any]:
+    if profile_id == SITE_PROFILE_WHMCS_CART:
+        return {
+            "stock_rule_type": "text_near_keyword",
+            "target_scope_selector": "article, section, .product, .product-card, .package, .pricing-card, .panel, .card",
+            "in_stock_keywords": ["Order Now", "Buy Now", "Configure", "Continue", "Add to Cart", "购买", "下单"],
+            "soldout_keywords": ["Out of Stock", "Sold Out", "Unavailable", "缺货", "售罄", "无货"],
+        }
+    if profile_id == SITE_PROFILE_HOSTBILL_CART:
+        return {
+            "stock_rule_type": "text_near_keyword",
+            "target_scope_selector": "article, section, .product, .product-card, .package, .pricing-card, .hosting-package, .card",
+            "in_stock_keywords": ["Order", "Order Now", "Buy Now", "Configure", "Add to Cart"],
+            "soldout_keywords": ["Out of Stock", "Sold Out", "Unavailable", "Stock: 0"],
+        }
+    if profile_id == SITE_PROFILE_DMIT_CART:
+        return {
+            "stock_rule_type": "text_near_keyword",
+            "target_scope_selector": "article, section, .product-card, .plan-card, .pricing-card, .card, .ant-card, .instance-card",
+            "in_stock_keywords": ["Continue", "Order Now", "Buy Now", "Configure", "Add to Cart"],
+            "soldout_keywords": ["Out of Stock", "Sold Out", "Unavailable"],
+        }
+    if profile_id == SITE_PROFILE_JS_APP:
+        return {
+            "stock_rule_type": "text_near_keyword",
+            "target_scope_selector": "article, section, .product-card, .plan-card, .package, .pricing-card, .card",
+            "in_stock_keywords": ["Order Now", "Buy Now", "Configure", "Available", "Add to Cart", "购买", "下单"],
+            "soldout_keywords": ["Out of Stock", "Sold Out", "Unavailable", "缺货", "售罄", "无货"],
+        }
+    return {
+        "stock_rule_type": "text_near_keyword",
+        "target_scope_selector": "article, section, .product-card, .plan-card, .package, .pricing-card, .card",
+        "in_stock_keywords": ["Order Now", "Buy Now", "Configure", "Available", "Add to Cart", "购买", "下单"],
+        "soldout_keywords": ["Out of Stock", "Sold Out", "Unavailable", "缺货", "售罄", "无货"],
+    }
+
+
+def site_profile_for_url(url: Any, target_keyword: Any = "", source_config: Any = None) -> dict[str, Any]:
+    url_text = str(url or "").strip()
+    parsed = urlparse(url_text)
+    domain = fetch_domain_for_url(url_text)
+    path = parsed.path.lower()
+    query = parse_qs(parsed.query)
+    target = str(target_keyword or "").strip()
+    config = parse_source_config(source_config)
+    profile_id = SITE_PROFILE_GENERIC_IDC
+    confidence = 45
+    fetch_mode = FETCH_MODE_AUTO
+    label = "通用 IDC 页面"
+    reason = "默认按 IDC 商品卡片识别，失败时再升级采集模式。"
+    warnings: list[str] = []
+
+    if domain.endswith("dmit.io") and "cart.php" in path:
+        profile_id = SITE_PROFILE_DMIT_CART
+        confidence = 92
+        fetch_mode = FETCH_MODE_COMPATIBLE
+        label = "DMIT 购物车页"
+        reason = "DMIT 分类页同页多个产品，建议锁定目标关键词并只解析目标卡片。"
+        warnings.append("同一页面可能同时出现有货与售罄商品，必须保留目标关键词。")
+    elif "cart.php" in path or "store" in path or any(key in query for key in ("gid", "pid")):
+        profile_id = SITE_PROFILE_WHMCS_CART
+        confidence = 82
+        fetch_mode = FETCH_MODE_AUTO
+        label = "WHMCS / Store 商品页"
+        reason = "优先用页面卡片和购买/售罄按钮判断库存。"
+    elif "cart" in path and any(key in query for key in ("fid", "gid", "id")):
+        profile_id = SITE_PROFILE_HOSTBILL_CART
+        confidence = 78
+        fetch_mode = FETCH_MODE_AUTO
+        label = "HostBill 商品页"
+        reason = "适合通过商品卡片、价格和订单按钮判断库存。"
+    elif any(token in path for token in ("/app", "/store", "/order", "/checkout")):
+        profile_id = SITE_PROFILE_JS_APP
+        confidence = 62
+        fetch_mode = FETCH_MODE_DYNAMIC
+        label = "应用式商品页"
+        reason = "可能由前端渲染，建议优先用增强模式。"
+
+    if config.get("collector_strategy") == COLLECTOR_EXTERNAL_SOLVER:
+        fetch_mode = FETCH_MODE_EXTERNAL_SOLVER
+        warnings.append("当前任务显式选择外部兜底，定时监控前请确认成本和稳定性。")
+    if config.get("stock_rule_type") or config.get("target_scope_selector"):
+        reason = "当前任务已配置解析规则，系统建议仅作为核对参考。"
+    if not target:
+        warnings.append("建议填写目标关键词，避免同页多个商品互相误判。")
+
+    return {
+        "profile_id": profile_id,
+        "label": label,
+        "confidence": confidence,
+        "recommended_fetch_mode": fetch_mode,
+        "recommended_rule_config": recommended_rule_config(profile_id),
+        "reason": reason,
+        "warnings": warnings[:3],
+    }
+
+
+def merge_site_profile_defaults(payload: dict[str, Any]) -> dict[str, Any]:
+    normalized = dict(payload)
+    config = parse_source_config(normalized.get("source_config", {}))
+    has_existing_config = bool(config)
+    profile = site_profile_for_url(
+        normalized.get("monitor_url", ""),
+        normalized.get("target_keyword", ""),
+        config,
+    )
+    if not normalized.get("fetch_mode") and not normalized.get("fetch_strategy"):
+        normalized["fetch_mode"] = profile["recommended_fetch_mode"]
+    if not has_existing_config and not any(
+        str(config.get(key) or "").strip()
+        for key in (
+            "stock_rule_type",
+            "target_scope_selector",
+            "stock_selector",
+            "soldout_selector",
+            "button_selector",
+            "disabled_selector",
+            "regex_pattern",
+            "json_path",
+        )
+    ) and not (config.get("in_stock_keywords") or config.get("soldout_keywords")):
+        config.update(profile["recommended_rule_config"])
+        config.setdefault("site_profile_id", profile["profile_id"])
+    normalized["source_config"] = config
+    return normalized
 
 
 def migrate_legacy_fetch_strategy(value: Any) -> str:
@@ -2930,11 +3063,13 @@ def to_task_payload(row: sqlite3.Row) -> dict[str, Any]:
     last_fetch_attempts = parse_fetch_attempts_text(row["last_fetch_attempts"] if "last_fetch_attempts" in keys else "")
     last_error_kind = task_error_kind_from_attempts(last_error, last_fetch_attempts)
     task_domain = fetch_domain_for_url(row["monitor_url"])
+    safe_source_config = normalize_source_config_text(row["source_config"] if "source_config" in keys else "{}")
     normalized_fetch_strategy = normalize_fetch_strategy(row["fetch_strategy"] if "fetch_strategy" in keys else "")
     normalized_fetch_mode = task_fetch_mode_for_strategy(
         normalized_fetch_strategy,
-        row["source_config"] if "source_config" in keys else "{}",
+        safe_source_config,
     )
+    site_profile = site_profile_for_url(row["monitor_url"], row["target_keyword"], safe_source_config)
     last_fetch_backend = (row["last_fetch_backend"] or "") if "last_fetch_backend" in keys else ""
     last_error_detail = summarize_task_error(last_error, last_error_kind)
     last_error_diagnostic = stock_check_diagnostic(
@@ -2957,7 +3092,8 @@ def to_task_payload(row: sqlite3.Row) -> dict[str, Any]:
         "fetch_strategy": normalized_fetch_strategy,
         "fetch_mode": normalized_fetch_mode,
         "collector_strategy": collector_strategy_for_task(row),
-        "source_config": normalize_source_config_text(row["source_config"] if "source_config" in keys else "{}"),
+        "source_config": safe_source_config,
+        "site_profile": site_profile,
         "restock_template": row["restock_template"],
         "soldout_template": row["soldout_template"],
         "button_1_text": row["button_1_text"] or "",
@@ -3129,7 +3265,7 @@ def validate_task_payload(payload: dict[str, Any]) -> tuple[bool, str]:
 
 
 def normalize_task_collection_payload(payload: dict[str, Any]) -> dict[str, Any]:
-    normalized = dict(payload)
+    normalized = merge_site_profile_defaults(payload)
     if "fetch_mode" in normalized:
         fetch_strategy, source_config = strategy_config_for_task_fetch_mode(
             normalized.get("fetch_mode"),
@@ -9984,10 +10120,11 @@ def make_app() -> Flask:
         valid, message = validate_task_payload(payload)
         if not valid:
             return jsonify({"ok": False, "message": message}), 400
+        normalized_payload = normalize_task_collection_payload(payload)
 
         timestamp = now_iso()
         with open_connection() as connection:
-            task_id = insert_task_record(connection, payload, timestamp)
+            task_id = insert_task_record(connection, normalized_payload, timestamp)
         log_activity("info", "tasks", f"已创建任务 #{task_id}。")
         return jsonify({"ok": True, "message": "任务已创建。", "task_id": task_id})
 
