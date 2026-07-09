@@ -3544,6 +3544,149 @@ class PortalAppTestCase(unittest.TestCase):
         settings.update(overrides)
         return settings
 
+    def test_hostmonit_stock_source_matches_dmit_sold_out_strictly(self) -> None:
+        class FakeResponse:
+            status_code = 200
+
+            def json(self):
+                return {
+                    "content": [
+                        {
+                            "id": 1039,
+                            "title": "LAX.AS3.Pro.TINY",
+                            "monitorUrl": "https://www.dmit.io/cart.php?a=add&pid=253",
+                            "productUrl": "https://www.dmit.io/aff.php?aff=3803&a=add&pid=253",
+                            "monitorStatus": 0,
+                            "availableNum": "1",
+                            "level": 1,
+                        }
+                    ],
+                    "totalElements": 1,
+                }
+
+        class FakeSession:
+            def __init__(self) -> None:
+                self.calls: list[dict[str, object]] = []
+
+            def post(self, url, headers=None, json=None, timeout=None):
+                self.calls.append({"url": url, "json": json, "timeout": timeout})
+                return FakeResponse()
+
+        session = FakeSession()
+        source = app_module.HostMonitStockSource(session)
+        result = source.fetch(
+            {
+                "name": "Dmit LAX.AS3.Pro.TINY",
+                "monitor_url": "https://www.dmit.io/cart.php?region=los-angeles&network=premium&generation=as3",
+                "target_keyword": "LAX.AS3.Pro.TINY",
+                "source_config": "{}",
+            },
+            {
+                "request_timeout_seconds": 25,
+                "public_stock_sources_enabled": True,
+                "hostmonit_stock_enabled": True,
+                "hostmonit_api_url": "https://backend.stock.hostmonit.com",
+            },
+        )
+
+        self.assertIsNotNone(result)
+        self.assertEqual(result.stock, 0)
+        self.assertEqual(result.error_kind, "")
+        self.assertIn("确认售罄", result.detail)
+        self.assertEqual(session.calls[0]["json"]["provider"], "dmit")
+        self.assertEqual(session.calls[0]["json"]["keyword"], "lax.as3.pro.tiny")
+
+    def test_hostmonit_stock_source_matches_dmit_in_stock_strictly(self) -> None:
+        class FakeResponse:
+            status_code = 200
+
+            def json(self):
+                return {
+                    "content": [
+                        {
+                            "id": 861,
+                            "title": "HKG.AS3.Pro.TINY",
+                            "monitorUrl": "https://www.dmit.io/cart.php?a=add&pid=265",
+                            "productUrl": "https://www.dmit.io/aff.php?aff=3803&a=add&pid=265",
+                            "monitorStatus": 1,
+                            "availableNum": "1",
+                            "level": 3,
+                        }
+                    ],
+                    "totalElements": 1,
+                }
+
+        source = app_module.HostMonitStockSource(FakeSession := type("FakeSession", (), {
+            "__init__": lambda self: setattr(self, "calls", []),
+            "post": lambda self, url, headers=None, json=None, timeout=None: (self.calls.append({"url": url, "json": json, "timeout": timeout}) or FakeResponse()),
+        })())
+        result = source.fetch(
+            {
+                "name": "DMIT Hong Kong HKG.AS3.Pro.TINY",
+                "monitor_url": "https://www.dmit.io/cart.php?region=hong-kong&network=premium&generation=as3",
+                "target_keyword": "HKG.AS3.Pro.TINY",
+                "source_config": "{}",
+            },
+            {
+                "request_timeout_seconds": 25,
+                "public_stock_sources_enabled": True,
+                "hostmonit_stock_enabled": True,
+                "hostmonit_api_url": "https://backend.stock.hostmonit.com",
+            },
+        )
+
+        self.assertIsNotNone(result)
+        self.assertEqual(result.stock, 1)
+        self.assertEqual(result.error_kind, "")
+        self.assertIn("确认有货", result.detail)
+
+    def test_scrape_task_uses_public_stock_source_before_page_fetch(self) -> None:
+        class ExplodingSelector:
+            def fetch_pipeline(self, task, browser_harness, settings_payload, context="monitor"):
+                raise AssertionError("public stock hit should not fetch protected merchant page")
+
+        class FakePublicSource:
+            def fetch(self, task, settings_payload, timeout_seconds=None):
+                return app_module.PublicStockResult(
+                    stock=0,
+                    detail="HostMonit：monitorStatus=0，确认售罄。",
+                    backend="hostmonit",
+                    final_url="https://www.dmit.io/cart.php?a=add&pid=253",
+                    fragment='{"title":"LAX.AS3.Pro.TINY"}',
+                )
+
+        engine = self.app.extensions["monitor_engine"]
+        original_selector = engine.fetcher_selector
+        original_public_source = engine.public_stock_source
+        try:
+            engine.fetcher_selector = ExplodingSelector()
+            engine.public_stock_source = FakePublicSource()
+            result = engine.scrape_task(
+                {
+                    "name": "Dmit LAX.AS3.Pro.TINY",
+                    "monitor_url": "https://www.dmit.io/cart.php?region=los-angeles&network=premium&generation=as3",
+                    "target_keyword": "LAX.AS3.Pro.TINY",
+                    "fetch_strategy": "multi_engine",
+                    "source_config": "{}",
+                    "cooldown_until": "2999-01-01T00:00:00+00:00",
+                },
+                {
+                    "request_timeout_seconds": 25,
+                    "public_stock_sources_enabled": True,
+                    "hostmonit_stock_enabled": True,
+                    "hostmonit_api_url": "https://backend.stock.hostmonit.com",
+                },
+                use_test_browser=False,
+            )
+        finally:
+            engine.fetcher_selector = original_selector
+            engine.public_stock_source = original_public_source
+
+        self.assertEqual(result.stock, 0)
+        self.assertEqual(result.error_kind, "")
+        self.assertEqual(result.backend_used, "hostmonit")
+        self.assertEqual([attempt.backend for attempt in result.fetch_attempts or []], ["hostmonit"])
+
     def test_firecrawl_fetcher_success_uses_raw_html_and_cache_controls(self) -> None:
         class FakeResponse:
             status_code = 200
@@ -4230,7 +4373,12 @@ class PortalAppTestCase(unittest.TestCase):
                     "target_keyword": "Osaka VPS",
                     "fetch_strategy": "scrapling_standard",
                 },
-                {"request_timeout_seconds": 25, **self.scrapling_settings()},
+                {
+                    "request_timeout_seconds": 25,
+                    "public_stock_sources_enabled": False,
+                    "hostmonit_stock_enabled": False,
+                    **self.scrapling_settings(),
+                },
                 use_test_browser=False,
             )
         finally:
@@ -4268,7 +4416,12 @@ class PortalAppTestCase(unittest.TestCase):
                     "target_keyword": "HKG.AS3.Pro.TINY",
                     "fetch_strategy": "scrapling_standard",
                 },
-                {"request_timeout_seconds": 25, **self.scrapling_settings()},
+                {
+                    "request_timeout_seconds": 25,
+                    "public_stock_sources_enabled": False,
+                    "hostmonit_stock_enabled": False,
+                    **self.scrapling_settings(),
+                },
                 use_test_browser=False,
             )
         finally:
@@ -4304,7 +4457,12 @@ class PortalAppTestCase(unittest.TestCase):
                     "fetch_strategy": "scrapling_adaptive",
                     "source_config": "{}",
                 },
-                {"request_timeout_seconds": 25, **self.scrapling_settings()},
+                {
+                    "request_timeout_seconds": 25,
+                    "public_stock_sources_enabled": False,
+                    "hostmonit_stock_enabled": False,
+                    **self.scrapling_settings(),
+                },
                 use_test_browser=True,
             )
         finally:
@@ -4348,7 +4506,12 @@ class PortalAppTestCase(unittest.TestCase):
                     "cooldown_until": (app_module.now_utc() + app_module.timedelta(minutes=10)).isoformat(timespec="seconds"),
                     "last_error": app_module.protected_source_cooldown_message("future"),
                 },
-                {"request_timeout_seconds": 25, **self.scrapling_settings()},
+                {
+                    "request_timeout_seconds": 25,
+                    "public_stock_sources_enabled": False,
+                    "hostmonit_stock_enabled": False,
+                    **self.scrapling_settings(),
+                },
                 use_test_browser=False,
             )
         finally:
@@ -4398,7 +4561,12 @@ class PortalAppTestCase(unittest.TestCase):
                     "fetch_strategy": "scrapling_standard",
                     "source_config": "{}",
                 },
-                {"request_timeout_seconds": 25, **self.scrapling_settings()},
+                {
+                    "request_timeout_seconds": 25,
+                    "public_stock_sources_enabled": False,
+                    "hostmonit_stock_enabled": False,
+                    **self.scrapling_settings(),
+                },
                 use_test_browser=True,
             )
         finally:
@@ -4446,7 +4614,12 @@ class PortalAppTestCase(unittest.TestCase):
                     "fetch_strategy": "scrapling_standard",
                     "source_config": "{}",
                 },
-                {"request_timeout_seconds": 25, **self.scrapling_settings()},
+                {
+                    "request_timeout_seconds": 25,
+                    "public_stock_sources_enabled": False,
+                    "hostmonit_stock_enabled": False,
+                    **self.scrapling_settings(),
+                },
                 use_test_browser=True,
             )
         finally:
@@ -5441,6 +5614,78 @@ class PortalAppTestCase(unittest.TestCase):
         self.assertEqual(result.stock, 0)
         self.assertIn("LAX.AS3.Pro.TINY", result.fragment)
         self.assertIn("Out of Stock", result.fragment)
+        self.assertIn("售罄", result.detail)
+
+    def test_generic_pricing_table_does_not_treat_price_card_and_continue_as_stock(self) -> None:
+        fetch_result = app_module.FetchResult(
+            html="",
+            final_url="https://www.dmit.io/cart.php?region=los-angeles&network=premium&generation=as3",
+        )
+        html_text = """
+        <main>
+          <section>
+            <h2>選擇實例類型</h2>
+            <article class="product-card">
+              <h3>LAX.AS3.Pro.TINY</h3>
+              <p>$ 10.90 USD / Monthly</p>
+              <p>1 vCores 2.0GB RAM 20GB SSD</p>
+              <p>1000GB @ 1Gbps</p>
+            </article>
+          </section>
+          <footer class="cart-summary">
+            <button type="button">Continue</button>
+          </footer>
+        </main>
+        """
+
+        result = app_module.extract_stock_for_strategy(
+            "generic_pricing_table",
+            html_text,
+            "LAX.AS3.Pro.TINY",
+            {
+                "fetch_strategy": "multi_engine",
+                "monitor_url": "https://www.dmit.io/cart.php?region=los-angeles&network=premium&generation=as3",
+            },
+            fetch_result,
+        )
+
+        self.assertIsNone(result.stock)
+        self.assertIn("缺少明确购买入口或售罄标记", result.detail)
+
+    def test_generic_pricing_table_selected_soldout_beats_weak_continue_signal(self) -> None:
+        fetch_result = app_module.FetchResult(
+            html="",
+            final_url="https://www.dmit.io/cart.php?region=los-angeles&network=premium&generation=as3&product=lax.as3.pro.tiny",
+        )
+        html_text = """
+        <main>
+          <section>
+            <article class="product-card selected">
+              <h3>LAX.AS3.Pro.TINY</h3>
+              <span class="badge">Popular</span>
+              <span>Out of Stock</span>
+              <p>$ 10.90 USD / Monthly</p>
+              <p>1 vCores 2.0GB RAM 20GB SSD</p>
+            </article>
+          </section>
+          <footer class="cart-summary">
+            <button type="button">Continue</button>
+          </footer>
+        </main>
+        """
+
+        result = app_module.extract_stock_for_strategy(
+            "generic_pricing_table",
+            html_text,
+            "LAX.AS3.Pro.TINY",
+            {
+                "fetch_strategy": "multi_engine",
+                "monitor_url": "https://www.dmit.io/cart.php?region=los-angeles&network=premium&generation=as3&product=lax.as3.pro.tiny",
+            },
+            fetch_result,
+        )
+
+        self.assertEqual(result.stock, 0)
         self.assertIn("售罄", result.detail)
 
     def test_generic_pricing_table_unknown_detail_explains_missing_signal_or_target(self) -> None:

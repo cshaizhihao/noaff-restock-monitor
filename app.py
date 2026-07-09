@@ -156,6 +156,9 @@ DEFAULT_SCRAPLING_MAX_CONCURRENCY_STEALTH = int(os.getenv("SCRAPLING_MAX_CONCURR
 DEFAULT_SCRAPLING_SESSION_REUSE = env_bool("SCRAPLING_SESSION_REUSE", True)
 DEFAULT_SCRAPLING_ADAPTIVE_SELECTOR = env_bool("SCRAPLING_ADAPTIVE_SELECTOR", True)
 DEFAULT_SCRAPLING_HEADLESS = env_bool("SCRAPLING_HEADLESS", True)
+DEFAULT_PUBLIC_STOCK_SOURCES_ENABLED = env_bool("PUBLIC_STOCK_SOURCES_ENABLED", True)
+DEFAULT_HOSTMONIT_STOCK_ENABLED = env_bool("HOSTMONIT_STOCK_ENABLED", True)
+DEFAULT_HOSTMONIT_API_URL = os.getenv("HOSTMONIT_API_URL", "https://backend.stock.hostmonit.com").strip().rstrip("/") or "https://backend.stock.hostmonit.com"
 DOMAIN_SESSION_TTL_HOURS = int(os.getenv("DOMAIN_SESSION_TTL_HOURS", "24"))
 DOMAIN_SESSION_UNLOCK_TIMEOUT_SECONDS = int(os.getenv("DOMAIN_SESSION_UNLOCK_TIMEOUT_SECONDS", "120"))
 DOMAIN_SESSION_PROFILE_ROOT = Path(os.getenv("DOMAIN_SESSION_PROFILE_ROOT", str(DATA_DIR / "domain-sessions")))
@@ -300,6 +303,9 @@ SETTINGS_DEFAULTS = {
     "scrapling_session_reuse": settings_bool_text(DEFAULT_SCRAPLING_SESSION_REUSE),
     "scrapling_adaptive_selector": settings_bool_text(DEFAULT_SCRAPLING_ADAPTIVE_SELECTOR),
     "scrapling_headless": settings_bool_text(DEFAULT_SCRAPLING_HEADLESS),
+    "public_stock_sources_enabled": settings_bool_text(DEFAULT_PUBLIC_STOCK_SOURCES_ENABLED),
+    "hostmonit_stock_enabled": settings_bool_text(DEFAULT_HOSTMONIT_STOCK_ENABLED),
+    "hostmonit_api_url": DEFAULT_HOSTMONIT_API_URL,
     "catalog_discovery_strategy": DEFAULT_CATALOG_DISCOVERY_STRATEGY,
     "catalog_scrape_strategy": DEFAULT_CATALOG_SCRAPE_STRATEGY,
     "catalog_default_fetch_strategy": DEFAULT_CATALOG_FETCH_STRATEGY,
@@ -392,6 +398,7 @@ LEGACY_FETCH_STRATEGY_MIGRATIONS = {
 }
 EXTERNAL_INPUT_FETCH_STRATEGIES = {FETCH_STRATEGY_MANUAL, FETCH_STRATEGY_WEBHOOK}
 EXTERNAL_INPUT_PENDING_ERROR_KINDS = {"manual_pending", "webhook_pending"}
+PUBLIC_STOCK_BACKEND_HOSTMONIT = "hostmonit"
 CATALOG_DISCOVERY_LOCAL = "local"
 CATALOG_DISCOVERY_FIRECRAWL_MAP = "firecrawl_map"
 CATALOG_DISCOVERY_HYBRID = "hybrid"
@@ -660,22 +667,24 @@ OUT_OF_STOCK_AVAILABILITY_PATTERNS = [
 ]
 ORDERABLE_PATTERNS = [
     re.compile(
-        r"\b(?:order\s*now|configure|add\s*to\s*cart|buy\s*now|checkout|purchase|"
-        r"continue|proceed|next\s*step|select(?:ed)?|choose|pre[-\s]?order|back[-\s]?order|"
-        r"back\s*in\s*stock|available\s*now|coming\s*soon)\b",
+        r"\b(?:order\s*now|configure|add\s*to\s*cart|buy\s*now|purchase|"
+        r"pre[-\s]?order|back[-\s]?order|back\s*in\s*stock|available\s*now)\b",
         re.IGNORECASE,
     ),
     re.compile(
         r"(?:立即(?:订购|訂購|购买|購買|下单|下單)|加入(?:购物车|購物車)|现在购买|現在購買|可下单|可下單|"
-        r"可购买|可購買|选择套餐|選擇套餐|已选|已選|选取此套餐|選取此套餐|继续|繼續|下一步|"
-        r"结账|結帳|前往付款|提交订单|提交訂單|订购|訂購|预售|預售|预订|預訂|预约|預約|补货|補貨|"
-        r"到货通知|到貨通知|即将到货|即將到貨|现货|現貨|有货|有貨)",
+        r"可购买|可購買|选取此套餐|選取此套餐|提交订单|提交訂單|订购|訂購|预售|預售|预订|預訂|"
+        r"预约|預約|现货|現貨|有货|有貨)",
     ),
-    re.compile(r"(?:cart\.php\?a=add|/cart/add|/checkout|/order)", re.IGNORECASE),
+    re.compile(r"(?:cart\.php\?a=(?:add|confproduct)|/cart/add|/order)", re.IGNORECASE),
+]
+WEAK_ORDERABLE_PATTERNS = [
+    re.compile(r"\b(?:continue|proceed|next\s*step|checkout|select(?:ed)?|choose)\b", re.IGNORECASE),
+    re.compile(r"(?:选择套餐|選擇套餐|已选|已選|继续|繼續|下一步|结账|結帳|前往付款)", re.IGNORECASE),
 ]
 GENERIC_ORDERABLE_PATTERNS = [
-    re.compile(r"\b(?:order\s*now|buy\s*now|configure|available|add\s*to\s*cart|continue|proceed|checkout)\b", re.IGNORECASE),
-    re.compile(r"(?:下单|下單|购买|購買|繼續|继续|結帳|结账|加入購物車|加入购物车)", re.IGNORECASE),
+    re.compile(r"\b(?:order\s*now|buy\s*now|configure|available|add\s*to\s*cart|purchase)\b", re.IGNORECASE),
+    re.compile(r"(?:下单|下單|购买|購買|加入購物車|加入购物车|可下单|可下單|可购买|可購買)", re.IGNORECASE),
 ]
 GENERIC_SOLD_OUT_PATTERNS = [
     re.compile(r"\b(?:out\s*of\s*stock|sold\s*out|unavailable)\b", re.IGNORECASE),
@@ -684,7 +693,7 @@ GENERIC_SOLD_OUT_PATTERNS = [
 WHMCS_ORDERABLE_PATTERNS = [
     re.compile(
         r"(?:cart\.php\?[^'\"<>]*(?:a=(?:add|confproduct)|pid=\d+)|configureproduct|"
-        r"\b(?:order\s*now|configure|continue|add\s*to\s*cart|checkout)\b)",
+        r"\b(?:order\s*now|configure|add\s*to\s*cart|purchase)\b)",
         re.IGNORECASE,
     ),
 ]
@@ -1368,6 +1377,188 @@ def product_query_slug_from_keyword(value: Any) -> str:
         if len(parts) >= 3 and any(part in PRODUCT_SIZE_TOKENS for part in parts):
             return ".".join(parts)
     return ""
+
+
+def public_stock_provider_for_task(task: Any) -> str:
+    source_config = task_source_config(task)
+    configured = str(source_config.get("public_stock_provider") or source_config.get("stock_provider") or "").strip().lower()
+    if configured:
+        return configured
+    url = str(mapping_value(task, "monitor_url", "") or "")
+    try:
+        hostname = (urlparse(url).hostname or "").lower()
+    except Exception:
+        hostname = ""
+    if hostname == "dmit.io" or hostname.endswith(".dmit.io"):
+        return "dmit"
+    return ""
+
+
+def public_stock_search_keyword(task: Any) -> str:
+    source_config = task_source_config(task)
+    for key in ("public_stock_keyword", "stock_keyword", "sku", "product_code"):
+        value = str(source_config.get(key) or "").strip()
+        if value:
+            return value
+    target_keyword = str(mapping_value(task, "target_keyword", "") or "").strip()
+    slug = product_query_slug_from_keyword(target_keyword)
+    return slug or target_keyword
+
+
+def hostmonit_task_pid(task: Any) -> int | None:
+    source_config = task_source_config(task)
+    for key in ("pid", "product_id", "hostmonit_pid"):
+        parsed_value = parse_int_value(source_config.get(key))
+        if parsed_value is not None:
+            return parsed_value
+    for url in (mapping_value(task, "monitor_url", ""),):
+        parsed_value = extract_query_int(str(url or ""), "pid")
+        if parsed_value is not None:
+            return parsed_value
+    return None
+
+
+def hostmonit_exact_item_match(item: dict[str, Any], task: Any, keyword: str) -> bool:
+    title = str(item.get("title") or "").strip()
+    if not title:
+        return False
+    target = keyword or str(mapping_value(task, "target_keyword", "") or "").strip()
+    target_token = normalized_product_token(target)
+    title_token = normalized_product_token(title)
+    if target_token and title_token and target_token == title_token:
+        return True
+    if target and title and target.strip().lower() == title.strip().lower():
+        return True
+    pid = hostmonit_task_pid(task)
+    if pid is not None:
+        for key in ("monitorUrl", "productUrl"):
+            item_pid = extract_query_int(str(item.get(key) or ""), "pid")
+            if item_pid == pid:
+                return True
+    return False
+
+
+def hostmonit_stock_from_item(item: dict[str, Any]) -> tuple[int | None, str]:
+    monitor_status = parse_int_value(item.get("monitorStatus"))
+    if monitor_status is not None:
+        if monitor_status > 0:
+            available = parse_int_value(item.get("availableNum"))
+            stock = available if available is not None and available > 0 else 1
+            return stock, f"HostMonit：monitorStatus={monitor_status}，确认有货。"
+        return 0, "HostMonit：monitorStatus=0，确认售罄。"
+    level = parse_int_value(item.get("level"))
+    if level == 1:
+        return 0, "HostMonit：库存等级为 oos，确认售罄。"
+    if level is not None and level > 1:
+        available = parse_int_value(item.get("availableNum"))
+        stock = available if available is not None and available > 0 else 1
+        return stock, f"HostMonit：库存等级为 {level}，确认有货。"
+    return None, "HostMonit：返回了商品，但缺少明确库存状态。"
+
+
+class HostMonitStockSource:
+    def __init__(self, session: requests.Session | None = None) -> None:
+        self.session = session or requests.Session()
+
+    def fetch(self, task: Any, settings_payload: dict[str, Any], timeout_seconds: int | None = None) -> "PublicStockResult | None":
+        if not settings_payload.get("public_stock_sources_enabled", DEFAULT_PUBLIC_STOCK_SOURCES_ENABLED):
+            return None
+        if not settings_payload.get("hostmonit_stock_enabled", DEFAULT_HOSTMONIT_STOCK_ENABLED):
+            return None
+        source_config = task_source_config(task)
+        if parse_setting_bool(source_config.get("disable_public_stock_source"), False):
+            return None
+        provider = public_stock_provider_for_task(task)
+        if provider != "dmit":
+            return None
+        keyword = public_stock_search_keyword(task)
+        if not keyword:
+            return None
+        api_url = str(settings_payload.get("hostmonit_api_url") or DEFAULT_HOSTMONIT_API_URL).rstrip("/")
+        timeout = int(timeout_seconds or settings_payload.get("request_timeout_seconds") or DEFAULT_TIMEOUT_SECONDS)
+        payload = {
+            "provider": provider,
+            "pageNo": 1,
+            "pageSize": 24,
+            "keyword": keyword,
+            "tags": [],
+            "region": "",
+            "sortBy": "default",
+            "levelFilter": "all",
+        }
+        headers = {
+            "User-Agent": DEFAULT_BROWSER_USER_AGENT or STATIC_HTTP_USER_AGENT,
+            "Accept": "application/json, text/plain, */*",
+            "Content-Type": "application/json",
+            "Origin": "https://stock.hostmonit.com",
+            "Referer": "https://stock.hostmonit.com/",
+        }
+        try:
+            response: Response = self.session.post(
+                f"{api_url}/api/product/search",
+                headers=headers,
+                json=payload,
+                timeout=timeout,
+            )
+        except requests.Timeout:
+            return PublicStockResult(
+                stock=None,
+                detail="HostMonit：公开库存源请求超时，已回退页面采集。",
+                backend=PUBLIC_STOCK_BACKEND_HOSTMONIT,
+                error_kind="hostmonit_timeout",
+            )
+        except requests.RequestException as exc:
+            return PublicStockResult(
+                stock=None,
+                detail=f"HostMonit：公开库存源请求失败，已回退页面采集：{str(exc)[:180]}",
+                backend=PUBLIC_STOCK_BACKEND_HOSTMONIT,
+                error_kind="hostmonit_request_error",
+            )
+        status_code = int(getattr(response, "status_code", 0) or 0)
+        if status_code >= 400:
+            return PublicStockResult(
+                stock=None,
+                detail=f"HostMonit：公开库存源 HTTP {status_code}，已回退页面采集。",
+                backend=PUBLIC_STOCK_BACKEND_HOSTMONIT,
+                status_code=status_code,
+                error_kind="hostmonit_http_error",
+            )
+        try:
+            payload_data = response.json()
+        except ValueError:
+            return PublicStockResult(
+                stock=None,
+                detail="HostMonit：公开库存源返回非 JSON，已回退页面采集。",
+                backend=PUBLIC_STOCK_BACKEND_HOSTMONIT,
+                status_code=status_code,
+                error_kind="hostmonit_bad_response",
+            )
+        if not isinstance(payload_data, dict):
+            return PublicStockResult(
+                stock=None,
+                detail="HostMonit：公开库存源响应结构异常，已回退页面采集。",
+                backend=PUBLIC_STOCK_BACKEND_HOSTMONIT,
+                status_code=status_code,
+                error_kind="hostmonit_bad_response",
+            )
+        content = payload_data.get("content")
+        if not isinstance(content, list):
+            content = []
+        matched_items = [item for item in content if isinstance(item, dict) and hostmonit_exact_item_match(item, task, keyword)]
+        if not matched_items:
+            return None
+        item = matched_items[0]
+        stock, detail = hostmonit_stock_from_item(item)
+        fragment = json.dumps(item, ensure_ascii=False, sort_keys=True)
+        return PublicStockResult(
+            stock=stock,
+            detail=detail,
+            backend=PUBLIC_STOCK_BACKEND_HOSTMONIT,
+            fragment=fragment,
+            final_url=str(item.get("monitorUrl") or item.get("productUrl") or mapping_value(task, "monitor_url", "") or ""),
+            status_code=status_code,
+            error_kind="" if stock is not None else "hostmonit_unknown",
+        )
 
 
 def monitor_url_for_fetch(task: Any) -> str:
@@ -2237,6 +2428,15 @@ def normalize_settings(raw: dict[str, str]) -> dict[str, Any]:
         "catalog_max_discovered_urls": max(1, min(250, int(raw.get("catalog_max_discovered_urls") or 50))),
         "catalog_max_import_items": max(1, min(250, int(raw.get("catalog_max_import_items") or 50))),
         "catalog_timeout_seconds": max(10, min(180, int(raw.get("catalog_timeout_seconds") or timeout_seconds))),
+        "public_stock_sources_enabled": parse_setting_bool(
+            raw.get("public_stock_sources_enabled"),
+            DEFAULT_PUBLIC_STOCK_SOURCES_ENABLED,
+        ),
+        "hostmonit_stock_enabled": parse_setting_bool(
+            raw.get("hostmonit_stock_enabled"),
+            DEFAULT_HOSTMONIT_STOCK_ENABLED,
+        ),
+        "hostmonit_api_url": (raw.get("hostmonit_api_url") or DEFAULT_HOSTMONIT_API_URL).strip().rstrip("/") or DEFAULT_HOSTMONIT_API_URL,
     }
     payload.update(normalize_scrapling_settings(raw))
     return payload
@@ -3316,6 +3516,17 @@ class ScrapeResult:
     shared_fetch_key: str = ""
     shared_fetch_backend: str = ""
     domain_cooldown_until: str = ""
+
+
+@dataclass
+class PublicStockResult:
+    stock: int | None
+    detail: str
+    backend: str
+    fragment: str = ""
+    final_url: str = ""
+    error_kind: str = ""
+    status_code: int = 0
 
 
 class ProtectedSourceError(RuntimeError):
@@ -4979,6 +5190,7 @@ class MonitoringEngine:
         self.catalog_browser = BrowserHarness("catalog", DEFAULT_CATALOG_PORT, DEFAULT_HEADLESS, browser_binary)
         self.fetcher_selector = FetcherSelector()
         self.domain_unlocker = DomainSessionUnlocker()
+        self.public_stock_source = HostMonitStockSource()
         self.last_cycle_started = ""
         self.last_cycle_finished = ""
         self.last_exception = ""
@@ -5117,6 +5329,26 @@ class MonitoringEngine:
     ) -> ScrapeResult:
         fetch_domain = fetch_domain_for_url(mapping_value(task, "monitor_url", ""))
         shared_key = fetch_cache_key(task)
+        public_attempt = FetchAttempt(backend=PUBLIC_STOCK_BACKEND_HOSTMONIT, started_at=now_iso())
+        public_result = self.public_stock_source.fetch(task, settings_payload)
+        if public_result is not None:
+            public_attempt.ended_at = now_iso()
+            public_attempt.final_url = public_result.final_url or str(mapping_value(task, "monitor_url", "") or "")
+            public_attempt.error_kind = public_result.error_kind
+            public_attempt.detail = public_result.detail[:300]
+            public_attempt.status = "success" if public_result.stock is not None and not public_result.error_kind else "failed"
+            if public_result.stock is not None and not public_result.error_kind:
+                return ScrapeResult(
+                    stock=public_result.stock,
+                    fragment=public_result.fragment,
+                    detail=public_result.detail,
+                    used_test_browser=use_test_browser,
+                    backend_used=public_result.backend,
+                    fetch_attempts=[public_attempt],
+                    fetch_domain=fetch_domain,
+                    shared_fetch_key=shared_key,
+                    shared_fetch_backend=public_result.backend,
+                )
         if not use_test_browser and is_task_in_protected_cooldown(task):
             cooldown_until = str(mapping_value(task, "cooldown_until", "") or "")
             if last_error_looks_like_firecrawl_cost(task):
@@ -7224,6 +7456,10 @@ def has_generic_orderable_marker(fragment: str, cleaned_text: str) -> bool:
     )
 
 
+def has_weak_orderable_marker(fragment: str, cleaned_text: str) -> bool:
+    return has_pattern_signal(fragment, cleaned_text, WEAK_ORDERABLE_PATTERNS)
+
+
 def has_generic_sold_out_marker(fragment: str, cleaned_text: str) -> bool:
     lowered = cleaned_text.lower()
     return has_sold_out_marker(cleaned_text) or any(pattern.search(lowered) for pattern in GENERIC_SOLD_OUT_PATTERNS)
@@ -7302,7 +7538,7 @@ def find_product_query_position(html_text: str, task: Any, fetch_result: FetchRe
     return -1
 
 
-def page_has_enabled_orderable_control(html_text: str) -> bool:
+def page_has_enabled_orderable_control(html_text: str, *, allow_weak: bool = False) -> bool:
     control_pattern = re.compile(r"(?is)<(?P<tag>a|button)\b(?P<attrs>[^>]*)>(?P<body>.{0,240}?)</(?P=tag)>")
     for match in control_pattern.finditer(html_text or ""):
         attrs = html_module.unescape(match.group("attrs") or "")
@@ -7318,7 +7554,20 @@ def page_has_enabled_orderable_control(html_text: str) -> bool:
             continue
         if has_orderable_marker(control_text, body):
             return True
+        if allow_weak and has_weak_orderable_marker(control_text, body):
+            return True
     return False
+
+
+def fragment_has_selected_state(fragment: str) -> bool:
+    if not fragment:
+        return False
+    return bool(
+        re.search(
+            r"(?is)\b(?:class|data-state|aria-selected)\s*=\s*['\"][^'\"]*(?:selected|active|current|chosen|true)[^'\"]*['\"]",
+            fragment,
+        )
+    )
 
 
 def page_level_orderable_for_target(
@@ -7331,6 +7580,7 @@ def page_level_orderable_for_target(
     target_in_fragment = find_html_text_position(fragment, target_keyword) >= 0
     target_in_page = find_html_text_position(html_text, target_keyword) >= 0
     selected_by_url = target_selected_by_url(task, fetch_result, target_keyword)
+    selected_by_fragment = fragment_has_selected_state(fragment)
     if not target_in_fragment and not target_in_page and not selected_by_url:
         return False
     if has_generic_sold_out_marker(fragment, clean_fragment_text(fragment)):
@@ -7338,9 +7588,11 @@ def page_level_orderable_for_target(
     page_cleaned = clean_fragment_text(html_text)
     if has_generic_sold_out_marker(html_text, page_cleaned) and not selected_by_url:
         return False
-    if not page_has_enabled_orderable_control(html_text):
-        return False
-    return selected_by_url or has_generic_orderable_marker(html_text, page_cleaned)
+    if page_has_enabled_orderable_control(html_text):
+        return selected_by_url or selected_by_fragment or has_generic_orderable_marker(html_text, page_cleaned)
+    if selected_by_url or selected_by_fragment:
+        return page_has_enabled_orderable_control(html_text, allow_weak=True)
+    return False
 
 
 def has_generic_pricing_signal(fragment: str) -> bool:
@@ -8773,6 +9025,9 @@ def make_app() -> Flask:
                     "scrapling_session_reuse": settings_payload["scrapling_session_reuse"],
                     "scrapling_adaptive_selector": settings_payload["scrapling_adaptive_selector"],
                     "scrapling_headless": settings_payload["scrapling_headless"],
+                    "public_stock_sources_enabled": settings_payload["public_stock_sources_enabled"],
+                    "hostmonit_stock_enabled": settings_payload["hostmonit_stock_enabled"],
+                    "hostmonit_api_url": settings_payload["hostmonit_api_url"],
                     "catalog_discovery_strategy": settings_payload["catalog_discovery_strategy"],
                     "catalog_scrape_strategy": settings_payload["catalog_scrape_strategy"],
                     "catalog_default_fetch_strategy": settings_payload["catalog_default_fetch_strategy"],
@@ -9954,6 +10209,8 @@ def make_app() -> Flask:
             "scrapling_session_reuse",
             "scrapling_adaptive_selector",
             "scrapling_headless",
+            "public_stock_sources_enabled",
+            "hostmonit_stock_enabled",
         ):
             if key in payload:
                 updates[key] = settings_bool_text(parse_setting_bool(payload.get(key)))
@@ -9967,6 +10224,12 @@ def make_app() -> Flask:
             if not api_url or not validate_http_url(api_url):
                 return jsonify({"ok": False, "message": "Firecrawl API URL 必须是有效的 http(s) 地址。"}), 400
             updates["firecrawl_api_url"] = api_url
+
+        if "hostmonit_api_url" in payload:
+            api_url = str(payload.get("hostmonit_api_url", "")).strip().rstrip("/")
+            if not api_url or not validate_http_url(api_url):
+                return jsonify({"ok": False, "message": "HostMonit API URL 必须是有效的 http(s) 地址。"}), 400
+            updates["hostmonit_api_url"] = api_url
 
         if "firecrawl_api_key" in payload:
             updates["firecrawl_api_key"] = str(payload.get("firecrawl_api_key", "")).strip()

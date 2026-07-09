@@ -329,6 +329,16 @@ Scrapling：
 | `SCRAPLING_SESSION_REUSE` | 复用站点会话 | `true` |
 | `SCRAPLING_ADAPTIVE_SELECTOR` | 启用自适应选择器 | `true` |
 
+公共库存源：
+
+| 变量 | 说明 | 默认 |
+| --- | --- | --- |
+| `PUBLIC_STOCK_SOURCES_ENABLED` | 启用公开库存索引优先查询 | `true` |
+| `HOSTMONIT_STOCK_ENABLED` | 启用 HostMonit 公开库存源 | `true` |
+| `HOSTMONIT_API_URL` | HostMonit 后端 API 地址 | `https://backend.stock.hostmonit.com` |
+
+DMIT 任务会先尝试 HostMonit 公开库存索引，并且只在商品名或 PID 精确匹配时采用结果。命中后不请求 DMIT 商品页，因此不会被 Cloudflare 页面、价格卡片或“继续”按钮误导；未命中时才回退到本地采集链路。
+
 Firecrawl：
 
 | 变量 | 说明 | 默认 |

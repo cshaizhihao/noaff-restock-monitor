@@ -13,6 +13,7 @@ Project: NOAFF IDC restock monitor
 - Flask dashboard
 - SQLite storage
 - Multi-engine-first fetch pipeline
+- HostMonit public stock index for strict DMIT SKU/PID stock checks before touching protected DMIT cart pages
 - `curl_cffi` browser-fingerprint HTTP first layer
 - Legacy DrissionPage / Chromium fallback
 - Optional Firecrawl external fallback / diagnostics
@@ -57,6 +58,7 @@ The migration is marked by `scrapling_fetch_strategy_migration_v1` and runs once
 ## Implemented Behavior
 
 - `multi_engine` is the default monitor and catalog fetch strategy.
+- DMIT tasks first query HostMonit via `HOSTMONIT_API_URL`; exact SKU/PID matches return stock directly and skip Cloudflare-protected cart pages.
 - `curl_cffi` is the first low-cost engine, followed by Scrapling standard/dynamic/stealth when the lightweight request is insufficient.
 - Firecrawl is no longer the default for realtime polling; it remains an external fallback/diagnostic option.
 - Domain-level fetch sharing avoids repeatedly fetching the same URL/domain in one cycle.
