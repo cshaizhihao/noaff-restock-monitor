@@ -3913,6 +3913,118 @@ class PortalAppTestCase(unittest.TestCase):
         self.assertIn("仍无法获取真实商品页", import_response.get_json()["message"])
         self.assertIsNone(app_module.get_domain_session("www.dmit.io"))
 
+    def test_domain_session_unlocker_warms_homepage_before_target_with_persistent_profile(self) -> None:
+        original_find_browser_binary = app_module.find_browser_binary
+        original_ensure_display = app_module.ensure_scrapling_display_for_headed
+        original_profile_root = app_module.DOMAIN_SESSION_PROFILE_ROOT
+        original_browser_ua = app_module.DEFAULT_BROWSER_USER_AGENT
+
+        class FakePage:
+            def __init__(self) -> None:
+                self.urls: list[str] = []
+                self.waits: list[tuple[str, int | None]] = []
+
+            def goto(self, url, wait_until=None, timeout=None):
+                self.urls.append(url)
+                self.waits.append((wait_until, timeout))
+
+            def wait_for_timeout(self, timeout):
+                return None
+
+            def wait_for_load_state(self, state, timeout=None):
+                self.waits.append((state, timeout))
+
+            @property
+            def url(self):
+                return self.urls[-1] if self.urls else ""
+
+            def title(self):
+                return "DMIT Cart"
+
+            def content(self):
+                return "<html><title>DMIT Cart</title><body>HKG.AS3.Pro.TINY <button>Order Now</button></body></html>"
+
+            def evaluate(self, expression):
+                return "Mozilla/5.0 Fake Chrome"
+
+        class FakeContext:
+            def __init__(self) -> None:
+                self.page = FakePage()
+                self.pages = [self.page]
+                self.scripts: list[str] = []
+                self.closed = False
+
+            def add_init_script(self, script):
+                self.scripts.append(script)
+
+            def new_page(self):
+                return self.page
+
+            def cookies(self):
+                return [{"name": "cf_clearance", "value": "ok", "domain": "www.dmit.io", "path": "/"}]
+
+            def close(self):
+                self.closed = True
+
+        class FakeChromium:
+            def __init__(self, context: FakeContext) -> None:
+                self.context = context
+                self.launch_calls: list[tuple[str, dict[str, object]]] = []
+
+            def launch_persistent_context(self, profile_path, **kwargs):
+                self.launch_calls.append((profile_path, kwargs))
+                return self.context
+
+        class FakePlaywright:
+            def __init__(self, chromium: FakeChromium) -> None:
+                self.chromium = chromium
+
+        class FakeSyncPlaywright:
+            def __init__(self, playwright: FakePlaywright) -> None:
+                self.playwright = playwright
+
+            def __call__(self):
+                return self
+
+            def __enter__(self):
+                return self.playwright
+
+            def __exit__(self, exc_type, exc, traceback):
+                return False
+
+        fake_context = FakeContext()
+        fake_chromium = FakeChromium(fake_context)
+        unlocker = app_module.DomainSessionUnlocker()
+        unlocker._sync_playwright = lambda: FakeSyncPlaywright(FakePlaywright(fake_chromium))
+
+        try:
+            app_module.find_browser_binary = lambda: "/usr/bin/chromium"
+            app_module.ensure_scrapling_display_for_headed = lambda: ":99"
+            app_module.DOMAIN_SESSION_PROFILE_ROOT = self.data_dir / "domain-sessions"
+            app_module.DEFAULT_BROWSER_USER_AGENT = "Mozilla/5.0 Configured Chrome"
+            result = unlocker.unlock(
+                "https://www.dmit.io/cart.php?region=hong-kong&network=premium&generation=as3",
+                target_keyword="HKG.AS3.Pro.TINY",
+                timeout_seconds=20,
+            )
+        finally:
+            app_module.find_browser_binary = original_find_browser_binary
+            app_module.ensure_scrapling_display_for_headed = original_ensure_display
+            app_module.DOMAIN_SESSION_PROFILE_ROOT = original_profile_root
+            app_module.DEFAULT_BROWSER_USER_AGENT = original_browser_ua
+
+        self.assertEqual(result.status, app_module.DOMAIN_SESSION_STATUS_READY)
+        self.assertEqual(fake_context.page.urls[0], "https://www.dmit.io/")
+        self.assertEqual(fake_context.page.urls[1], "https://www.dmit.io/cart.php?region=hong-kong&network=premium&generation=as3")
+        self.assertTrue(fake_context.closed)
+        self.assertEqual(len(fake_chromium.launch_calls), 1)
+        profile_path, launch_kwargs = fake_chromium.launch_calls[0]
+        self.assertTrue(profile_path.endswith("www.dmit.io"))
+        self.assertFalse(launch_kwargs["headless"])
+        self.assertEqual(launch_kwargs["user_agent"], "Mozilla/5.0 Configured Chrome")
+        self.assertIn("--disable-blink-features=AutomationControlled", launch_kwargs["args"])
+        self.assertTrue(any("navigator" in script and "webdriver" in script for script in fake_context.scripts))
+
     def firecrawl_settings(self, **overrides) -> dict[str, object]:
         settings = {
             "firecrawl_enabled": True,
@@ -5580,6 +5692,51 @@ class PortalAppTestCase(unittest.TestCase):
         self.assertIn("generic_pricing_table", in_stock.detail)
         self.assertEqual(sold_out.stock, 0)
         self.assertIn("售罄", sold_out.detail)
+
+    def test_cloudflare_detection_does_not_flag_plain_brand_mentions(self) -> None:
+        html_text = """
+        <html>
+          <title>IDC Products</title>
+          <body>
+            <section>Tokyo VPS <a>Order Now</a></section>
+            <footer>CDN acceleration can use Cloudflare or other providers.</footer>
+          </body>
+        </html>
+        """
+
+        self.assertFalse(app_module.looks_like_cloudflare_challenge(html_text, "IDC Products", "https://example.com/products"))
+
+    def test_extract_stock_rejects_challenge_page_even_with_product_words(self) -> None:
+        html_text = """
+        <html>
+          <title>Just a moment...</title>
+          <body>
+            <script src="https://challenges.cloudflare.com/turnstile/v0/api.js"></script>
+            <section>
+              <h2>HKG.AS3.Pro.TINY</h2>
+              <a>Order Now</a>
+              <span>Inventory: 99</span>
+            </section>
+          </body>
+        </html>
+        """
+        fetch_result = app_module.FetchResult(
+            html=html_text,
+            final_url="https://www.dmit.io/cart.php?region=hong-kong&network=premium&generation=as3",
+            status_code=403,
+        )
+
+        result = app_module.extract_stock_for_strategy(
+            "generic_pricing_table",
+            html_text,
+            "HKG.AS3.Pro.TINY",
+            {"fetch_strategy": "generic_pricing_table"},
+            fetch_result,
+        )
+
+        self.assertIsNone(result.stock)
+        self.assertEqual(result.fragment, "")
+        self.assertIn("保护页", result.detail)
 
     def test_generic_pricing_table_handles_idc_cart_cards_without_vendor_strategy(self) -> None:
         fetch_result = app_module.FetchResult(html="", final_url="https://example.com/cart.php?region=hong-kong&generation=as3")

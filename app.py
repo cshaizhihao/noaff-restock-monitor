@@ -1127,6 +1127,16 @@ def domain_session_profile_path(domain: str) -> Path:
     return DOMAIN_SESSION_PROFILE_ROOT / safe_domain_profile_name(domain)
 
 
+def domain_session_warmup_url(url: Any) -> str:
+    try:
+        parsed = urlparse(str(url or ""))
+    except Exception:
+        return ""
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        return ""
+    return f"{parsed.scheme}://{parsed.netloc}/"
+
+
 def normalize_cookie_payload(cookies: Any) -> list[dict[str, Any]]:
     if not isinstance(cookies, list):
         return []
@@ -4535,22 +4545,48 @@ class DomainSessionUnlocker:
         try:
             sync_playwright = self._sync_playwright()
             with sync_playwright() as playwright:
-                context = playwright.chromium.launch_persistent_context(
-                    str(profile_path),
-                    executable_path=browser_binary,
-                    headless=False,
-                    viewport={"width": 1440, "height": 980},
-                    locale="zh-CN",
-                    args=[
+                launch_kwargs: dict[str, Any] = {
+                    "executable_path": browser_binary,
+                    "headless": False,
+                    "viewport": {"width": 1440, "height": 980},
+                    "locale": "zh-CN",
+                    "args": [
                         "--no-sandbox",
                         "--disable-dev-shm-usage",
                         "--disable-gpu",
                         "--disable-blink-features=AutomationControlled",
                         "--window-size=1440,980",
                     ],
+                }
+                if DEFAULT_BROWSER_USER_AGENT:
+                    launch_kwargs["user_agent"] = DEFAULT_BROWSER_USER_AGENT
+                context = playwright.chromium.launch_persistent_context(
+                    str(profile_path),
+                    **launch_kwargs,
                 )
+                try:
+                    context.add_init_script(
+                        """
+                        Object.defineProperty(navigator, 'webdriver', {get: () => undefined});
+                        Object.defineProperty(navigator, 'languages', {get: () => ['zh-CN', 'zh', 'en-US', 'en']});
+                        Object.defineProperty(navigator, 'plugins', {get: () => [1, 2, 3, 4, 5]});
+                        """
+                    )
+                except Exception:
+                    pass
                 page = context.pages[0] if context.pages else context.new_page()
+                warmup_url = domain_session_warmup_url(url)
+                if warmup_url and warmup_url.rstrip("/") != str(url).rstrip("/"):
+                    try:
+                        page.goto(warmup_url, wait_until="domcontentloaded", timeout=min(20000, timeout_seconds * 1000))
+                        page.wait_for_timeout(1200)
+                    except Exception:
+                        pass
                 page.goto(url, wait_until="domcontentloaded", timeout=timeout_seconds * 1000)
+                try:
+                    page.wait_for_load_state("networkidle", timeout=5000)
+                except Exception:
+                    pass
                 page.wait_for_timeout(1200)
                 html_text = ""
                 final_url = url
@@ -5847,6 +5883,20 @@ class MonitoringEngine:
             status_code=pipeline_result.status_code,
             detail=pipeline_result.detail,
         )
+        if looks_like_cloudflare_challenge(pipeline_result.html, extract_page_title(pipeline_result.html), pipeline_result.final_url):
+            return ScrapeResult(
+                stock=None,
+                fragment="",
+                detail="目标页返回保护页，未进入库存解析。" + attempts_summary,
+                used_test_browser=use_test_browser,
+                error_kind="cloudflare_challenge",
+                backend_used=pipeline_result.backend_used,
+                fetch_attempts=pipeline_result.attempts,
+                fetch_domain=fetch_domain,
+                shared_fetch_key=shared_key,
+                shared_fetch_backend=shared_backend or backend_used,
+                domain_cooldown_until=task_domain_cooldown_until,
+            )
         extracted = extract_stock_for_strategy(
             task_fetch_strategy(task),
             pipeline_result.html,
@@ -7119,19 +7169,52 @@ def catalog_browser_error_message(exc: Exception, port: int) -> str:
 
 
 def looks_like_cloudflare_challenge(html_text: str, title: str = "", url: str = "") -> bool:
-    haystack = " ".join(part for part in (html_text[:8000], title, url) if part).lower()
-    return any(
-        marker in haystack
-        for marker in (
-            "just a moment",
-            "cloudflare",
-            "turnstile",
-            "cf-turnstile",
-            "checking your browser",
-            "attention required",
-            "verify you are human",
-        )
+    html_head = html_text[:20000]
+    haystack = " ".join(part for part in (html_head, title, url) if part).lower()
+    normalized_title = normalize_signal_text(title or extract_page_title(html_text))
+
+    strong_markers = (
+        "cf-turnstile",
+        "cf_chl_",
+        "cf-chl-",
+        "cf_chl_opt",
+        "cf_chl_prog",
+        "challenge-platform",
+        "/cdn-cgi/challenge-platform/",
+        "challenges.cloudflare.com",
+        "__cf_chl_tk",
+        "turnstile.render",
+        "verify you are human",
+        "checking your browser",
+        "checking if the site connection is secure",
+        "review the security of your connection",
+        "enable javascript and cookies to continue",
+        "please wait while we verify",
+        "attention required",
     )
+    if any(marker in haystack for marker in strong_markers):
+        return True
+
+    title_markers = {
+        "justamoment",
+        "attentionrequired",
+        "checkingyourbrowser",
+        "verifyyouarehuman",
+        "onemoremoment",
+    }
+    if normalized_title in title_markers or normalized_title.startswith("justamoment"):
+        return True
+
+    cloudflare_context_markers = (
+        "ray id",
+        "rayid",
+        "performance & security by cloudflare",
+        "cloudflare ray",
+        "managed challenge",
+        "cloudflare challenge",
+        "cloudflare turnstile",
+    )
+    return "cloudflare" in haystack and any(marker in haystack for marker in cloudflare_context_markers)
 
 
 def slice_fragment(html_text: str, keyword: str) -> str:
@@ -8233,6 +8316,12 @@ def extract_stock_for_strategy(
     task: Any,
     fetch_result: FetchResult,
 ) -> ExtractorResult:
+    if looks_like_cloudflare_challenge(html_text, extract_page_title(html_text), fetch_result.final_url):
+        return ExtractorResult(
+            stock=None,
+            fragment="",
+            detail="目标页返回保护页，未进入库存解析。",
+        )
     rule_result = extract_stock_by_rule(html_text, target_keyword, task, fetch_result)
     if rule_result is not None:
         return rule_result
