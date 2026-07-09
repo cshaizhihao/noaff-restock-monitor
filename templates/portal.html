@@ -1480,6 +1480,20 @@
                 </div>
 
                 <form id="task-move-form" class="grid gap-4">
+                    <div id="task-move-summary" class="task-move-summary-grid">
+                        <div>
+                            <span>当前选择</span>
+                            <strong id="task-move-source">-</strong>
+                        </div>
+                        <div>
+                            <span>移动到</span>
+                            <strong id="task-move-target">默认分组</strong>
+                        </div>
+                    </div>
+                    <div>
+                        <label class="form-label">常用目标</label>
+                        <div id="task-move-destinations" class="task-move-destination-grid"></div>
+                    </div>
                     <div class="grid gap-4 sm:grid-cols-2">
                         <div>
                             <label for="task-move-group" class="form-label">目标主分组</label>

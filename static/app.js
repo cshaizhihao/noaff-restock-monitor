@@ -241,6 +241,9 @@
         taskMoveSubgroup: document.getElementById("task-move-subgroup"),
         taskMoveSubgroupCustomWrap: document.getElementById("task-move-subgroup-custom-wrap"),
         taskMoveSubgroupCustom: document.getElementById("task-move-subgroup-custom"),
+        taskMoveSource: document.getElementById("task-move-source"),
+        taskMoveTarget: document.getElementById("task-move-target"),
+        taskMoveDestinations: document.getElementById("task-move-destinations"),
         taskMovePreview: document.getElementById("task-move-preview"),
         taskMoveCancel: document.getElementById("task-move-cancel"),
         taskMoveSubmit: document.getElementById("task-move-submit"),
@@ -1596,6 +1599,96 @@
         return `${normalizedGroup} / ${normalizedSubgroup}`;
     }
 
+    function taskMoveSourceLabel(taskIds) {
+        const ids = Array.from(new Set((taskIds || []).map((taskId) => Number(taskId)).filter((taskId) => Number.isInteger(taskId) && taskId > 0)));
+        if (!ids.length) {
+            return "-";
+        }
+        if (ids.length === 1) {
+            const task = currentTasks.get(String(ids[0]));
+            const path = formatTaskMoveDestination(task?.group_name || defaultTaskGroup, task?.subgroup_name || defaultTaskSubgroup);
+            return task ? `${task.name || "未命名商品"} · ${path}` : "1 个商品";
+        }
+        const locations = new Set(ids.map((taskId) => {
+            const task = currentTasks.get(String(taskId));
+            return formatTaskMoveDestination(task?.group_name || defaultTaskGroup, task?.subgroup_name || defaultTaskSubgroup);
+        }));
+        return `${ids.length} 个商品 · ${locations.size} 个来源位置`;
+    }
+
+    function taskMoveDestinationCandidates(taskIds) {
+        const candidates = [];
+        const seen = new Set();
+        const addCandidate = (groupName, subgroupName, meta = "") => {
+            const normalizedGroup = normalizeTaskGroup(groupName);
+            const normalizedSubgroup = normalizeTaskSubgroup(subgroupName);
+            const key = `${normalizedGroup}\u0000${normalizedSubgroup}`;
+            if (seen.has(key)) return;
+            seen.add(key);
+            candidates.push({
+                groupName: normalizedGroup,
+                subgroupName: normalizedSubgroup,
+                label: formatTaskMoveDestination(normalizedGroup, normalizedSubgroup),
+                meta
+            });
+        };
+
+        if (taskBrowserPath.groupName) {
+            addCandidate(taskBrowserPath.groupName, taskBrowserPath.subgroupName || defaultTaskSubgroup, "当前层级");
+        }
+        (taskIds || []).forEach((taskId) => {
+            const task = currentTasks.get(String(taskId));
+            if (task) {
+                addCandidate(task.group_name, task.subgroup_name, "原位置");
+            }
+        });
+        currentTaskGroups
+            .slice()
+            .sort(compareCardsByOrderName)
+            .forEach((group) => addCandidate(group.group_name, defaultTaskSubgroup, "主分组"));
+        currentTaskGroupNodes
+            .slice()
+            .sort((left, right) => {
+                const groupDelta = String(left.group_name || "").localeCompare(String(right.group_name || ""), "zh-Hans-CN");
+                if (groupDelta) return groupDelta;
+                const orderDelta = Number(left.sort_order || 0) - Number(right.sort_order || 0);
+                if (orderDelta) return orderDelta;
+                return String(left.subgroup_name || "").localeCompare(String(right.subgroup_name || ""), "zh-Hans-CN");
+            })
+            .forEach((node) => addCandidate(node.group_name, node.subgroup_name, "子分组"));
+        addCandidate(defaultTaskGroup, defaultTaskSubgroup, "默认");
+        return candidates.slice(0, 12);
+    }
+
+    function renderTaskMoveDestinations(taskIds) {
+        if (!els.taskMoveDestinations) return;
+        const targetGroup = readTaskMoveGroupValue();
+        const targetSubgroup = readTaskMoveSubgroupValue();
+        const activeKey = `${normalizeTaskGroup(targetGroup)}\u0000${normalizeTaskSubgroup(targetSubgroup)}`;
+        const candidates = taskMoveDestinationCandidates(taskIds);
+        els.taskMoveDestinations.innerHTML = candidates.length
+            ? candidates.map((candidate) => {
+                const key = `${candidate.groupName}\u0000${candidate.subgroupName}`;
+                return `
+                    <button type="button" class="task-move-destination ${key === activeKey ? "is-active" : ""}" data-move-destination-group="${escapeHtml(candidate.groupName)}" data-move-destination-subgroup="${escapeHtml(candidate.subgroupName)}">
+                        <strong>${escapeHtml(candidate.label)}</strong>
+                        <span>${escapeHtml(candidate.meta || "目标")}</span>
+                    </button>
+                `;
+            }).join("")
+            : '<p class="text-sm text-slate-500">暂无常用目标，可在下方新建。</p>';
+    }
+
+    function chooseTaskMoveDestination(groupName, subgroupName) {
+        const normalizedGroup = normalizeTaskGroup(groupName);
+        const normalizedSubgroup = normalizeTaskSubgroup(subgroupName);
+        renderTaskMoveGroupOptions([normalizedGroup]);
+        setTaskMoveGroupSelection(normalizedGroup, [normalizedGroup]);
+        renderTaskMoveSubgroupOptions(normalizedGroup, [normalizedSubgroup]);
+        setTaskMoveSubgroupSelection(normalizedGroup, normalizedSubgroup, [normalizedSubgroup]);
+        updateTaskMovePreview();
+    }
+
     function updateTaskMovePreview() {
         if (!els.taskMovePreview) {
             return;
@@ -1603,10 +1696,18 @@
         const targetGroup = readTaskMoveGroupValue();
         const targetSubgroup = readTaskMoveSubgroupValue();
         const validTarget = targetGroup && targetSubgroup;
+        const targetLabel = validTarget ? formatTaskMoveDestination(targetGroup, targetSubgroup) : "请选择目标";
+        if (els.taskMoveSource) {
+            els.taskMoveSource.textContent = taskMoveSourceLabel(pendingTaskMoveIds);
+        }
+        if (els.taskMoveTarget) {
+            els.taskMoveTarget.textContent = targetLabel;
+        }
         els.taskMovePreview.textContent = validTarget
-            ? `目标位置：${formatTaskMoveDestination(targetGroup, targetSubgroup)}`
+            ? `目标位置：${targetLabel}`
             : "目标位置：请选择或输入完整分组";
         els.taskMovePreview.classList.toggle("is-invalid", !validTarget);
+        renderTaskMoveDestinations(pendingTaskMoveIds);
     }
 
     function splitTelegramChatIds(value) {
@@ -3723,10 +3824,14 @@
         if (els.taskMoveCount) {
             els.taskMoveCount.textContent = `将移动 ${pendingTaskMoveIds.length} 个商品，状态、消息记录和来源信息都会保留。`;
         }
+        if (els.taskMoveSource) {
+            els.taskMoveSource.textContent = taskMoveSourceLabel(pendingTaskMoveIds);
+        }
         renderTaskMoveGroupOptions([defaultGroup]);
         setTaskMoveGroupSelection(defaultGroup, [defaultGroup]);
         renderTaskMoveSubgroupOptions(defaultGroup, [defaultSubgroup]);
         setTaskMoveSubgroupSelection(defaultGroup, defaultSubgroup, [defaultSubgroup]);
+        renderTaskMoveDestinations(pendingTaskMoveIds);
         updateTaskMovePreview();
         els.taskMoveModal?.classList.remove("hidden");
         document.body.style.overflow = "hidden";
@@ -4549,6 +4654,11 @@
     });
     els.taskMoveGroupCustom?.addEventListener("input", updateTaskMovePreview);
     els.taskMoveSubgroupCustom?.addEventListener("input", updateTaskMovePreview);
+    els.taskMoveDestinations?.addEventListener("click", (event) => {
+        const button = event.target.closest("[data-move-destination-group]");
+        if (!button) return;
+        chooseTaskMoveDestination(button.dataset.moveDestinationGroup, button.dataset.moveDestinationSubgroup);
+    });
     els.merchantGroup?.addEventListener("change", () => {
         updateGroupVisibility(els.merchantGroup, els.merchantGroupCustomWrap, els.merchantGroupCustom);
         if (els.merchantGroup?.value === "__custom__") {
