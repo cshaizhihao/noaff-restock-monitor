@@ -406,6 +406,35 @@
                                                         </select>
                                                     </div>
                                                 </div>
+                                                <div class="merchant-probe-box">
+                                                    <label class="settings-check">
+                                                        <input id="merchant-hidden-product-probe" type="checkbox" class="h-4 w-4 rounded border-slate-700 bg-slate-950 text-indigo-500">
+                                                        扫描隐藏商品入口
+                                                    </label>
+                                                    <div class="merchant-field-grid four">
+                                                        <div>
+                                                            <label for="merchant-hidden-probe-platform" class="form-label">平台类型</label>
+                                                            <select id="merchant-hidden-probe-platform" class="input-dark">
+                                                                <option value="auto">自动：WHMCS + HostBill</option>
+                                                                <option value="whmcs">仅 WHMCS pid</option>
+                                                                <option value="hostbill">仅 HostBill id</option>
+                                                            </select>
+                                                        </div>
+                                                        <div>
+                                                            <label for="merchant-hidden-probe-start" class="form-label">起始 ID</label>
+                                                            <input id="merchant-hidden-probe-start" type="number" min="0" max="5000" class="input-dark" value="1">
+                                                        </div>
+                                                        <div>
+                                                            <label for="merchant-hidden-probe-end" class="form-label">结束 ID</label>
+                                                            <input id="merchant-hidden-probe-end" type="number" min="0" max="5000" class="input-dark" value="60">
+                                                        </div>
+                                                        <div>
+                                                            <label for="merchant-hidden-probe-limit" class="form-label">最多探测</label>
+                                                            <input id="merchant-hidden-probe-limit" type="number" min="1" max="250" class="input-dark" value="40">
+                                                        </div>
+                                                    </div>
+                                                    <p class="field-help">适合商品列表隐藏真实 pid/id 的 WHMCS 或 HostBill 页面；默认关闭，避免无意义请求。</p>
+                                                </div>
                                             </details>
                                             <p id="merchant-firecrawl-state" class="merchant-inline-state"></p>
                                         </section>

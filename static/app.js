@@ -134,6 +134,11 @@
         merchantMaxDiscoveredUrls: document.getElementById("merchant-max-discovered-urls"),
         merchantMaxImportItems: document.getElementById("merchant-max-import-items"),
         merchantTimeoutSeconds: document.getElementById("merchant-timeout-seconds"),
+        merchantHiddenProductProbe: document.getElementById("merchant-hidden-product-probe"),
+        merchantHiddenProbePlatform: document.getElementById("merchant-hidden-probe-platform"),
+        merchantHiddenProbeStart: document.getElementById("merchant-hidden-probe-start"),
+        merchantHiddenProbeEnd: document.getElementById("merchant-hidden-probe-end"),
+        merchantHiddenProbeLimit: document.getElementById("merchant-hidden-probe-limit"),
         merchantIncludeSoldOut: document.getElementById("merchant-include-sold-out"),
         merchantAutoPromote: document.getElementById("merchant-auto-promote"),
         merchantFirecrawlState: document.getElementById("merchant-firecrawl-state"),
@@ -705,6 +710,7 @@
             ["任务采集", selectOptionLabel(els.merchantDefaultFetchStrategy)],
             ["解析器", selectOptionLabel(els.merchantDefaultExtractor)],
             ["目标关键词", payload.target_keyword || "不限制"],
+            ["隐藏入口探测", payload.enable_hidden_product_probe ? `${selectOptionLabel(els.merchantHiddenProbePlatform)} · ${payload.hidden_probe_start}-${payload.hidden_probe_end}` : "关闭"],
             ["单次上限", `${payload.max_discovered_urls || 50} URL / ${payload.max_import_items || 50} 商品`],
             ["自动创建任务", payload.auto_promote ? "开启" : "关闭，先进入商品预览"]
         ];
@@ -3406,6 +3412,11 @@
             max_discovered_urls: Number(els.merchantMaxDiscoveredUrls?.value || 50),
             max_import_items: Number(els.merchantMaxImportItems?.value || 50),
             timeout_seconds: Number(els.merchantTimeoutSeconds?.value || 25),
+            enable_hidden_product_probe: Boolean(els.merchantHiddenProductProbe?.checked),
+            hidden_probe_platform: els.merchantHiddenProbePlatform?.value || "auto",
+            hidden_probe_start: Number(els.merchantHiddenProbeStart?.value || 1),
+            hidden_probe_end: Number(els.merchantHiddenProbeEnd?.value || 60),
+            hidden_probe_limit: Number(els.merchantHiddenProbeLimit?.value || 40),
             include_sold_out: Boolean(els.merchantIncludeSoldOut?.checked),
             auto_promote: Boolean(els.merchantAutoPromote?.checked)
         };
@@ -4866,6 +4877,11 @@
         els.merchantMaxDiscoveredUrls,
         els.merchantMaxImportItems,
         els.merchantTimeoutSeconds,
+        els.merchantHiddenProductProbe,
+        els.merchantHiddenProbePlatform,
+        els.merchantHiddenProbeStart,
+        els.merchantHiddenProbeEnd,
+        els.merchantHiddenProbeLimit,
         els.merchantIncludeSoldOut,
         els.merchantAutoPromote,
         els.settingsChatIds,

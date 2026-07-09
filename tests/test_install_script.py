@@ -1252,6 +1252,11 @@ class InstallScriptTestCase(unittest.TestCase):
             "merchant-max-discovered-urls",
             "merchant-max-import-items",
             "merchant-timeout-seconds",
+            "merchant-hidden-product-probe",
+            "merchant-hidden-probe-platform",
+            "merchant-hidden-probe-start",
+            "merchant-hidden-probe-end",
+            "merchant-hidden-probe-limit",
             "merchant-bulk-promote-button",
             "merchant-firecrawl-state",
         ):
@@ -1293,6 +1298,8 @@ class InstallScriptTestCase(unittest.TestCase):
         self.assertIn("merchant-quick-flow", portal_html)
         self.assertIn("merchant-mode-card", portal_html)
         self.assertIn("data-merchant-mode-preset", portal_html)
+        self.assertIn("扫描隐藏商品入口", portal_html)
+        self.assertIn("WHMCS + HostBill", portal_html)
         self.assertIn("高级采集参数", portal_html)
         self.assertIn("高级筛选参数", portal_html)
         self.assertIn("先发现候选 URL，再让你选择要抓取的页面", portal_html)
@@ -1333,6 +1340,9 @@ class InstallScriptTestCase(unittest.TestCase):
         self.assertIn("function catalogDiscoveryLabel", app_js)
         self.assertIn("function applyMerchantModePreset", app_js)
         self.assertIn('data-merchant-mode-preset', app_js)
+        self.assertIn("enable_hidden_product_probe", app_js)
+        self.assertIn("hidden_probe_platform", app_js)
+        self.assertIn("merchantHiddenProductProbe", app_js)
         self.assertIn("/api/merchant/items/bulk-promote", app_js)
         self.assertIn("backend_used", app_js)
         self.assertIn("任务采集", app_js)
@@ -1341,6 +1351,7 @@ class InstallScriptTestCase(unittest.TestCase):
         self.assertIn(".merchant-quick-flow", app_css)
         self.assertIn(".merchant-mode-cards", app_css)
         self.assertIn(".merchant-advanced-options", app_css)
+        self.assertIn(".merchant-probe-box", app_css)
 
     def test_docker_publish_port_conflict_is_reported_cleanly(self) -> None:
         result = self.run_bash(
