@@ -2861,6 +2861,15 @@ def to_task_payload(row: sqlite3.Row) -> dict[str, Any]:
     last_error_kind = task_error_kind_from_attempts(last_error, last_fetch_attempts)
     task_domain = fetch_domain_for_url(row["monitor_url"])
     normalized_fetch_strategy = normalize_fetch_strategy(row["fetch_strategy"] if "fetch_strategy" in keys else "")
+    last_fetch_backend = (row["last_fetch_backend"] or "") if "last_fetch_backend" in keys else ""
+    last_error_detail = summarize_task_error(last_error, last_error_kind)
+    last_error_diagnostic = stock_check_diagnostic(
+        last_error_kind,
+        last_error_detail or last_error,
+        last_fetch_attempts,
+        last_fetch_backend,
+        task_domain,
+    ) if last_error or last_error_kind else {}
     return {
         "id": row["id"],
         "name": row["name"],
@@ -2895,11 +2904,9 @@ def to_task_payload(row: sqlite3.Row) -> dict[str, Any]:
         "last_checked_at": row["last_checked_at"] or "",
         "last_error": last_error,
         "last_error_kind": last_error_kind,
-        "last_error_detail": summarize_task_error(
-            last_error,
-            last_error_kind,
-        ),
-        "last_fetch_backend": (row["last_fetch_backend"] or "") if "last_fetch_backend" in keys else "",
+        "last_error_detail": last_error_detail,
+        "last_error_diagnostic": last_error_diagnostic,
+        "last_fetch_backend": last_fetch_backend,
         "last_fetch_attempts": last_fetch_attempts,
         "last_fetch_domain": (row["last_fetch_domain"] or "") if "last_fetch_domain" in keys else "",
         "domain_cooldown_until": (row["domain_cooldown_until"] or "") if "domain_cooldown_until" in keys else "",
@@ -4081,6 +4088,19 @@ def summarize_task_error(message: str, kind: str = "") -> str:
     text = re.sub(r"\s+", " ", str(message or "")).strip()
     if not text:
         return ""
+    lowered = text.lower()
+    if kind == "domain_cooldown" or "采集冷却" in text or "同域名保护等待" in text:
+        return "同一站点刚刚失败，本轮不重复请求；下一轮会自动再试。"
+    if kind == "domain_session_required":
+        return "该站点需要先初始化采集会话，再执行库存检测。"
+    if kind == "scrapling_browser_failed" or "launch_persistent_context" in lowered or "executable doesn't exist" in lowered:
+        return "高兼容浏览器启动失败，请先在系统设置里检测 Scrapling，或切换为标准/增强模式。"
+    if kind == "http_error" and ("http 403" in lowered or " 403" in lowered):
+        return "目标站返回 403，当前出口没有拿到真实商品页。"
+    if kind == "empty_response":
+        return "采集后返回空页面，没有可解析内容。"
+    if kind == "parse_unknown":
+        return "页面已获取，但解析器没有找到明确的有货/售罄信号。"
     if kind == "cloudflare_challenge":
         if "冷却中" in text:
             return text
@@ -4088,6 +4108,73 @@ def summarize_task_error(message: str, kind: str = "") -> str:
         if stripped:
             return stripped
     return text
+
+
+def diagnostic_attempt_chain(attempts: list[dict[str, str]] | list[FetchAttempt] | None) -> list[dict[str, str]]:
+    chain: list[dict[str, str]] = []
+    for item in attempts or []:
+        if isinstance(item, FetchAttempt):
+            payload = fetch_attempt_to_payload(item)
+        elif isinstance(item, dict):
+            payload = {
+                "backend": str(item.get("backend") or ""),
+                "status": str(item.get("status") or ""),
+                "error_kind": str(item.get("error_kind") or ""),
+                "detail": sanitize_firecrawl_detail(str(item.get("detail") or "")),
+                "final_url": str(item.get("final_url") or ""),
+            }
+        else:
+            continue
+        if not payload["backend"] and not payload["error_kind"]:
+            continue
+        chain.append(
+            {
+                "backend": payload["backend"],
+                "status": payload["status"] or ("failed" if payload["error_kind"] else "success"),
+                "error_kind": payload["error_kind"],
+                "detail": summarize_task_error(payload["detail"], payload["error_kind"])[:240],
+                "final_url": payload["final_url"],
+            }
+        )
+    return chain[-8:]
+
+
+def stock_check_diagnostic(
+    error_kind: str,
+    detail: str,
+    attempts: list[dict[str, str]] | list[FetchAttempt] | None = None,
+    backend_used: str = "",
+    domain: str = "",
+) -> dict[str, Any]:
+    kind = str(error_kind or "").strip()
+    clean_detail = summarize_task_error(detail, kind)
+    attempt_chain = diagnostic_attempt_chain(attempts)
+    labels = {
+        "domain_session_required": ("需要采集会话", "先初始化或导入该站点会话，再重新检测。"),
+        "cloudflare_challenge": ("页面被保护", "系统拿到的是保护页，不是商品页；可尝试外部 solver、会话导入或换公开页面。"),
+        "scrapling_browser_failed": ("高兼容浏览器失败", "到系统设置检测 Scrapling；若缺浏览器依赖，先修复依赖或切换为标准/增强模式。"),
+        "scrapling_challenge_failed": ("高兼容仍失败", "高兼容模式仍没有拿到真实商品内容；建议导入会话或配置外部 solver。"),
+        "domain_cooldown": ("同站点已冷却", "本轮不会继续请求同一域名；冷却结束后会自动再试。"),
+        "http_error": ("目标站返回错误", "检查状态码和出口网络；如果是 403，通常需要会话、代理出口或外部 solver。"),
+        "timeout": ("请求超时", "稍后重试，或提高超时时间/降低并发。"),
+        "empty_response": ("空页面", "页面已请求但没有可解析内容，建议切换增强模式或配置解析规则。"),
+        "parse_unknown": ("无法判断库存", "页面已获取，但没有明确库存信号；请填写目标关键词或 CSS/XPath/正则规则。"),
+        "firecrawl_credit_required": ("外部服务额度不足", "Firecrawl 额度不足，已停止继续消耗；建议改回本地采集或补充额度。"),
+        "firecrawl_rate_limited": ("外部服务限流", "降低频率或稍后手动检测。"),
+    }
+    title, advice = labels.get(kind, ("采集失败", "查看尝试链路后调整采集模式、目标关键词或备用数据源。"))
+    if not kind:
+        title = "检测完成"
+        advice = "未返回错误。"
+    return {
+        "title": title,
+        "summary": clean_detail or title,
+        "advice": advice,
+        "error_kind": kind,
+        "domain": domain,
+        "backend_used": backend_used,
+        "attempts": attempt_chain,
+    }
 
 
 def telegram_error_hint(description: str) -> str:
@@ -7034,13 +7121,23 @@ class MonitoringEngine:
         result_state = "failed" if result.stock is None and result.error_kind else "unknown"
         if result.stock is not None:
             result_state = "in_stock" if result.stock > 0 else "sold_out"
+        backend_used = result.backend_used or last_fetch_attempt_backend(result.fetch_attempts, result.error_kind)
+        attempts_payload = [fetch_attempt_to_payload(attempt) for attempt in result.fetch_attempts or []]
+        diagnostic = stock_check_diagnostic(
+            result.error_kind,
+            result.detail,
+            result.fetch_attempts,
+            backend_used,
+            result.fetch_domain or fetch_domain_for_url(task["monitor_url"]),
+        )
         return {
             "stock": result.stock,
             "state": result_state,
             "detail": result.detail,
             "error_kind": result.error_kind,
-            "backend_used": result.backend_used or last_fetch_attempt_backend(result.fetch_attempts, result.error_kind),
-            "attempts": [fetch_attempt_to_payload(attempt) for attempt in result.fetch_attempts],
+            "backend_used": backend_used,
+            "attempts": attempts_payload,
+            "diagnostic": diagnostic,
             "checked_at": now_iso(),
         }
 

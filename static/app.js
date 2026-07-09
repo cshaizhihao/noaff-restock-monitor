@@ -1180,11 +1180,35 @@
         return text.length > 90 ? `${text.slice(0, 90)}...` : text;
     }
 
+    function diagnosticText(diagnostic) {
+        if (!diagnostic || typeof diagnostic !== "object") {
+            return "";
+        }
+        const summary = String(diagnostic.summary || "").trim();
+        const advice = String(diagnostic.advice || "").trim();
+        if (summary && advice && !summary.includes(advice)) {
+            return `${summary} · ${advice}`;
+        }
+        return summary || advice;
+    }
+
+    function taskDiagnosticSummary(task) {
+        return diagnosticText(task?.last_error_diagnostic);
+    }
+
+    function resultDiagnosticText(result) {
+        return diagnosticText(result?.diagnostic);
+    }
+
     function formatTaskLogLine(task, logHint) {
         if (task.last_error) {
             const protectedNotice = protectedSourceNoticeText(task);
             if (protectedNotice) {
                 return `> ${protectedNotice}`;
+            }
+            const diagnostic = taskDiagnosticSummary(task);
+            if (diagnostic) {
+                return `> ${diagnostic}`;
             }
             const label = errorKindLabel(task.last_error_kind);
             const detail = cleanTaskErrorDetail(task.last_error_kind, task.last_error_detail || task.last_error);
@@ -4162,7 +4186,9 @@
         const result = data.result || {};
         const backend = result.backend_used ? ` · ${fetchStrategyLabel(result.backend_used)}` : "";
         if (options.showToast !== false) {
-            showToast(`库存检测完成：${stockResultLabel(result.stock, result.state)}${backend}`);
+            const diagnostic = result.state === "failed" ? resultDiagnosticText(result) : "";
+            const text = diagnostic || stockResultLabel(result.stock, result.state);
+            showToast(`库存检测完成：${text}${backend}`, result.state === "failed" ? "error" : "success");
         }
         return result;
     }

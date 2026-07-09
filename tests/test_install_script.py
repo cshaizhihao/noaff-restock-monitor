@@ -799,6 +799,11 @@ class InstallScriptTestCase(unittest.TestCase):
         self.assertIn('case "scrapling_browser_failed":', app_js)
         self.assertIn("高兼容浏览器启动失败", app_js)
         self.assertIn("function cleanTaskErrorDetail", app_js)
+        self.assertIn("function diagnosticText", app_js)
+        self.assertIn("function taskDiagnosticSummary", app_js)
+        self.assertIn("function resultDiagnosticText", app_js)
+        self.assertIn("result?.diagnostic", app_js)
+        self.assertIn("task?.last_error_diagnostic", app_js)
         self.assertIn("同一站点刚刚失败", app_js)
         self.assertIn("高兼容浏览器启动失败", app_js)
 

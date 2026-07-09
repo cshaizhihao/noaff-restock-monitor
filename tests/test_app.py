@@ -3045,6 +3045,33 @@ class PortalAppTestCase(unittest.TestCase):
         self.assertIn("与页面的连接已断开", payload["last_error"])
         self.assertEqual(payload["last_error_detail"], "与页面的连接已断开。版本: 4.1.1.4")
 
+    def test_stock_check_diagnostic_returns_actionable_summary(self) -> None:
+        attempts = [
+            {
+                "backend": "curl_cffi",
+                "status": "failed",
+                "error_kind": "domain_session_required",
+                "detail": "www.dmit.io 需要先初始化采集会话。",
+                "final_url": "https://www.dmit.io/cart.php",
+            }
+        ]
+
+        diagnostic = app_module.stock_check_diagnostic(
+            "domain_session_required",
+            "www.dmit.io 需要先初始化采集会话。",
+            attempts,
+            "curl_cffi",
+            "www.dmit.io",
+        )
+
+        self.assertEqual(diagnostic["title"], "需要采集会话")
+        self.assertIn("初始化", diagnostic["summary"])
+        self.assertIn("重新检测", diagnostic["advice"])
+        self.assertEqual(diagnostic["backend_used"], "curl_cffi")
+        self.assertEqual(diagnostic["domain"], "www.dmit.io")
+        self.assertEqual(diagnostic["attempts"][0]["backend"], "curl_cffi")
+        self.assertEqual(diagnostic["attempts"][0]["error_kind"], "domain_session_required")
+
     def test_update_settings_rejects_debug_port_collisions(self) -> None:
         _, headers = self.login()
 
