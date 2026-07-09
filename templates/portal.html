@@ -1410,6 +1410,71 @@
             </div>
         </div>
 
+        <div id="domain-session-modal" class="modal-shell hidden">
+            <div class="modal-panel max-w-2xl">
+                <div class="mb-6 flex items-start justify-between gap-4">
+                    <div>
+                        <h3 id="domain-session-title" class="text-2xl font-extrabold tracking-tight text-white">导入商家会话</h3>
+                        <p id="domain-session-subtitle" class="mt-1 font-mono text-xs text-slate-500">用于需要浏览器会话的商家页面。</p>
+                    </div>
+                    <button id="domain-session-close" type="button" class="icon-button" aria-label="关闭">
+                        <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+                        </svg>
+                    </button>
+                </div>
+
+                <div class="domain-session-guide">
+                    <div class="domain-session-step">
+                        <strong>1</strong>
+                        <span>用自己的浏览器打开商品页，等待能看到真实商品卡片。</span>
+                    </div>
+                    <div class="domain-session-step">
+                        <strong>2</strong>
+                        <span>复制该站点请求里的 Cookie 和当前 User-Agent。</span>
+                    </div>
+                    <div class="domain-session-step">
+                        <strong>3</strong>
+                        <span>保存后点击检测，后台会复用会话判断有货或售罄。</span>
+                    </div>
+                </div>
+
+                <form id="domain-session-form" class="grid gap-4">
+                    <input id="domain-session-task-id" type="hidden">
+                    <div>
+                        <label for="domain-session-domain" class="form-label">域名</label>
+                        <input id="domain-session-domain" type="text" class="input-dark" readonly>
+                    </div>
+                    <div>
+                        <label for="domain-session-user-agent" class="form-label">User-Agent</label>
+                        <textarea id="domain-session-user-agent" class="input-dark min-h-[5rem]" placeholder="在浏览器控制台输入 navigator.userAgent 后复制结果"></textarea>
+                    </div>
+                    <div>
+                        <label for="domain-session-cookie-header" class="form-label">Cookie</label>
+                        <textarea id="domain-session-cookie-header" class="input-dark min-h-[8rem]" placeholder="例如 cf_clearance=...; PHPSESSID=..."></textarea>
+                    </div>
+                    <div class="grid gap-4 sm:grid-cols-2">
+                        <div>
+                            <label for="domain-session-ttl" class="form-label">有效期小时</label>
+                            <input id="domain-session-ttl" type="number" min="1" max="720" value="24" class="input-dark">
+                        </div>
+                        <div class="domain-session-console">
+                            <span>控制台快速获取</span>
+                            <code>copy(navigator.userAgent)</code>
+                            <code>copy(document.cookie)</code>
+                        </div>
+                    </div>
+                    <p class="rounded-lg border border-amber-500/20 bg-amber-500/10 px-4 py-3 text-sm leading-6 text-amber-100">
+                        DMIT 这类页面返回的是 Cloudflare Managed Challenge + Turnstile。后台不能凭空解析未返回的商品 HTML；导入真实浏览器会话后，后续定时检测会用轻量请求复用该会话。
+                    </p>
+                    <div class="flex flex-wrap justify-end gap-3 pt-2">
+                        <button id="domain-session-cancel" type="button" class="ghost-button">取消</button>
+                        <button id="domain-session-submit" type="submit" class="primary-button">保存会话</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+
         <div id="toast-stack" class="pointer-events-none fixed right-4 top-4 z-50 flex w-[min(92vw,24rem)] flex-col gap-3"></div>
     </div>
 

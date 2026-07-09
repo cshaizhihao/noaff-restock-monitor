@@ -1127,6 +1127,33 @@ def normalize_cookie_payload(cookies: Any) -> list[dict[str, Any]]:
     return normalized
 
 
+def parse_cookie_header(cookie_header: Any, domain: str = "") -> list[dict[str, Any]]:
+    raw = str(cookie_header or "").strip()
+    if not raw:
+        return []
+    parsed: list[dict[str, Any]] = []
+    for part in raw.split(";"):
+        if "=" not in part:
+            continue
+        name, value = part.split("=", 1)
+        name = name.strip()
+        value = value.strip()
+        if not name:
+            continue
+        parsed.append(
+            {
+                "name": name,
+                "value": value,
+                "domain": domain,
+                "path": "/",
+                "httpOnly": False,
+                "secure": True,
+                "sameSite": "",
+            }
+        )
+    return normalize_cookie_payload(parsed)
+
+
 def parse_domain_session_cookies(value: Any) -> list[dict[str, Any]]:
     try:
         payload = json.loads(str(value or "[]"))
@@ -1206,6 +1233,45 @@ def get_ready_domain_session_for_url(url: Any) -> dict[str, Any] | None:
 def domain_session_cookie_dict(session_payload: dict[str, Any] | None) -> dict[str, str]:
     cookies = parse_domain_session_cookies(mapping_value(session_payload or {}, "cookies_json", "[]"))
     return {cookie["name"]: cookie["value"] for cookie in cookies if cookie.get("name")}
+
+
+def build_candidate_domain_session_payload(
+    domain: str,
+    user_agent: str,
+    cookies: list[dict[str, Any]],
+    ttl_hours: int = DOMAIN_SESSION_TTL_HOURS,
+) -> dict[str, Any]:
+    return {
+        "domain": normalize_domain_session_domain(domain),
+        "status": DOMAIN_SESSION_STATUS_READY,
+        "user_agent": str(user_agent or "").strip(),
+        "cookies_json": json.dumps(normalize_cookie_payload(cookies), ensure_ascii=False),
+        "expires_at": (now_utc() + timedelta(hours=max(1, int(ttl_hours or DOMAIN_SESSION_TTL_HOURS)))).isoformat(timespec="seconds"),
+    }
+
+
+def normalize_domain_session_import_payload(payload: dict[str, Any], fallback_domain: str = "") -> tuple[str, str, list[dict[str, Any]], int]:
+    domain = normalize_domain_session_domain(payload.get("domain") or fallback_domain)
+    if not domain:
+        raise ValueError("无法识别要导入会话的域名。")
+
+    user_agent = str(payload.get("user_agent") or payload.get("userAgent") or "").strip()
+    if not user_agent:
+        raise ValueError("请填写当前浏览器的 User-Agent。")
+
+    cookies_payload: list[dict[str, Any]]
+    if isinstance(payload.get("cookies"), list):
+        cookies_payload = normalize_cookie_payload(payload.get("cookies"))
+    elif isinstance(payload.get("cookies_json"), str):
+        cookies_payload = parse_domain_session_cookies(payload.get("cookies_json"))
+    else:
+        cookies_payload = parse_cookie_header(payload.get("cookie_header") or payload.get("cookieHeader"), domain)
+
+    if not cookies_payload:
+        raise ValueError("请粘贴至少一个 Cookie。")
+
+    ttl_hours = bounded_setting_int(payload.get("ttl_hours") or payload.get("ttlHours"), DOMAIN_SESSION_TTL_HOURS, 1, 24 * 30)
+    return domain, user_agent, cookies_payload, ttl_hours
 
 
 def upsert_domain_session(
@@ -4757,10 +4823,11 @@ class FetcherSelector:
             }
         if next_backend in SCRAPLING_FETCH_STRATEGIES and not settings_payload.get("scrapling_enabled", True):
             return False
+        if result.error_kind == "domain_session_required":
+            return False
         if next_backend == FETCH_STRATEGY_SCRAPLING_STANDARD:
             return result.error_kind in {
                 "cloudflare_challenge",
-                "domain_session_required",
                 "scrapling_challenge_upgrade_required",
                 "timeout",
                 "request_error",
@@ -4773,7 +4840,6 @@ class FetcherSelector:
         if next_backend in {FETCH_STRATEGY_SCRAPLING_DYNAMIC, FETCH_STRATEGY_SCRAPLING_STEALTH}:
             return result.error_kind in {
                 "cloudflare_challenge",
-                "domain_session_required",
                 "scrapling_challenge_upgrade_required",
                 "timeout",
                 "request_error",
@@ -4877,12 +4943,7 @@ class FetcherSelector:
                 break
 
         needs_domain_session = any(attempt.error_kind == "domain_session_required" for attempt in attempts)
-        if needs_domain_session and last_result.error_kind in {
-            "cloudflare_challenge",
-            "scrapling_challenge_failed",
-            "scrapling_browser_failed",
-            "timeout",
-        }:
+        if needs_domain_session:
             domain = fetch_domain_for_url(last_result.final_url or url) or fetch_domain_for_url(url)
             return FetchPipelineResult(
                 html="",
@@ -6176,6 +6237,33 @@ class MonitoringEngine:
             "checked_at": now_iso(),
         }
 
+    def validate_imported_domain_session(
+        self,
+        task: sqlite3.Row,
+        domain: str,
+        user_agent: str,
+        cookies: list[dict[str, Any]],
+        ttl_hours: int,
+    ) -> tuple[FetchResult, ExtractorResult]:
+        url = monitor_url_for_fetch(task)
+        candidate_session = build_candidate_domain_session_payload(domain, user_agent, cookies, ttl_hours)
+        fetcher = CurlCffiFetcher(session_provider=lambda _url: candidate_session)
+        result = fetcher.fetch(url, int(self.get_runtime_settings().get("request_timeout_seconds") or DEFAULT_TIMEOUT_SECONDS))
+        if result.error_kind:
+            raise RuntimeError(f"导入的会话仍无法获取真实商品页：{result.detail}")
+        if not result.html:
+            raise RuntimeError("导入的会话返回空页面，未保存。")
+        extracted = extract_stock_for_strategy(
+            task_fetch_strategy(task),
+            result.html,
+            str(task["target_keyword"] or ""),
+            task,
+            result,
+        )
+        if extracted.stock is None:
+            raise RuntimeError(f"导入的会话能打开页面，但仍未识别库存：{extracted.detail}")
+        return result, extracted
+
     def unlock_task_domain_session(self, task_id: int, timeout_seconds: int | None = None) -> dict[str, Any]:
         with open_connection() as connection:
             task = connection.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()
@@ -6206,6 +6294,39 @@ class MonitoringEngine:
             "status": result.status,
             "detail": result.detail,
             "final_url": result.final_url,
+            "session": session_payload,
+        }
+
+    def import_task_domain_session(self, task_id: int, payload: dict[str, Any]) -> dict[str, Any]:
+        with open_connection() as connection:
+            task = connection.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()
+            if not task:
+                raise RuntimeError("任务不存在。")
+
+        url = monitor_url_for_fetch(task)
+        fallback_domain = fetch_domain_for_url(url)
+        domain, user_agent, cookies, ttl_hours = normalize_domain_session_import_payload(payload, fallback_domain)
+        fetch_result, extracted = self.validate_imported_domain_session(task, domain, user_agent, cookies, ttl_hours)
+        session_payload = upsert_domain_session(
+            domain,
+            status=DOMAIN_SESSION_STATUS_READY,
+            user_agent=user_agent,
+            cookies=cookies,
+            source_url=url,
+            last_error="",
+            ttl_hours=ttl_hours,
+        )
+        state = "有货" if extracted.stock and extracted.stock > 0 else "售罄"
+        log_activity("info", f"domain:{domain}", f"{domain} 已导入并验证浏览器会话，当前库存：{state}。")
+        return {
+            "task_id": task_id,
+            "domain": domain,
+            "status": DOMAIN_SESSION_STATUS_READY,
+            "detail": f"浏览器会话已导入并验证，当前库存：{state}。",
+            "stock": extracted.stock,
+            "state": "in_stock" if extracted.stock and extracted.stock > 0 else "sold_out",
+            "backend_used": FETCH_STRATEGY_CURL_CFFI,
+            "final_url": fetch_result.final_url,
             "session": session_payload,
         }
 
@@ -9291,6 +9412,17 @@ def make_app() -> Flask:
                 "result": result,
             }
         ), status_code
+
+    @app.route("/api/tasks/<int:task_id>/domain-session/import", methods=["POST"])
+    @login_required
+    @limiter.limit(GENERAL_MUTATION_LIMIT)
+    def import_task_domain_session(task_id: int):
+        payload = read_json()
+        try:
+            result = app.extensions["monitor_engine"].import_task_domain_session(task_id, payload)
+        except Exception as exc:
+            return jsonify({"ok": False, "message": str(exc)}), 400
+        return jsonify({"ok": True, "message": "浏览器会话已导入。", "result": result})
 
     @app.route("/api/template-test-push", methods=["POST"])
     @login_required

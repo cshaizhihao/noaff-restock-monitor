@@ -229,7 +229,19 @@
         taskMoveSubgroupCustom: document.getElementById("task-move-subgroup-custom"),
         taskMovePreview: document.getElementById("task-move-preview"),
         taskMoveCancel: document.getElementById("task-move-cancel"),
-        taskMoveSubmit: document.getElementById("task-move-submit")
+        taskMoveSubmit: document.getElementById("task-move-submit"),
+        domainSessionModal: document.getElementById("domain-session-modal"),
+        domainSessionTitle: document.getElementById("domain-session-title"),
+        domainSessionSubtitle: document.getElementById("domain-session-subtitle"),
+        domainSessionClose: document.getElementById("domain-session-close"),
+        domainSessionForm: document.getElementById("domain-session-form"),
+        domainSessionTaskId: document.getElementById("domain-session-task-id"),
+        domainSessionDomain: document.getElementById("domain-session-domain"),
+        domainSessionUserAgent: document.getElementById("domain-session-user-agent"),
+        domainSessionCookieHeader: document.getElementById("domain-session-cookie-header"),
+        domainSessionTtl: document.getElementById("domain-session-ttl"),
+        domainSessionCancel: document.getElementById("domain-session-cancel"),
+        domainSessionSubmit: document.getElementById("domain-session-submit")
     };
 
     const taskStepOrder = ["basic", "strategy", "rules", "notify"];
@@ -2706,6 +2718,12 @@
                         </svg>
                         初始化会话
                     </button>
+                    <button type="button" class="ghost-button task-check-button" data-action="import-session" data-task-import-session-action title="导入当前浏览器 Cookie / User-Agent">
+                        <svg class="mr-1.5 h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 16V4m0 0l-4 4m4-4l4 4M4 20h16"/>
+                        </svg>
+                        导入会话
+                    </button>
                     <button type="button" class="ghost-button task-check-button" data-action="check" data-task-check-action>
                         <svg class="mr-1.5 h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8"/>
@@ -3557,6 +3575,71 @@
         document.body.style.overflow = "";
     }
 
+    function openDomainSessionModal(task) {
+        if (!task) return;
+        const domain = task.monitor_domain || (() => {
+            try {
+                return new URL(task.monitor_url).hostname;
+            } catch (_) {
+                return "";
+            }
+        })();
+        if (els.domainSessionTitle) {
+            els.domainSessionTitle.textContent = "导入商家会话";
+        }
+        if (els.domainSessionSubtitle) {
+            els.domainSessionSubtitle.textContent = `${task.name || "当前商品"} · ${domain || "未知域名"}`;
+        }
+        syncInputValue(els.domainSessionTaskId, task.id || "");
+        syncInputValue(els.domainSessionDomain, domain || "");
+        syncInputValue(els.domainSessionUserAgent, "");
+        syncInputValue(els.domainSessionCookieHeader, "");
+        syncInputValue(els.domainSessionTtl, "24");
+        els.domainSessionModal?.classList.remove("hidden");
+        document.body.style.overflow = "hidden";
+        window.setTimeout(() => els.domainSessionUserAgent?.focus(), 40);
+    }
+
+    function closeDomainSessionModal() {
+        els.domainSessionModal?.classList.add("hidden");
+        document.body.style.overflow = "";
+    }
+
+    async function submitDomainSessionImport(event) {
+        event.preventDefault();
+        const taskId = Number(els.domainSessionTaskId?.value || 0);
+        if (!taskId) {
+            showToast("缺少任务 ID。", "error");
+            return;
+        }
+        const userAgent = String(els.domainSessionUserAgent?.value || "").trim();
+        const cookieHeader = String(els.domainSessionCookieHeader?.value || "").trim();
+        if (!userAgent || !cookieHeader) {
+            showToast("请填写 User-Agent 和 Cookie。", "error");
+            return;
+        }
+        const submitButton = els.domainSessionSubmit;
+        if (submitButton) submitButton.disabled = true;
+        try {
+            const data = await apiFetch(`/api/tasks/${taskId}/domain-session/import`, {
+                method: "POST",
+                body: JSON.stringify({
+                    domain: els.domainSessionDomain?.value || "",
+                    user_agent: userAgent,
+                    cookie_header: cookieHeader,
+                    ttl_hours: Number(els.domainSessionTtl?.value || 24)
+                })
+            });
+            showToast(data.message || "浏览器会话已导入。");
+            closeDomainSessionModal();
+            await loadSnapshot(false);
+        } catch (error) {
+            showToast(error.message, "error");
+        } finally {
+            if (submitButton) submitButton.disabled = false;
+        }
+    }
+
     async function submitTaskMove(event) {
         event.preventDefault();
         const targetGroup = readTaskMoveGroupValue();
@@ -3995,6 +4078,10 @@
             openTaskMoveModal([taskId]);
             return;
         }
+        if (action === "import-session") {
+            openDomainSessionModal(task);
+            return;
+        }
         if (action === "delete" && !window.confirm(`确认删除任务「${task.name}」？`)) {
             return;
         }
@@ -4251,6 +4338,11 @@
             closeTaskMoveModal();
         }
     });
+    els.domainSessionModal?.addEventListener("click", (event) => {
+        if (event.target === els.domainSessionModal) {
+            closeDomainSessionModal();
+        }
+    });
     els.templateHelpModal?.addEventListener("click", (event) => {
         if (event.target === els.templateHelpModal) {
             closeTemplateHelpModal();
@@ -4461,6 +4553,9 @@
     els.taskMoveForm?.addEventListener("submit", submitTaskMove);
     els.taskMoveCancel?.addEventListener("click", closeTaskMoveModal);
     els.taskMoveClose?.addEventListener("click", closeTaskMoveModal);
+    els.domainSessionForm?.addEventListener("submit", submitDomainSessionImport);
+    els.domainSessionCancel?.addEventListener("click", closeDomainSessionModal);
+    els.domainSessionClose?.addEventListener("click", closeDomainSessionModal);
 
     els.taskForm?.addEventListener("click", (event) => {
         const strategyCard = event.target.closest("[data-task-strategy-card]");
@@ -4627,6 +4722,8 @@
             closeTaskGroupRenameModal();
         } else if (event.key === "Escape" && !els.taskMoveModal?.classList.contains("hidden")) {
             closeTaskMoveModal();
+        } else if (event.key === "Escape" && !els.domainSessionModal?.classList.contains("hidden")) {
+            closeDomainSessionModal();
         }
     });
 

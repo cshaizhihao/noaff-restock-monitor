@@ -3389,6 +3389,135 @@ class PortalAppTestCase(unittest.TestCase):
         self.assertEqual(client.headers["User-Agent"], "Mozilla/5.0 Session Chrome")
         self.assertEqual(client.cookies, {"cf_clearance": "secret-cookie"})
 
+    def test_parse_cookie_header_for_domain_session_import(self) -> None:
+        cookies = app_module.parse_cookie_header("cf_clearance=abc; PHPSESSID=xyz; empty=", "example.com")
+
+        self.assertEqual(
+            [(cookie["name"], cookie["value"], cookie["domain"]) for cookie in cookies],
+            [("cf_clearance", "abc", "example.com"), ("PHPSESSID", "xyz", "example.com"), ("empty", "", "example.com")],
+        )
+
+    def test_import_task_domain_session_api_saves_cookie_and_user_agent(self) -> None:
+        _, headers = self.login()
+        create_response = self.client.post(
+            "/api/tasks",
+            headers=headers,
+            base_url=BASE_URL,
+            json={
+                "name": "DMIT LAX",
+                "group_name": "DMIT",
+                "subgroup_name": "美国",
+                "monitor_url": "https://www.dmit.io/cart.php?region=los-angeles&network=premium&generation=as3",
+                "target_keyword": "LAX.AS3.Pro.TINY",
+                "fetch_strategy": "multi_engine",
+                "restock_template": "有货 {name}",
+                "soldout_template": "售罄 {name}",
+                "enabled": True,
+            },
+        )
+        self.assertEqual(create_response.status_code, 200)
+        task_id = create_response.get_json()["task_id"]
+
+        original_fetcher = app_module.CurlCffiFetcher
+
+        class FakeCurlCffiFetcher:
+            def __init__(self, *args, **kwargs) -> None:
+                pass
+
+            def fetch(self, url, timeout_seconds):
+                return app_module.FetchResult(
+                    html="<html><body>LAX.AS3.Pro.TINY <button>Out of Stock</button></body></html>",
+                    final_url=url,
+                    status_code=200,
+                    detail="curl_cffi 复用域名会话成功",
+                )
+
+        app_module.CurlCffiFetcher = FakeCurlCffiFetcher
+        try:
+            import_response = self.client.post(
+                f"/api/tasks/{task_id}/domain-session/import",
+                headers=headers,
+                base_url=BASE_URL,
+                json={
+                    "domain": "www.dmit.io",
+                    "user_agent": "Mozilla/5.0 Imported Chrome",
+                    "cookie_header": "cf_clearance=abc123; PHPSESSID=session456",
+                    "ttl_hours": 12,
+                },
+            )
+        finally:
+            app_module.CurlCffiFetcher = original_fetcher
+
+        self.assertEqual(import_response.status_code, 200)
+        payload = import_response.get_json()["result"]
+        self.assertEqual(payload["status"], "ready")
+        self.assertEqual(payload["stock"], 0)
+        self.assertEqual(payload["state"], "sold_out")
+        self.assertTrue(payload["session"]["has_cookies"])
+        session = app_module.get_domain_session("www.dmit.io")
+        self.assertIsNotNone(session)
+        self.assertEqual(session["user_agent"], "Mozilla/5.0 Imported Chrome")
+        self.assertEqual(
+            app_module.domain_session_cookie_dict(session),
+            {"cf_clearance": "abc123", "PHPSESSID": "session456"},
+        )
+
+    def test_import_task_domain_session_rejects_unverified_cookie(self) -> None:
+        _, headers = self.login()
+        create_response = self.client.post(
+            "/api/tasks",
+            headers=headers,
+            base_url=BASE_URL,
+            json={
+                "name": "DMIT LAX",
+                "group_name": "DMIT",
+                "subgroup_name": "美国",
+                "monitor_url": "https://www.dmit.io/cart.php?region=los-angeles&network=premium&generation=as3",
+                "target_keyword": "LAX.AS3.Pro.TINY",
+                "fetch_strategy": "multi_engine",
+                "restock_template": "有货 {name}",
+                "soldout_template": "售罄 {name}",
+                "enabled": True,
+            },
+        )
+        self.assertEqual(create_response.status_code, 200)
+        task_id = create_response.get_json()["task_id"]
+
+        original_fetcher = app_module.CurlCffiFetcher
+
+        class FakeCurlCffiFetcher:
+            def __init__(self, *args, **kwargs) -> None:
+                pass
+
+            def fetch(self, url, timeout_seconds):
+                return app_module.FetchResult(
+                    html="",
+                    final_url=url,
+                    status_code=403,
+                    error_kind="cloudflare_challenge",
+                    detail="curl_cffi 拿到的仍是 Cloudflare 验证页",
+                )
+
+        app_module.CurlCffiFetcher = FakeCurlCffiFetcher
+        try:
+            import_response = self.client.post(
+                f"/api/tasks/{task_id}/domain-session/import",
+                headers=headers,
+                base_url=BASE_URL,
+                json={
+                    "domain": "www.dmit.io",
+                    "user_agent": "Mozilla/5.0 Imported Chrome",
+                    "cookie_header": "cf_clearance=bad-cookie",
+                    "ttl_hours": 12,
+                },
+            )
+        finally:
+            app_module.CurlCffiFetcher = original_fetcher
+
+        self.assertEqual(import_response.status_code, 400)
+        self.assertIn("仍无法获取真实商品页", import_response.get_json()["message"])
+        self.assertIsNone(app_module.get_domain_session("www.dmit.io"))
+
     def firecrawl_settings(self, **overrides) -> dict[str, object]:
         settings = {
             "firecrawl_enabled": True,
