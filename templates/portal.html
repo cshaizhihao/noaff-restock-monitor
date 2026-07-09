@@ -609,7 +609,7 @@
                                             <h3 class="panel-heading">系统设置</h3>
                                         </div>
                                     </div>
-                                    <p class="settings-home-note">常用设置放在上排；外部兜底和旧链路放在高级区，普通使用不需要调整。</p>
+                                    <p class="settings-home-note">常用设置按功能分区；旧兼容参数已收进高级折叠区，普通使用不需要调整。</p>
                                     <div class="settings-entry-list" role="list">
                                         <button type="button" class="settings-nav-item settings-entry settings-entry-top" data-settings-target="settings-runtime">
                                             <span class="settings-entry-icon">TG</span>
@@ -651,13 +651,6 @@
                                             <span class="settings-entry-copy">
                                                 <strong>外部兜底</strong>
                                                 <small>默认不参与定时</small>
-                                            </span>
-                                        </button>
-                                        <button type="button" class="settings-nav-item settings-entry settings-entry-bottom settings-entry-secondary" data-settings-target="settings-browser-runtime">
-                                            <span class="settings-entry-icon">AD</span>
-                                            <span class="settings-entry-copy">
-                                                <strong>旧链路兼容</strong>
-                                                <small>旧浏览器设置</small>
                                             </span>
                                         </button>
                                         <button type="button" class="settings-nav-item settings-entry settings-entry-bottom" data-settings-target="settings-logs">
@@ -722,34 +715,24 @@
                                                     <input id="settings-timeout" type="number" min="10" max="120" class="input-dark">
                                                     <p class="field-help mt-2">普通请求的兜底超时。Scrapling 标准 / 增强 / 高兼容模式有独立高级超时。</p>
                                                 </div>
-                                            </div>
-                                        </section>
-
-                                        <section id="settings-browser-runtime" class="settings-section settings-page hidden" data-settings-panel>
-                                            <div class="settings-section-heading">
-                                                <div>
-                                                    <p class="settings-kicker">Legacy</p>
-                                                    <h3 class="panel-heading">旧链路兼容</h3>
-                                                    <p class="field-help mt-2">只影响旧任务和诊断链路，不影响 Scrapling 主采集。普通用户无需修改这里。</p>
-                                                </div>
-                                                <div class="settings-section-actions">
-                                                    <button type="button" class="ghost-button settings-back-button" data-settings-back>返回</button>
-                                                    <button type="submit" class="primary-button">保存旧链路</button>
-                                                </div>
-                                            </div>
-                                            <div class="settings-grid settings-grid-three">
-                                                <div class="settings-field">
-                                                    <label for="settings-monitor-port" class="form-label">旧监控链路端口</label>
-                                                    <input id="settings-monitor-port" type="number" min="1024" max="65535" class="input-dark">
-                                                </div>
-                                                <div class="settings-field">
-                                                    <label for="settings-test-port" class="form-label">旧测试链路端口</label>
-                                                    <input id="settings-test-port" type="number" min="1024" max="65535" class="input-dark">
-                                                </div>
-                                                <div class="settings-field">
-                                                    <label for="settings-catalog-port" class="form-label">旧商品入库链路端口</label>
-                                                    <input id="settings-catalog-port" type="number" min="1024" max="65535" class="input-dark">
-                                                </div>
+                                                <details class="settings-field-wide settings-advanced-block">
+                                                    <summary>兼容旧采集链路</summary>
+                                                    <p class="field-help mt-3">仅影响旧任务和历史诊断链路。新任务默认使用当前采集引擎，通常不用修改这里。</p>
+                                                    <div class="settings-grid settings-grid-three mt-4">
+                                                        <div class="settings-field">
+                                                            <label for="settings-monitor-port" class="form-label">旧监控链路端口</label>
+                                                            <input id="settings-monitor-port" type="number" min="1024" max="65535" class="input-dark">
+                                                        </div>
+                                                        <div class="settings-field">
+                                                            <label for="settings-test-port" class="form-label">旧测试链路端口</label>
+                                                            <input id="settings-test-port" type="number" min="1024" max="65535" class="input-dark">
+                                                        </div>
+                                                        <div class="settings-field">
+                                                            <label for="settings-catalog-port" class="form-label">旧商品入库链路端口</label>
+                                                            <input id="settings-catalog-port" type="number" min="1024" max="65535" class="input-dark">
+                                                        </div>
+                                                    </div>
+                                                </details>
                                             </div>
                                         </section>
 
