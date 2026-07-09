@@ -65,6 +65,7 @@ The project intentionally does not bypass Cloudflare / Turnstile / CAPTCHA chall
 - External enhanced collector diagnostics remain available for operator-owned endpoints, but they are opt-in and disabled for scheduled monitoring by default.
 - External enhanced collector URLs are normalized, so `127.0.0.1:8191`, `http://127.0.0.1:8191`, and `http://127.0.0.1:8191/v1/` resolve to the same service root.
 - The upgrade service now marks the app checkout as Git `safe.directory` before fetching, avoiding `dubious ownership` failures on older installs.
+- New installs use a more conservative default polling interval of 90 seconds and a 300-second high-compatibility domain cooldown to reduce small-VPS CPU spikes.
 
 ## Migration Notes
 
@@ -126,6 +127,7 @@ Webhook tokens are stored as HMAC hashes. Plaintext webhook tokens are shown onl
 - Firecrawl diagnostics do not save or expose plaintext API keys, and the settings workflow does not save or expose plaintext API keys.
 - Firecrawl external fallback still uses inventory-safe settings such as `FIRECRAWL_MAX_AGE_MS=0` and cache-disabled behavior.
 - Protected-source cooldown prevents repeated local browser launches, repeated target requests, and repeated Firecrawl calls.
+- High-compatibility Scrapling failures cool down by default before another browser-heavy attempt, reducing repeated CPU spikes on protected or unstable domains.
 - `stock=None` does not change `last_state` and does not send Telegram.
 - `manual` and `webhook` tasks do not poll target pages.
 - Product movement keeps existing task state, message IDs, webhook metadata, and source metadata.

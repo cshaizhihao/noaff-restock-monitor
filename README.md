@@ -348,7 +348,7 @@ curl -X POST 'https://your-panel.example.com/api/webhooks/restock/123' \
 | --- | --- | --- |
 | `APP_PORT` | 面板监听端口 | `7777` |
 | `APP_HOST` | 面板监听地址 | `127.0.0.1` |
-| `POLL_INTERVAL_SECONDS` | 定时轮询间隔 | `45` |
+| `POLL_INTERVAL_SECONDS` | 定时轮询间隔。默认偏保守，降低小 VPS CPU 和浏览器启动频率；需要更快可在设置中改成 60 或 45。 | `90` |
 | `REQUEST_TIMEOUT_SECONDS` | 通用请求超时 | `25` |
 | `TELEGRAM_BOT_TOKEN` | Telegram Bot Token | 空 |
 | `TELEGRAM_CHAT_IDS` | 多个 Chat ID，一行或逗号分隔 | 空 |
@@ -365,6 +365,7 @@ Scrapling：
 | `SCRAPLING_TIMEOUT_STANDARD` | 标准模式超时 | `25` |
 | `SCRAPLING_TIMEOUT_DYNAMIC` | 增强模式超时 | `45` |
 | `SCRAPLING_TIMEOUT_STEALTH` | 高兼容模式超时 | `75` |
+| `SCRAPLING_DOMAIN_COOLDOWN_STEALTH` | 高兼容失败后的域名冷却，避免频繁拉起浏览器 | `300` |
 | `SCRAPLING_MAX_CONCURRENCY_STEALTH` | 高兼容并发 | `1` |
 | `SCRAPLING_SESSION_REUSE` | 复用站点会话 | `true` |
 | `SCRAPLING_ADAPTIVE_SELECTOR` | 启用自适应选择器 | `true` |

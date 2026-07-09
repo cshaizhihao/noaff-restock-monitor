@@ -83,6 +83,7 @@ The project still only monitors public pages. It does not bypass Cloudflare / Tu
 - Added Scrapling/curl_cffi runtime checks in native install, upgrade, and Docker build flows.
 - Normalized external enhanced collector URLs in installer/backend configuration handling.
 - Hardened the upgrade service by adding Git `safe.directory` before fetch.
+- Lowered new-install polling pressure with a 90-second default interval and 300-second high-compatibility domain cooldown.
 - Updated README, handoff notes, release notes, PR draft, and environment documentation.
 
 ## Database Migration
