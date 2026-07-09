@@ -2730,9 +2730,9 @@ def normalize_settings(raw: dict[str, str]) -> dict[str, Any]:
             raw.get("enhanced_collector_enabled"),
             DEFAULT_ENHANCED_COLLECTOR_ENABLED,
         ),
-        "enhanced_collector_api_url": str(
+        "enhanced_collector_api_url": normalize_enhanced_collector_api_url(
             raw.get("enhanced_collector_api_url") or DEFAULT_ENHANCED_COLLECTOR_API_URL
-        ).strip().rstrip("/"),
+        ),
         "enhanced_collector_timeout_seconds": max(
             5,
             min(

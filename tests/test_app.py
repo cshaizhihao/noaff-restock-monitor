@@ -3324,6 +3324,16 @@ class PortalAppTestCase(unittest.TestCase):
             "http://127.0.0.1:8191",
         )
 
+    def test_normalize_settings_normalizes_enhanced_collector_url(self) -> None:
+        settings = app_module.normalize_settings(
+            {
+                **app_module.SETTINGS_DEFAULTS,
+                "enhanced_collector_api_url": "127.0.0.1:8191/v1/",
+            }
+        )
+
+        self.assertEqual(settings["enhanced_collector_api_url"], "http://127.0.0.1:8191")
+
     def test_enhanced_collector_diagnostic_reports_success(self) -> None:
         _, headers = self.login()
         calls: list[dict[str, object]] = []

@@ -550,6 +550,21 @@ mark_git_safe_directory() {
   git config --global --add safe.directory "$directory" >/dev/null 2>&1 || true
 }
 
+normalize_enhanced_collector_api_url() {
+  local value
+  value="$(printf '%s' "${1:-}" | xargs)"
+  [[ -n "$value" ]] || return 0
+  value="${value%/}"
+  if [[ "$value" != *"://"* ]]; then
+    value="http://${value}"
+  fi
+  value="${value%/}"
+  if [[ "${value,,}" == */v1 ]]; then
+    value="${value%/v1}"
+  fi
+  printf '%s' "$value"
+}
+
 prepare_git_checkout_permissions() {
   [[ -d "$APP_DIR/.git" ]] || return 0
   mark_git_safe_directory "$APP_DIR"
@@ -746,6 +761,7 @@ validate_runtime_config() {
   if [[ -n "$FIRECRAWL_API_URL" && ! "$FIRECRAWL_API_URL" =~ ^https?://[^[:space:]]+$ ]]; then
     die "FIRECRAWL_API_URL must be an http(s) URL."
   fi
+  ENHANCED_COLLECTOR_API_URL="$(normalize_enhanced_collector_api_url "$ENHANCED_COLLECTOR_API_URL")"
   if [[ -n "$ENHANCED_COLLECTOR_API_URL" && ! "$ENHANCED_COLLECTOR_API_URL" =~ ^https?://[^[:space:]]+$ ]]; then
     die "ENHANCED_COLLECTOR_API_URL must be an http(s) URL when provided."
   fi
@@ -2394,6 +2410,7 @@ exec > >(tee -a "$UPGRADE_LOG") 2>&1
 echo
 echo "[\$(date '+%Y-%m-%d %H:%M:%S')] 开始升级 ${APP_NAME}"
 cd "$APP_DIR"
+git config --global --add safe.directory "$APP_DIR" >/dev/null 2>&1 || true
 git fetch origin "$REPO_REF" --prune
 git checkout "$REPO_REF"
 git pull --ff-only origin "$REPO_REF"

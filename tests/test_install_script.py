@@ -124,7 +124,7 @@ class InstallScriptTestCase(unittest.TestCase):
     def test_validate_only_reports_enhanced_collector_config(self) -> None:
         output = self.assert_shell_ok(
             "ACCESS_MODE=ip ENHANCED_COLLECTOR_ENABLED=true "
-            "ENHANCED_COLLECTOR_API_URL=http://127.0.0.1:8191 "
+            "ENHANCED_COLLECTOR_API_URL=127.0.0.1:8191/v1/ "
             "bash install.sh --validate-only"
         )
 
@@ -585,6 +585,8 @@ class InstallScriptTestCase(unittest.TestCase):
         script = (ROOT_DIR / "install.sh").read_text(encoding="utf-8")
         self.assertIn("safe.directory", script)
         self.assertIn("prepare_git_checkout_permissions", script)
+        self.assertIn('git config --global --add safe.directory "$APP_DIR"', script)
+        self.assertLess(script.index('git config --global --add safe.directory "$APP_DIR"'), script.index('git fetch origin "$REPO_REF" --prune'))
 
     def test_installer_waits_for_application_health_before_success(self) -> None:
         script = (ROOT_DIR / "install.sh").read_text(encoding="utf-8")
