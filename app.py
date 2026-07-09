@@ -8104,6 +8104,25 @@ def extract_stock_by_keyword_lists(fragment: str, source_config: dict[str, Any],
     return None
 
 
+def select_rule_base_html(html_text: str, target_keyword: str, source_config: dict[str, Any]) -> str:
+    scope_selector = str(source_config.get("target_scope_selector") or "").strip()
+    scope_fragments = select_fragments_by_css(html_text, scope_selector)
+    if not scope_fragments:
+        return html_text
+
+    keyword_candidates = html_keyword_candidates(target_keyword)
+    if keyword_candidates:
+        matched_fragments: list[str] = []
+        for fragment in scope_fragments:
+            fragment_haystack = f"{fragment}\n{clean_fragment_text(fragment)}"
+            if any(re.search(re.escape(candidate), fragment_haystack, re.IGNORECASE) for candidate in keyword_candidates):
+                matched_fragments.append(fragment)
+        if matched_fragments:
+            return "\n".join(matched_fragments)
+
+    return "\n".join(scope_fragments)
+
+
 def extract_stock_by_rule(
     html_text: str,
     target_keyword: str,
@@ -8117,10 +8136,11 @@ def extract_stock_by_rule(
     if rule_type not in STOCK_RULE_TYPES:
         rule_type = "auto_card"
 
-    scope_fragments = select_fragments_by_css(html_text, str(source_config.get("target_scope_selector") or ""))
-    base_html = "\n".join(scope_fragments) if scope_fragments else html_text
+    base_html = select_rule_base_html(html_text, target_keyword, source_config)
     if rule_type == "text_near_keyword":
-        base_html = locate_product_fragment(html_text, target_keyword, lambda fragment: bool(clean_fragment_text(fragment)))
+        located_html = locate_product_fragment(base_html, target_keyword, lambda fragment: bool(clean_fragment_text(fragment)))
+        if located_html:
+            base_html = located_html
 
     keyword_result = extract_stock_by_keyword_lists(base_html, source_config, "custom_rule")
     if keyword_result is not None:

@@ -1291,8 +1291,31 @@
                         </div>
                         <div class="task-auto-rule-card">
                             <strong>自动识别</strong>
-                            <span>优先围绕目标关键词判断商品卡片、售罄标记、购买入口和库存数字。大多数 IDC 页面不需要手写规则。</span>
+                            <span>先选一个解析模板。大多数 IDC 页面用“自动识别”或“IDC 商品卡片”即可，高级规则只在误判时展开。</span>
                         </div>
+                        <div id="task-rule-preset-grid" class="task-rule-preset-grid" role="radiogroup" aria-label="解析模板">
+                            <button type="button" class="task-rule-preset is-active" data-task-rule-preset="auto" role="radio" aria-checked="true">
+                                <strong>自动识别</strong>
+                                <span>按目标关键词自动判断。</span>
+                            </button>
+                            <button type="button" class="task-rule-preset" data-task-rule-preset="idc_card" role="radio" aria-checked="false">
+                                <strong>IDC 商品卡片</strong>
+                                <span>WHMCS / HostBill / VPS 价格卡。</span>
+                            </button>
+                            <button type="button" class="task-rule-preset" data-task-rule-preset="css_buttons" role="radio" aria-checked="false">
+                                <strong>按钮判断</strong>
+                                <span>购买按钮有货，禁用按钮售罄。</span>
+                            </button>
+                            <button type="button" class="task-rule-preset" data-task-rule-preset="css_stock" role="radio" aria-checked="false">
+                                <strong>库存数字</strong>
+                                <span>页面直接给库存数量。</span>
+                            </button>
+                            <button type="button" class="task-rule-preset" data-task-rule-preset="regex" role="radio" aria-checked="false">
+                                <strong>正则提取</strong>
+                                <span>脚本或源码里有库存字段。</span>
+                            </button>
+                        </div>
+                        <p id="task-rule-preset-summary" class="task-rule-preset-summary">围绕目标关键词自动判断商品卡片、售罄标记、购买入口和库存数字。</p>
                         <details id="task-rule-advanced" class="task-rule-advanced">
                             <summary>高级规则</summary>
                             <div class="task-rule-grid">
@@ -1318,6 +1341,14 @@
                                 <div>
                                     <label for="task-soldout-selector" class="form-label">售罄 selector</label>
                                     <input id="task-soldout-selector" type="text" class="input-dark" placeholder=".sold-out, button[disabled]">
+                                </div>
+                                <div>
+                                    <label for="task-button-selector" class="form-label">购买按钮 selector</label>
+                                    <input id="task-button-selector" type="text" class="input-dark" placeholder="a[href*='cart'], button:not([disabled])">
+                                </div>
+                                <div>
+                                    <label for="task-disabled-selector" class="form-label">禁用按钮 selector</label>
+                                    <input id="task-disabled-selector" type="text" class="input-dark" placeholder="button[disabled], .disabled">
                                 </div>
                                 <div>
                                     <label for="task-regex-pattern" class="form-label">正则表达式</label>

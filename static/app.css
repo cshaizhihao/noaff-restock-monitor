@@ -360,6 +360,69 @@ select.input-dark {
     line-height: 1.6;
 }
 
+.task-rule-preset-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(10.5rem, 1fr));
+    gap: 0.65rem;
+}
+
+.task-rule-preset {
+    display: grid;
+    min-height: 5.35rem;
+    cursor: pointer;
+    align-content: start;
+    gap: 0.35rem;
+    border: 1px solid rgba(51, 65, 85, 0.82);
+    border-radius: var(--radius);
+    background: rgba(10, 15, 23, 0.72);
+    padding: 0.82rem;
+    text-align: left;
+    transition: border-color 150ms ease, background 150ms ease, box-shadow 150ms ease;
+}
+
+.task-rule-preset:hover,
+.task-rule-preset:focus-visible {
+    border-color: rgba(34, 197, 94, 0.42);
+    background: rgba(34, 197, 94, 0.07);
+}
+
+.task-rule-preset.is-active {
+    border-color: rgba(34, 197, 94, 0.72);
+    background: rgba(34, 197, 94, 0.12);
+    box-shadow: inset 0 0 0 1px rgba(34, 197, 94, 0.12);
+}
+
+.task-rule-preset strong,
+.task-rule-preset span {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.task-rule-preset strong {
+    color: #f8fafc;
+    font-size: 0.88rem;
+    font-weight: 850;
+    white-space: nowrap;
+}
+
+.task-rule-preset span {
+    color: #94a3b8;
+    font-size: 0.74rem;
+    line-height: 1.45;
+}
+
+.task-rule-preset-summary {
+    border: 1px solid rgba(56, 189, 248, 0.2);
+    border-radius: var(--radius);
+    background: rgba(8, 47, 73, 0.16);
+    color: #bae6fd;
+    font-size: 0.82rem;
+    font-weight: 750;
+    line-height: 1.55;
+    padding: 0.72rem 0.85rem;
+}
+
 .task-rule-advanced {
     border: 1px solid rgba(51, 65, 85, 0.72);
     border-radius: var(--radius);

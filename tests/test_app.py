@@ -6466,6 +6466,56 @@ class PortalAppTestCase(unittest.TestCase):
         self.assertEqual(result.stock, 12)
         self.assertIn("css_selector", result.detail)
 
+    def test_rule_extractor_button_selector_detects_stock_state(self) -> None:
+        html_text = """
+        <main>
+          <article class="product-card">
+            <h3>Tokyo Basic</h3>
+            <a href="/cart.php?a=add&pid=1">Order Now</a>
+          </article>
+          <article class="product-card">
+            <h3>Osaka Pro</h3>
+            <button disabled>Unavailable</button>
+          </article>
+        </main>
+        """
+
+        available = app_module.extract_stock_for_strategy(
+            "scrapling_adaptive",
+            html_text,
+            "Tokyo Basic",
+            {
+                "fetch_strategy": "scrapling_adaptive",
+                "source_config": {
+                    "stock_rule_type": "css_selector",
+                    "target_scope_selector": ".product-card",
+                    "button_selector": "a[href*='cart']",
+                    "disabled_selector": "button[disabled]",
+                },
+            },
+            app_module.FetchResult(html=html_text, final_url="https://example.com/pricing"),
+        )
+        sold_out = app_module.extract_stock_for_strategy(
+            "scrapling_adaptive",
+            html_text,
+            "Osaka Pro",
+            {
+                "fetch_strategy": "scrapling_adaptive",
+                "source_config": {
+                    "stock_rule_type": "css_selector",
+                    "target_scope_selector": ".product-card",
+                    "button_selector": "a[href*='cart']",
+                    "disabled_selector": "button[disabled]",
+                },
+            },
+            app_module.FetchResult(html=html_text, final_url="https://example.com/pricing"),
+        )
+
+        self.assertEqual(available.stock, 1)
+        self.assertIn("购买按钮", available.detail)
+        self.assertEqual(sold_out.stock, 0)
+        self.assertIn("禁用按钮", sold_out.detail)
+
     def test_rule_extractor_xpath_detects_sold_out(self) -> None:
         html_text = """
         <main>

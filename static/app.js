@@ -197,9 +197,13 @@
         taskRuleDetails: document.getElementById("task-rule-details"),
         taskRuleAdvanced: document.getElementById("task-rule-advanced"),
         taskStockRuleType: document.getElementById("task-stock-rule-type"),
+        taskRulePresetGrid: document.getElementById("task-rule-preset-grid"),
+        taskRulePresetSummary: document.getElementById("task-rule-preset-summary"),
         taskTargetScopeSelector: document.getElementById("task-target-scope-selector"),
         taskStockSelector: document.getElementById("task-stock-selector"),
         taskSoldoutSelector: document.getElementById("task-soldout-selector"),
+        taskButtonSelector: document.getElementById("task-button-selector"),
+        taskDisabledSelector: document.getElementById("task-disabled-selector"),
         taskRegexPattern: document.getElementById("task-regex-pattern"),
         taskJsonPath: document.getElementById("task-json-path"),
         taskInStockKeywords: document.getElementById("task-in-stock-keywords"),
@@ -272,11 +276,58 @@
         "target_scope_selector",
         "stock_selector",
         "soldout_selector",
+        "button_selector",
+        "disabled_selector",
         "regex_pattern",
         "json_path",
         "in_stock_keywords",
         "soldout_keywords"
     ];
+    const taskRulePresets = {
+        auto: {
+            label: "自动识别",
+            summary: "围绕目标关键词自动判断商品卡片、售罄标记、购买入口和库存数字。",
+            config: {}
+        },
+        idc_card: {
+            label: "IDC 商品卡片",
+            summary: "适合 WHMCS、HostBill、IDC 价格卡片，优先判断目标商品附近内容。",
+            config: {
+                stock_rule_type: "text_near_keyword",
+                target_scope_selector: "article, section, .product-card, .plan-card, .package, .pricing-card",
+                in_stock_keywords: ["Order Now", "Buy Now", "Configure", "Available", "Add to Cart", "购买", "下单"],
+                soldout_keywords: ["Out of Stock", "Sold Out", "Unavailable", "缺货", "售罄", "无货"]
+            }
+        },
+        css_buttons: {
+            label: "按钮判断",
+            summary: "适合页面用按钮表示状态：可购买按钮为有货，disabled/售罄按钮为售罄。",
+            config: {
+                stock_rule_type: "css_selector",
+                target_scope_selector: ".product-card, .plan-card, .package, .pricing-card, article, section",
+                button_selector: "a[href*='cart'], a[href*='order'], button:not([disabled])",
+                disabled_selector: "button[disabled], .disabled, .is-disabled",
+                soldout_selector: ".sold-out, .out-of-stock, [data-stock='0']"
+            }
+        },
+        css_stock: {
+            label: "库存数字",
+            summary: "适合页面直接写库存数量，命中数字后按实际库存判断。",
+            config: {
+                stock_rule_type: "css_selector",
+                target_scope_selector: ".product-card, .plan-card, .package, .pricing-card, article, section",
+                stock_selector: ".stock, .inventory, [data-stock], [data-inventory]"
+            }
+        },
+        regex: {
+            label: "正则提取",
+            summary: "适合 HTML 或脚本里有 stock_count / inventory 这类字段。",
+            config: {
+                stock_rule_type: "regex",
+                regex_pattern: "(?:stock|inventory|qty|quantity)[_\\-\\s:=\\\"]+(?P<stock>\\d+)"
+            }
+        }
+    };
 
     function normalizeFetchStrategy(value) {
         const strategy = String(value || "").trim().toLowerCase().replaceAll("-", "_");
@@ -514,12 +565,47 @@
         });
     }
 
+    function ruleConfigHasValue(config, key) {
+        const value = config?.[key];
+        if (Array.isArray(value)) return value.length > 0;
+        return Boolean(String(value || "").trim());
+    }
+
+    function inferTaskRulePreset(config) {
+        const sourceConfig = parseTaskSourceConfig(config);
+        const hasAnyRule = stockRuleConfigKeys.some((key) => ruleConfigHasValue(sourceConfig, key));
+        if (!hasAnyRule) return "auto";
+        if (sourceConfig.stock_rule_type === "regex" || sourceConfig.regex_pattern) return "regex";
+        if (sourceConfig.button_selector || sourceConfig.disabled_selector) return "css_buttons";
+        if (sourceConfig.stock_selector && !sourceConfig.soldout_selector) return "css_stock";
+        if (sourceConfig.stock_rule_type === "text_near_keyword" || sourceConfig.in_stock_keywords || sourceConfig.soldout_keywords) return "idc_card";
+        return "custom";
+    }
+
+    function updateTaskRulePresetUi(config) {
+        const presetKey = inferTaskRulePreset(config);
+        const preset = taskRulePresets[presetKey] || {
+            label: "自定义规则",
+            summary: "当前使用手动编辑过的高级规则。"
+        };
+        document.querySelectorAll("[data-task-rule-preset]").forEach((button) => {
+            const active = button.dataset.taskRulePreset === presetKey;
+            button.classList.toggle("is-active", active);
+            button.setAttribute("aria-checked", active ? "true" : "false");
+        });
+        if (els.taskRulePresetSummary) {
+            els.taskRulePresetSummary.textContent = preset.summary;
+        }
+    }
+
     function setTaskRuleFields(config) {
         const sourceConfig = parseTaskSourceConfig(config);
         if (els.taskStockRuleType) els.taskStockRuleType.value = sourceConfig.stock_rule_type || "";
         if (els.taskTargetScopeSelector) els.taskTargetScopeSelector.value = sourceConfig.target_scope_selector || "";
         if (els.taskStockSelector) els.taskStockSelector.value = sourceConfig.stock_selector || "";
         if (els.taskSoldoutSelector) els.taskSoldoutSelector.value = sourceConfig.soldout_selector || "";
+        if (els.taskButtonSelector) els.taskButtonSelector.value = sourceConfig.button_selector || "";
+        if (els.taskDisabledSelector) els.taskDisabledSelector.value = sourceConfig.disabled_selector || "";
         if (els.taskRegexPattern) els.taskRegexPattern.value = sourceConfig.regex_pattern || "";
         if (els.taskJsonPath) els.taskJsonPath.value = sourceConfig.json_path || "";
         if (els.taskInStockKeywords) {
@@ -533,7 +619,16 @@
                 : sourceConfig.soldout_keywords || "";
         }
         if (els.taskRuleAdvanced) {
-            els.taskRuleAdvanced.open = stockRuleConfigKeys.some((key) => Boolean(sourceConfig[key]));
+            els.taskRuleAdvanced.open = stockRuleConfigKeys.some((key) => ruleConfigHasValue(sourceConfig, key));
+        }
+        updateTaskRulePresetUi(sourceConfig);
+    }
+
+    function applyTaskRulePreset(presetKey) {
+        const preset = taskRulePresets[presetKey] || taskRulePresets.auto;
+        setTaskRuleFields(preset.config || {});
+        if (presetKey !== "auto" && els.taskRuleAdvanced) {
+            els.taskRuleAdvanced.open = true;
         }
     }
 
@@ -555,6 +650,8 @@
             target_scope_selector: els.taskTargetScopeSelector?.value,
             stock_selector: els.taskStockSelector?.value,
             soldout_selector: els.taskSoldoutSelector?.value,
+            button_selector: els.taskButtonSelector?.value,
+            disabled_selector: els.taskDisabledSelector?.value,
             regex_pattern: els.taskRegexPattern?.value,
             json_path: els.taskJsonPath?.value
         };
@@ -4843,6 +4940,12 @@
         const strategyCard = event.target.closest("[data-task-strategy-card]");
         if (strategyCard && els.taskForm.contains(strategyCard)) {
             setTaskStrategy(strategyCard.dataset.taskStrategyCard);
+            return;
+        }
+        const rulePreset = event.target.closest("[data-task-rule-preset]");
+        if (rulePreset && els.taskForm.contains(rulePreset)) {
+            applyTaskRulePreset(rulePreset.dataset.taskRulePreset);
+            updateTaskWizardSummary();
         }
     });
 
@@ -4878,6 +4981,25 @@
     els.taskFetchStrategy?.addEventListener("change", () => {
         updateTaskStrategyUi();
         updateTaskWizardSummary();
+    });
+    [
+        els.taskStockRuleType,
+        els.taskTargetScopeSelector,
+        els.taskStockSelector,
+        els.taskSoldoutSelector,
+        els.taskButtonSelector,
+        els.taskDisabledSelector,
+        els.taskRegexPattern,
+        els.taskJsonPath,
+        els.taskInStockKeywords,
+        els.taskSoldoutKeywords
+    ].forEach((element) => {
+        const refreshRulePreset = () => {
+            updateTaskRulePresetUi(collectTaskSourceConfig());
+            updateTaskWizardSummary();
+        };
+        element?.addEventListener("input", refreshRulePreset);
+        element?.addEventListener("change", refreshRulePreset);
     });
     [els.taskName, els.taskUrl, els.taskKeyword, els.taskGroupCustom, els.taskSubgroupCustom]
         .forEach((element) => element?.addEventListener("input", updateTaskWizardSummary));
