@@ -123,7 +123,6 @@ Webhook tokens are stored as HMAC hashes. Plaintext webhook tokens are shown onl
 - Firecrawl credit or rate-limit failures enter cooldown and do not keep consuming credits every polling round.
 - Firecrawl diagnostics do not save or expose plaintext API keys, and the settings workflow does not save or expose plaintext API keys.
 - Firecrawl external fallback still uses inventory-safe settings such as `FIRECRAWL_MAX_AGE_MS=0` and cache-disabled behavior.
-- DMIT monitoring now checks the HostMonit public stock index first. Exact SKU/PID matches can return sold-out or in-stock state without requesting the Cloudflare-protected DMIT cart page.
 - Protected-source cooldown prevents repeated local browser launches, repeated target requests, and repeated Firecrawl calls.
 - `stock=None` does not change `last_state` and does not send Telegram.
 - `manual` and `webhook` tasks do not poll target pages.
