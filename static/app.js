@@ -2818,23 +2818,30 @@
                     `;
                 }
                 return `
-                    <button type="button" class="ghost-button task-check-button task-unlock-button ${shouldSuggestDomainUnlock(task) ? "is-suggested" : ""}" data-action="unlock-session" data-task-unlock-action title="${escapeHtml(domainMeta.detail)}">
-                        <svg class="mr-1.5 h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H3v-4.586l5.257-5.257A6 6 0 1121 9z"/>
-                        </svg>
-                        初始化会话
-                    </button>
-                    <button type="button" class="ghost-button task-check-button" data-action="import-session" data-task-import-session-action title="导入当前浏览器 Cookie / User-Agent">
-                        <svg class="mr-1.5 h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 16V4m0 0l-4 4m4-4l4 4M4 20h16"/>
-                        </svg>
-                        导入会话
-                    </button>
                     <button type="button" class="ghost-button task-check-button" data-action="check" data-task-check-action>
                         <svg class="mr-1.5 h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8"/>
                         </svg>
                         检测
+                    </button>
+                `;
+            })();
+            const sessionActions = (() => {
+                if (normalizedStrategy === "manual" || normalizedStrategy === "webhook") {
+                    return "";
+                }
+                return `
+                    <button type="button" class="ghost-button task-check-button task-unlock-button ${shouldSuggestDomainUnlock(task) ? "is-suggested" : ""}" data-action="unlock-session" data-task-unlock-action title="${escapeHtml(domainMeta.detail)}">
+                        <svg class="mr-1 h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H3v-4.586l5.257-5.257A6 6 0 1121 9z"/>
+                        </svg>
+                        初始化
+                    </button>
+                    <button type="button" class="ghost-button task-check-button" data-action="import-session" data-task-import-session-action title="导入当前浏览器 Cookie / User-Agent">
+                        <svg class="mr-1 h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 16V4m0 0l-4 4m4-4l4 4M4 20h16"/>
+                        </svg>
+                        导入
                     </button>
                 `;
             })();
@@ -2915,6 +2922,7 @@
                         <div class="action-group task-primary-actions">
                             ${modeActions}
                         </div>
+                        ${sessionActions ? `<div class="action-group task-session-actions">${sessionActions}</div>` : ""}
                     </div>
                 </article>
             `;
