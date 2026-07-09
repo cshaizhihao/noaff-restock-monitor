@@ -280,83 +280,99 @@
         return strategy || "multi_engine";
     }
 
-    function fetchStrategyLabel(value) {
-        switch (normalizeFetchStrategy(value)) {
+    function normalizeTaskFetchMode(value) {
+        const normalized = normalizeFetchStrategy(value);
+        switch (normalized) {
             case "multi_engine":
-                return "自动";
-            case "curl_cffi":
-                return "标准";
-            case "scrapling_standard":
-                return "标准采集";
-            case "scrapling_dynamic":
-                return "增强";
-            case "scrapling_stealth":
-                return "高兼容";
             case "scrapling_adaptive":
-                return "自动采集";
-            case "static_http":
-                return "静态 HTTP";
-            case "generic_pricing_table":
-                return "通用价格页";
-            case "whmcs":
-                return "WHMCS";
-            case "firecrawl":
-                return "外部兜底";
-            case "firecrawl_then_static":
-                return "外部兜底 → 静态";
-            case "static_then_firecrawl":
-                return "静态 → 外部兜底";
-            case "firecrawl_then_browser":
-                return "外部兜底 → 浏览器";
             case "adaptive":
-                return "自适应低成本";
+                return "auto";
+            case "curl_cffi":
+            case "static_http":
+            case "scrapling_standard":
+            case "standard":
+                return "standard";
+            case "browser":
+            case "scrapling_dynamic":
+            case "dynamic":
+                return "dynamic";
+            case "scrapling_stealth":
+            case "headed_session":
+            case "firecrawl":
+            case "firecrawl_then_static":
+            case "static_then_firecrawl":
+            case "firecrawl_then_browser":
+            case "compatible":
+                return "compatible";
+            case "external_solver":
+                return "external_solver";
+            case "manual":
+                return "manual";
+            case "webhook":
+                return "webhook";
+            default:
+                return "auto";
+        }
+    }
+
+    function fetchStrategyForMode(value) {
+        switch (normalizeTaskFetchMode(value)) {
+            case "standard":
+                return "curl_cffi";
+            case "dynamic":
+                return "scrapling_dynamic";
+            case "compatible":
+                return "scrapling_stealth";
+            case "manual":
+                return "manual";
+            case "webhook":
+                return "webhook";
+            case "external_solver":
+            case "auto":
+            default:
+                return "multi_engine";
+        }
+    }
+
+    function fetchStrategyLabel(value) {
+        switch (normalizeTaskFetchMode(value)) {
+            case "auto":
+                return "自动";
+            case "standard":
+                return "标准";
+            case "dynamic":
+                return "增强";
+            case "compatible":
+                return "高兼容";
+            case "external_solver":
+                return "外部兜底";
             case "manual":
                 return "手动录入";
             case "webhook":
                 return "Webhook";
             default:
-                return "浏览器渲染";
+                return "自动";
         }
     }
 
     function fetchStrategyHelp(value) {
-        switch (normalizeFetchStrategy(value)) {
-            case "multi_engine":
-                return "自动模式：系统优先使用低成本采集，失败后再逐步升级。推荐新任务使用。";
-            case "curl_cffi":
+        switch (normalizeTaskFetchMode(value)) {
+            case "auto":
+                return "自动模式：系统优先用低成本采集，失败后按站点情况升级。推荐新任务使用。";
+            case "standard":
                 return "标准模式：不启动浏览器，适合普通公开商品页，资源消耗最低。";
-            case "scrapling_standard":
-                return "标准模式：轻量抓取，适合大多数公开 IDC / WHMCS 页面。";
-            case "scrapling_dynamic":
+            case "dynamic":
                 return "增强模式：适合需要页面渲染的商品页，资源消耗高于标准模式。";
-            case "scrapling_stealth":
+            case "compatible":
                 return "高兼容模式：适合复杂页面，建议只给少量重点商品使用。";
-            case "scrapling_adaptive":
-                return "自动采集：兼容旧任务的自动模式。新任务建议使用“自动”。";
-            case "firecrawl":
-                return "外部付费兜底服务，会消耗 Firecrawl credits；默认不用于定时监控，只建议手动检测、商品入库或诊断时使用。";
-            case "firecrawl_then_static":
-                return "先尝试外部 Firecrawl，再回退静态 HTTP。定时监控默认会跳过 Firecrawl，除非系统设置显式允许。";
-            case "firecrawl_then_browser":
-                return "先尝试外部 Firecrawl，再回退本地浏览器。定时监控默认会跳过 Firecrawl，避免持续消耗 credits。";
-            case "static_then_firecrawl":
-                return "先用本地静态 HTTP，失败后才调用外部 Firecrawl；定时监控需显式允许 Firecrawl 才会触发。";
-            case "adaptive":
-                return "默认低成本方案：先用静态 HTTP，再用本地浏览器做有限 fallback；不会默认消耗 Firecrawl credits。";
-            case "generic_pricing_table":
-                return "通用 IDC 价格卡片/表格解析器。会围绕目标关键词判断购买入口、售罄标记和库存数字。";
-            case "whmcs":
-                return "WHMCS 商城页面专用解析器，适合 cart.php、store、configureproduct 等常见 IDC 购物车页面。";
-            case "browser":
-                return "本地 Chromium 渲染后解析。适合必须执行 JS 的公开页面；Cloudflare challenge 不会触发反复重建。";
-            case "static_http":
-                return "本地 requests 抓取 HTML。速度快、成本低，适合无需 JS 渲染的公开页面。";
+            case "external_solver":
+                return "外部兜底：调用已配置的增强采集服务。适合手动检测或少量重点任务，不建议无脑高频使用。";
             case "manual":
                 return "手动维护库存状态，不访问目标页面；适合受保护页面或暂时需要人工确认的商品。";
             case "webhook":
                 return "由外部系统通过 Webhook 推送库存状态。只有 Webhook 任务才会显示 Token 重置操作。";
             default:
-                return "兼容旧任务的采集方式。新任务建议使用自动模式。";
+                return "自动模式：系统优先用低成本采集，失败后按站点情况升级。";
         }
     }
 
@@ -372,7 +388,7 @@
     }
 
     function setTaskStrategy(value) {
-        const strategy = normalizeFetchStrategy(value || preferredTaskFetchStrategy());
+        const strategy = normalizeTaskFetchMode(value || preferredTaskFetchStrategy());
         if (els.taskFetchStrategy) {
             els.taskFetchStrategy.value = strategy;
         }
@@ -481,7 +497,7 @@
     }
 
     function updateTaskStrategyUi() {
-        const strategy = normalizeFetchStrategy(els.taskFetchStrategy?.value);
+        const strategy = normalizeTaskFetchMode(els.taskFetchStrategy?.value);
         if (els.taskStrategySummary) {
             els.taskStrategySummary.textContent = fetchStrategyHelp(strategy);
         }
@@ -489,7 +505,7 @@
             els.taskWebhookHint.classList.toggle("hidden", strategy !== "webhook");
         }
         document.querySelectorAll("[data-task-strategy-card]").forEach((card) => {
-            const active = normalizeFetchStrategy(card.dataset.taskStrategyCard) === strategy;
+            const active = normalizeTaskFetchMode(card.dataset.taskStrategyCard) === strategy;
             card.classList.toggle("is-active", active);
             card.setAttribute("aria-checked", active ? "true" : "false");
         });
@@ -1648,7 +1664,7 @@
     }
 
     function shouldSuggestDomainUnlock(task) {
-        const strategy = normalizeFetchStrategy(task.fetch_strategy);
+        const strategy = normalizeTaskFetchMode(task.fetch_mode || task.fetch_strategy);
         if (["manual", "webhook"].includes(strategy)) {
             return false;
         }
@@ -1660,7 +1676,7 @@
     }
 
     function webhookMetaText(task) {
-        if (normalizeFetchStrategy(task.fetch_strategy) !== "webhook") {
+        if (normalizeTaskFetchMode(task.fetch_mode || task.fetch_strategy) !== "webhook") {
             return "";
         }
         const endpoint = task.webhook_endpoint || "";
@@ -1776,7 +1792,7 @@
         const sourceLine = task.source_source_name
             ? `来源：${task.source_source_name}${task.source_item_url ? ` · ${task.source_item_url}` : ""}`
             : "";
-        const fetchStrategyText = fetchStrategyLabel(task.fetch_strategy);
+        const fetchStrategyText = fetchStrategyLabel(task.fetch_mode || task.fetch_strategy);
         const logLine = formatTaskLogLine(task, logHint);
         const protectedNotice = protectedSourceNoticeText(task);
         const webhookMeta = webhookMetaText(task);
@@ -1854,17 +1870,17 @@
         }
         const manualActions = card.querySelector("[data-task-manual-actions]");
         if (manualActions) {
-            manualActions.classList.toggle("hidden", normalizeFetchStrategy(task.fetch_strategy) !== "manual");
+            manualActions.classList.toggle("hidden", normalizeTaskFetchMode(task.fetch_mode || task.fetch_strategy) !== "manual");
         }
         const webhookAction = card.querySelector("[data-task-webhook-action]");
         if (webhookAction) {
-            webhookAction.classList.toggle("hidden", normalizeFetchStrategy(task.fetch_strategy) !== "webhook");
+            webhookAction.classList.toggle("hidden", normalizeTaskFetchMode(task.fetch_mode || task.fetch_strategy) !== "webhook");
         }
         const checkAction = card.querySelector("[data-task-check-action]");
         if (checkAction) {
             checkAction.classList.toggle(
                 "hidden",
-                ["manual", "webhook"].includes(normalizeFetchStrategy(task.fetch_strategy))
+                ["manual", "webhook"].includes(normalizeTaskFetchMode(task.fetch_mode || task.fetch_strategy))
             );
         }
         const unlockAction = card.querySelector("[data-task-unlock-action]");
@@ -2105,7 +2121,7 @@
             els.taskKeyword.value = task.target_keyword || "";
             els.taskForm.dataset.sourceConfig = JSON.stringify(parseTaskSourceConfig(task.source_config));
             setTaskRuleFields(task.source_config);
-            setTaskStrategy(task.fetch_strategy);
+            setTaskStrategy(task.fetch_mode || task.fetch_strategy);
             els.taskRestock.value = task.restock_template || defaultTemplates.restock;
             els.taskSoldout.value = task.soldout_template || defaultTemplates.soldout;
             els.taskButton1Text.value = task.button_1_text || "";
@@ -2783,7 +2799,7 @@
             const actionLabel = task.enabled ? "停用任务" : "启用任务";
             const protectedNotice = protectedSourceNoticeText(task);
             const webhookMeta = webhookMetaText(task);
-            const normalizedStrategy = normalizeFetchStrategy(task.fetch_strategy);
+            const normalizedStrategy = normalizeTaskFetchMode(task.fetch_mode || task.fetch_strategy);
             const attemptMeta = fetchAttemptMeta(task);
             const domainMeta = domainSessionMeta(task);
             const rowClass = animateCards ? "task-row task-product-card reveal" : "task-row task-product-card";
@@ -2852,7 +2868,7 @@
                                 </svg>
                                 <span data-task-keyword-text>${escapeHtml(task.target_keyword || "未设置关键词")}</span>
                             </span>
-                            <span class="task-tag" data-task-fetch-strategy>${escapeHtml(fetchStrategyLabel(task.fetch_strategy))}</span>
+                            <span class="task-tag" data-task-fetch-strategy>${escapeHtml(fetchStrategyLabel(task.fetch_mode || task.fetch_strategy))}</span>
                             <span class="task-tag domain-session-chip ${domainMeta.className}" data-task-domain-session title="${escapeHtml(domainMeta.detail)}">${escapeHtml(domainMeta.label)}</span>
                             <span class="task-tag task-row-stock font-mono">
                                 库存:
@@ -3238,7 +3254,8 @@
             subgroup_name: subgroupName,
             monitor_url: els.taskUrl.value.trim(),
             target_keyword: els.taskKeyword.value.trim(),
-            fetch_strategy: normalizeFetchStrategy(els.taskFetchStrategy.value),
+            fetch_mode: normalizeTaskFetchMode(els.taskFetchStrategy.value),
+            fetch_strategy: fetchStrategyForMode(els.taskFetchStrategy.value),
             source_config: collectTaskSourceConfig(),
             restock_template: els.taskRestock.value.trim(),
             soldout_template: els.taskSoldout.value.trim(),

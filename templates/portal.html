@@ -1213,11 +1213,11 @@
                             <div class="task-hidden-field">
                                 <label for="task-fetch-strategy" class="form-label">采集方式</label>
                                 <select id="task-fetch-strategy" class="input-dark">
-                                    <option value="multi_engine">自动（推荐）</option>
-                                    <option value="curl_cffi">标准</option>
-                                    <option value="scrapling_standard">标准采集</option>
-                                    <option value="scrapling_dynamic">增强</option>
-                                    <option value="scrapling_stealth">高兼容</option>
+                                    <option value="auto">自动（推荐）</option>
+                                    <option value="standard">标准</option>
+                                    <option value="dynamic">增强</option>
+                                    <option value="compatible">高兼容</option>
+                                    <option value="external_solver">外部兜底</option>
                                     <option value="manual">手动录入</option>
                                     <option value="webhook">Webhook</option>
                                 </select>
@@ -1237,25 +1237,30 @@
                             </div>
                         </div>
                         <div id="task-strategy-cards" class="task-strategy-card-grid" role="radiogroup" aria-label="采集模式">
-                            <button type="button" class="task-strategy-card" data-task-strategy-card="multi_engine" role="radio" aria-checked="true">
+                            <button type="button" class="task-strategy-card" data-task-strategy-card="auto" role="radio" aria-checked="true">
                                 <span>推荐</span>
                                 <strong>自动</strong>
                                 <em>系统自己选择低成本采集方式。</em>
                             </button>
-                            <button type="button" class="task-strategy-card" data-task-strategy-card="curl_cffi" role="radio" aria-checked="false">
+                            <button type="button" class="task-strategy-card" data-task-strategy-card="standard" role="radio" aria-checked="false">
                                 <span>轻量</span>
                                 <strong>标准</strong>
                                 <em>适合普通公开页面，不启动浏览器。</em>
                             </button>
-                            <button type="button" class="task-strategy-card" data-task-strategy-card="scrapling_dynamic" role="radio" aria-checked="false">
+                            <button type="button" class="task-strategy-card" data-task-strategy-card="dynamic" role="radio" aria-checked="false">
                                 <span>JS</span>
                                 <strong>增强</strong>
                                 <em>适合需要页面渲染的商品页。</em>
                             </button>
-                            <button type="button" class="task-strategy-card" data-task-strategy-card="scrapling_stealth" role="radio" aria-checked="false">
+                            <button type="button" class="task-strategy-card" data-task-strategy-card="compatible" role="radio" aria-checked="false">
                                 <span>兼容</span>
                                 <strong>高兼容</strong>
                                 <em>复杂页面备用，消耗更高。</em>
+                            </button>
+                            <button type="button" class="task-strategy-card" data-task-strategy-card="external_solver" role="radio" aria-checked="false">
+                                <span>兜底</span>
+                                <strong>外部兜底</strong>
+                                <em>调用已配置增强服务，适合少量重点任务。</em>
                             </button>
                             <button type="button" class="task-strategy-card" data-task-strategy-card="manual" role="radio" aria-checked="false">
                                 <span>人工</span>

@@ -351,6 +351,13 @@ COLLECTOR_CURL_CFFI = "curl_cffi"
 COLLECTOR_EXTERNAL_SOLVER = "external_solver"
 COLLECTOR_MANUAL = "manual"
 COLLECTOR_WEBHOOK = "webhook"
+FETCH_MODE_AUTO = "auto"
+FETCH_MODE_STANDARD = "standard"
+FETCH_MODE_DYNAMIC = "dynamic"
+FETCH_MODE_COMPATIBLE = "compatible"
+FETCH_MODE_EXTERNAL_SOLVER = "external_solver"
+FETCH_MODE_MANUAL = "manual"
+FETCH_MODE_WEBHOOK = "webhook"
 DEFAULT_TASK_FETCH_STRATEGY = FETCH_STRATEGY_MULTI_ENGINE
 SUPPORTED_FETCH_STRATEGIES = {
     FETCH_STRATEGY_BROWSER,
@@ -418,6 +425,15 @@ SUPPORTED_COLLECTOR_STRATEGIES = {
     COLLECTOR_EXTERNAL_SOLVER,
     COLLECTOR_MANUAL,
     COLLECTOR_WEBHOOK,
+}
+SUPPORTED_TASK_FETCH_MODES = {
+    FETCH_MODE_AUTO,
+    FETCH_MODE_STANDARD,
+    FETCH_MODE_DYNAMIC,
+    FETCH_MODE_COMPATIBLE,
+    FETCH_MODE_EXTERNAL_SOLVER,
+    FETCH_MODE_MANUAL,
+    FETCH_MODE_WEBHOOK,
 }
 CATALOG_DISCOVERY_LOCAL = "local"
 CATALOG_DISCOVERY_FIRECRAWL_MAP = "firecrawl_map"
@@ -804,6 +820,60 @@ def normalize_fetch_strategy(value: Any) -> str:
     if strategy in SUPPORTED_FETCH_STRATEGIES:
         return strategy
     return DEFAULT_TASK_FETCH_STRATEGY
+
+
+def normalize_task_fetch_mode(value: Any) -> str:
+    mode = str(value or "").strip().lower().replace("-", "_")
+    return mode if mode in SUPPORTED_TASK_FETCH_MODES else FETCH_MODE_AUTO
+
+
+def is_supported_task_fetch_mode(value: Any) -> bool:
+    mode = str(value or "").strip().lower().replace("-", "_")
+    return not mode or mode in SUPPORTED_TASK_FETCH_MODES
+
+
+def task_fetch_mode_for_strategy(strategy: Any, source_config: Any = None) -> str:
+    normalized_strategy = normalize_fetch_strategy(strategy)
+    config = parse_source_config(source_config)
+    collector = normalize_collector_strategy(config.get("collector_strategy"), "")
+    if collector == COLLECTOR_EXTERNAL_SOLVER:
+        return FETCH_MODE_EXTERNAL_SOLVER
+    if normalized_strategy == FETCH_STRATEGY_MANUAL:
+        return FETCH_MODE_MANUAL
+    if normalized_strategy == FETCH_STRATEGY_WEBHOOK:
+        return FETCH_MODE_WEBHOOK
+    if normalized_strategy in {FETCH_STRATEGY_CURL_CFFI, FETCH_STRATEGY_STATIC_HTTP, FETCH_STRATEGY_SCRAPLING_STANDARD}:
+        return FETCH_MODE_STANDARD
+    if normalized_strategy in {FETCH_STRATEGY_BROWSER, FETCH_STRATEGY_SCRAPLING_DYNAMIC}:
+        return FETCH_MODE_DYNAMIC
+    if normalized_strategy in {
+        FETCH_STRATEGY_SCRAPLING_STEALTH,
+        FETCH_STRATEGY_HEADED_SESSION,
+        FETCH_STRATEGY_FIRECRAWL,
+        FETCH_STRATEGY_FIRECRAWL_THEN_STATIC,
+        FETCH_STRATEGY_STATIC_THEN_FIRECRAWL,
+        FETCH_STRATEGY_FIRECRAWL_THEN_BROWSER,
+    }:
+        return FETCH_MODE_COMPATIBLE
+    return FETCH_MODE_AUTO
+
+
+def strategy_config_for_task_fetch_mode(mode: Any, source_config: Any = None) -> tuple[str, dict[str, Any]]:
+    normalized_mode = normalize_task_fetch_mode(mode)
+    config = parse_source_config(source_config)
+    if normalized_mode == FETCH_MODE_EXTERNAL_SOLVER:
+        config["collector_strategy"] = COLLECTOR_EXTERNAL_SOLVER
+        return FETCH_STRATEGY_MULTI_ENGINE, config
+    config.pop("collector_strategy", None)
+    mapping = {
+        FETCH_MODE_AUTO: FETCH_STRATEGY_MULTI_ENGINE,
+        FETCH_MODE_STANDARD: FETCH_STRATEGY_CURL_CFFI,
+        FETCH_MODE_DYNAMIC: FETCH_STRATEGY_SCRAPLING_DYNAMIC,
+        FETCH_MODE_COMPATIBLE: FETCH_STRATEGY_SCRAPLING_STEALTH,
+        FETCH_MODE_MANUAL: FETCH_STRATEGY_MANUAL,
+        FETCH_MODE_WEBHOOK: FETCH_STRATEGY_WEBHOOK,
+    }
+    return mapping.get(normalized_mode, DEFAULT_TASK_FETCH_STRATEGY), config
 
 
 def migrate_legacy_fetch_strategy(value: Any) -> str:
@@ -2861,6 +2931,10 @@ def to_task_payload(row: sqlite3.Row) -> dict[str, Any]:
     last_error_kind = task_error_kind_from_attempts(last_error, last_fetch_attempts)
     task_domain = fetch_domain_for_url(row["monitor_url"])
     normalized_fetch_strategy = normalize_fetch_strategy(row["fetch_strategy"] if "fetch_strategy" in keys else "")
+    normalized_fetch_mode = task_fetch_mode_for_strategy(
+        normalized_fetch_strategy,
+        row["source_config"] if "source_config" in keys else "{}",
+    )
     last_fetch_backend = (row["last_fetch_backend"] or "") if "last_fetch_backend" in keys else ""
     last_error_detail = summarize_task_error(last_error, last_error_kind)
     last_error_diagnostic = stock_check_diagnostic(
@@ -2881,6 +2955,7 @@ def to_task_payload(row: sqlite3.Row) -> dict[str, Any]:
         "domain_session": get_domain_session(task_domain, safe=True),
         "target_keyword": row["target_keyword"],
         "fetch_strategy": normalized_fetch_strategy,
+        "fetch_mode": normalized_fetch_mode,
         "collector_strategy": collector_strategy_for_task(row),
         "source_config": normalize_source_config_text(row["source_config"] if "source_config" in keys else "{}"),
         "restock_template": row["restock_template"],
@@ -3027,6 +3102,8 @@ def validate_task_payload(payload: dict[str, Any]) -> tuple[bool, str]:
             return False, f"{label}不能为空。"
     if not validate_http_url(str(payload["monitor_url"]).strip()):
         return False, "监控链接必须是有效的 http(s) 地址。"
+    if not is_supported_task_fetch_mode(payload.get("fetch_mode")):
+        return False, "采集模式不受支持。"
     if not is_supported_fetch_strategy(payload.get("fetch_strategy")):
         return False, "采集方式不受支持。"
     source_config = payload.get("source_config", {})
@@ -3049,6 +3126,21 @@ def validate_task_payload(payload: dict[str, Any]) -> tuple[bool, str]:
         if url and not validate_http_url(url):
             return False, "按钮链接必须是有效的 http(s) 地址。"
     return True, ""
+
+
+def normalize_task_collection_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    normalized = dict(payload)
+    if "fetch_mode" in normalized:
+        fetch_strategy, source_config = strategy_config_for_task_fetch_mode(
+            normalized.get("fetch_mode"),
+            normalized.get("source_config", {}),
+        )
+        normalized["fetch_strategy"] = fetch_strategy
+        normalized["source_config"] = source_config
+    else:
+        normalized["fetch_strategy"] = normalize_fetch_strategy(normalized.get("fetch_strategy") or DEFAULT_TASK_FETCH_STRATEGY)
+        normalized["source_config"] = normalize_source_config_text(normalized.get("source_config", {}))
+    return normalized
 
 
 def optional_int(value: Any) -> int | None:
@@ -3074,21 +3166,22 @@ def normalize_task_source_fields(payload: dict[str, Any], fallback: sqlite3.Row 
 
 
 def build_task_insert_values(payload: dict[str, Any], source_fields: dict[str, Any], timestamp: str) -> tuple[Any, ...]:
+    normalized_payload = normalize_task_collection_payload(payload)
     return (
-        str(payload["name"]).strip(),
-        normalize_task_group(payload.get("group_name")),
-        normalize_task_subgroup(payload.get("subgroup_name")),
-        int(payload.get("sort_order") or 0),
-        str(payload["monitor_url"]).strip(),
-        str(payload["target_keyword"]).strip(),
-        normalize_fetch_strategy(payload.get("fetch_strategy") or DEFAULT_TASK_FETCH_STRATEGY),
-        normalize_source_config_text(payload.get("source_config", {})),
-        str(payload["restock_template"]).strip() or DEFAULT_RESTOCK_TEMPLATE,
-        str(payload["soldout_template"]).strip() or DEFAULT_SOLDOUT_TEMPLATE,
-        str(payload.get("button_1_text", "")).strip(),
-        str(payload.get("button_1_url", "")).strip(),
-        str(payload.get("button_2_text", "")).strip(),
-        str(payload.get("button_2_url", "")).strip(),
+        str(normalized_payload["name"]).strip(),
+        normalize_task_group(normalized_payload.get("group_name")),
+        normalize_task_subgroup(normalized_payload.get("subgroup_name")),
+        int(normalized_payload.get("sort_order") or 0),
+        str(normalized_payload["monitor_url"]).strip(),
+        str(normalized_payload["target_keyword"]).strip(),
+        normalized_payload["fetch_strategy"],
+        normalize_source_config_text(normalized_payload.get("source_config", {})),
+        str(normalized_payload["restock_template"]).strip() or DEFAULT_RESTOCK_TEMPLATE,
+        str(normalized_payload["soldout_template"]).strip() or DEFAULT_SOLDOUT_TEMPLATE,
+        str(normalized_payload.get("button_1_text", "")).strip(),
+        str(normalized_payload.get("button_1_url", "")).strip(),
+        str(normalized_payload.get("button_2_text", "")).strip(),
+        str(normalized_payload.get("button_2_url", "")).strip(),
         source_fields["source_item_id"],
         source_fields["source_item_key"],
         source_fields["source_source_url"],
@@ -9886,13 +9979,14 @@ def make_app() -> Flask:
         valid, message = validate_task_payload(payload)
         if not valid:
             return jsonify({"ok": False, "message": message}), 400
+        normalized_payload = normalize_task_collection_payload(payload)
 
         timestamp = now_iso()
         with open_connection() as connection:
             existing = connection.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()
             if not existing:
                 return jsonify({"ok": False, "message": "任务不存在。"}), 404
-            source_fields = normalize_task_source_fields(payload, existing)
+            source_fields = normalize_task_source_fields(normalized_payload, existing)
             connection.execute(
                 """
                 UPDATE tasks
@@ -9909,8 +10003,8 @@ def make_app() -> Flask:
                     normalize_task_subgroup(payload.get("subgroup_name")),
                     str(payload["monitor_url"]).strip(),
                     str(payload["target_keyword"]).strip(),
-                    normalize_fetch_strategy(payload.get("fetch_strategy") or DEFAULT_TASK_FETCH_STRATEGY),
-                    normalize_source_config_text(payload.get("source_config", {})),
+                    normalized_payload["fetch_strategy"],
+                    normalize_source_config_text(normalized_payload.get("source_config", {})),
                     str(payload["restock_template"]).strip() or DEFAULT_RESTOCK_TEMPLATE,
                     str(payload["soldout_template"]).strip() or DEFAULT_SOLDOUT_TEMPLATE,
                     str(payload.get("button_1_text", "")).strip(),
