@@ -41,6 +41,15 @@ Collector layer:
 
 `external_solver` is configuration-only. It can call an operator-owned endpoint such as a compatible solver API, but NOAFF core does not implement challenge solving and does not call an external solver unless explicitly enabled.
 
+Remote collectors are supported for deployments where the NOAFF server network cannot obtain a merchant page:
+
+- Public collector URLs must use HTTPS and `ENHANCED_COLLECTOR_API_TOKEN`.
+- The token is sent as a Bearer token and is masked from snapshots/backups.
+- A configured URL is probed by itself; diagnostics never fall back to a different local candidate and report `connection_only=true`, `live_html_verified=false`.
+- Generic responses must echo `X-NOAFF-Request-ID`, declare `source=live`, and include a recent `fetchedAt`.
+- Explicit fixture/mock responses, stale provenance, cross-domain final URLs, target HTTP errors, missing target keywords, oversized HTML, and challenge pages are rejected.
+- FlareSolverr `solution.response` remains compatible and receives the same domain/status/target/challenge validation.
+
 External collector URLs are normalized before use. Supported operator input examples:
 
 - `127.0.0.1:8191`
@@ -48,6 +57,19 @@ External collector URLs are normalized before use. Supported operator input exam
 - `http://127.0.0.1:8191/v1/`
 
 All normalize to the service root so diagnostics and runtime calls do not accidentally double-append API paths.
+
+## DMIT Live Evidence (2026-07-10)
+
+Target used for acquisition checks: `HKG.AS3.Pro.TINY` on the DMIT Premium AS3 cart page. LAX was only eligible after the same browser session cleared HKG.
+
+- Direct curl, one request: HTTP 403, 5,849-byte HTML, title `Just a moment...`, target hits 0, challenge hits 8, `cf-mitigated: challenge`.
+- FlareSolverr v3.5.0: valid one-shot `request.get` detected `Just a moment...` and timed out after 90 seconds; no solution HTML, cookies, or UA were returned. The preceding malformed `sessions.create` payload was rejected before command execution and did not access DMIT.
+- nodriver 0.50.3, headed Xvfb with a temporary persistent profile: homepage loaded normally (44,067 bytes), but HKG remained a 27,669-byte challenge after 91.3 seconds; target hits 0, challenge hits 14, cookies 0.
+- Camoufox 0.4.11 / Firefox 135.0.1-beta.24, headed Xvfb: obtained one `cf_clearance` cookie, but HKG remained a 27,214-byte challenge after 90.4 seconds; target hits 0, challenge hits 14.
+- LAX was not requested by the browser one-shots because HKG never cleared. No fixture result was reported as live stock.
+- FlareSolverr, Chrome, Firefox, Xvfb, nodriver, and Playwright processes were cleaned after every browser method; final residual checks were empty.
+
+Conclusion: the current data-center IP cannot obtain verified DMIT cart HTML with the bounded local methods above. Use the authenticated remote collector path from another network; connection diagnostics alone are not live success.
 
 Legacy/compatibility modes still exist but are not the default:
 
@@ -167,7 +189,7 @@ git diff --check
 
 Current baseline:
 
-- 233 tests passing
+- 240 tests passing
 - Python compile check passing
 - `static/app.js` syntax check passing
 - `install.sh` bash syntax check passing

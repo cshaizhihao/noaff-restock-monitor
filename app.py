@@ -142,6 +142,7 @@ DEFAULT_FIRECRAWL_USE_FOR_CATALOG = env_bool("FIRECRAWL_USE_FOR_CATALOG", True)
 DEFAULT_FIRECRAWL_CATALOG_LIMIT = int(os.getenv("FIRECRAWL_CATALOG_LIMIT", "50"))
 DEFAULT_ENHANCED_COLLECTOR_ENABLED = env_bool("ENHANCED_COLLECTOR_ENABLED", False)
 DEFAULT_ENHANCED_COLLECTOR_API_URL = os.getenv("ENHANCED_COLLECTOR_API_URL", "").strip().rstrip("/")
+DEFAULT_ENHANCED_COLLECTOR_API_TOKEN = os.getenv("ENHANCED_COLLECTOR_API_TOKEN", "").strip()
 DEFAULT_ENHANCED_COLLECTOR_TIMEOUT_SECONDS = int(os.getenv("ENHANCED_COLLECTOR_TIMEOUT_SECONDS", "90"))
 DEFAULT_ENHANCED_COLLECTOR_MAX_RETRIES = int(os.getenv("ENHANCED_COLLECTOR_MAX_RETRIES", "1"))
 DEFAULT_ENHANCED_COLLECTOR_USE_FOR_MONITOR = env_bool("ENHANCED_COLLECTOR_USE_FOR_MONITOR", False)
@@ -292,6 +293,7 @@ SETTINGS_DEFAULTS = {
     "firecrawl_catalog_limit": str(DEFAULT_FIRECRAWL_CATALOG_LIMIT),
     "enhanced_collector_enabled": settings_bool_text(DEFAULT_ENHANCED_COLLECTOR_ENABLED),
     "enhanced_collector_api_url": DEFAULT_ENHANCED_COLLECTOR_API_URL,
+    "enhanced_collector_api_token": DEFAULT_ENHANCED_COLLECTOR_API_TOKEN,
     "enhanced_collector_timeout_seconds": str(DEFAULT_ENHANCED_COLLECTOR_TIMEOUT_SECONDS),
     "enhanced_collector_max_retries": str(DEFAULT_ENHANCED_COLLECTOR_MAX_RETRIES),
     "enhanced_collector_use_for_monitor": settings_bool_text(DEFAULT_ENHANCED_COLLECTOR_USE_FOR_MONITOR),
@@ -516,7 +518,9 @@ CATALOG_URL_DROP_MARKERS = (
     "affiliates",
 )
 FIRECRAWL_PROXY_MODES = {"basic", "enhanced", "auto"}
-SENSITIVE_SETTINGS_KEYS = {"firecrawl_api_key"}
+SENSITIVE_SETTINGS_KEYS = {"firecrawl_api_key", "enhanced_collector_api_token"}
+MAX_ENHANCED_COLLECTOR_HTML_BYTES = 8 * 1024 * 1024
+MAX_ENHANCED_COLLECTOR_RESPONSE_AGE_SECONDS = 180
 SCRAPLING_FETCH_STRATEGY_MIGRATION_KEY = "scrapling_fetch_strategy_migration_v1"
 STATIC_HTTP_USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
@@ -2425,6 +2429,47 @@ def normalize_enhanced_collector_api_url(value: Any) -> str:
     return raw
 
 
+def enhanced_collector_is_local_url(api_url: str) -> bool:
+    hostname = (urlparse(api_url).hostname or "").lower()
+    if not hostname:
+        return False
+    if hostname in {"localhost", "0.0.0.0", "127.0.0.1", "::1", "flaresolverr"}:
+        return True
+    try:
+        address = ipaddress.ip_address(hostname)
+    except ValueError:
+        return "." not in hostname or hostname.endswith(".local")
+    return address.is_loopback or address.is_private or address.is_link_local
+
+
+def enhanced_collector_transport_error(api_url: str, api_token: str = "") -> str:
+    if not api_url or not validate_http_url(api_url):
+        return ""
+    parsed = urlparse(api_url)
+    if parsed.username or parsed.password:
+        return "增强采集服务地址不能内嵌账号或密码，请改用独立访问令牌。"
+    if enhanced_collector_is_local_url(api_url):
+        return ""
+    if parsed.scheme.lower() != "https":
+        return "远端增强采集服务必须使用 HTTPS，避免 HTML 和访问令牌在传输中泄露。"
+    if not str(api_token or "").strip():
+        return "远端增强采集服务必须配置访问令牌；本机或私有网络地址可不配置。"
+    return ""
+
+
+def enhanced_collector_request_headers(api_token: Any = "", request_id: str = "") -> dict[str, str]:
+    headers = {
+        "Accept": "application/json",
+        "Cache-Control": "no-store",
+    }
+    token = str(api_token or "").strip()
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    if request_id:
+        headers["X-NOAFF-Request-ID"] = request_id
+    return headers
+
+
 class EnhancedCollectorManager:
     CANDIDATE_URLS = (
         "http://127.0.0.1:8191",
@@ -2440,48 +2485,55 @@ class EnhancedCollectorManager:
         return normalize_enhanced_collector_api_url(self.settings.get("enhanced_collector_api_url"))
 
     def candidate_urls(self) -> list[str]:
-        candidates: list[str] = []
         configured = self.configured_url()
         if configured:
-            candidates.append(configured)
-        for url in self.CANDIDATE_URLS:
-            if url not in candidates:
-                candidates.append(url)
-        return candidates
+            return [configured]
+        return list(self.CANDIDATE_URLS)
 
     def health_check(self, probe_candidates: bool = True) -> dict[str, Any]:
         enabled = bool(self.settings.get("enhanced_collector_enabled"))
         configured = self.configured_url()
+        api_token = str(self.settings.get("enhanced_collector_api_token") or "").strip()
+        is_remote = bool(configured) and not enhanced_collector_is_local_url(configured)
         if not enabled and not configured:
             return {
                 "status": "disabled",
                 "available": False,
+                "connection_only": True,
+                "live_html_verified": False,
                 "api_url": "",
                 "detail": "增强采集未启用。",
-                "setup_hint": "可留空后点击检测，系统会尝试本机 127.0.0.1:8191、localhost:8191 和 Docker 服务名 flaresolverr:8191。",
+                "setup_hint": "本机无法获取目标页时，可填写部署在其他网络的远端 collector；公网地址必须使用 HTTPS 和访问令牌。",
                 "candidate_urls": list(self.CANDIDATE_URLS),
-                "next_action": "需要处理受保护页面时，再启用外部兜底采集。",
+                "next_action": "连接检测只验证 API 可达，不代表已取得真实商品 HTML。",
             }
 
         if not probe_candidates:
             if configured:
+                transport_error = enhanced_collector_transport_error(configured, api_token)
                 return {
-                    "status": "configured",
+                    "status": "unsafe_config" if transport_error else "configured",
                     "available": False,
+                    "connection_only": True,
+                    "live_html_verified": False,
                     "api_url": configured,
-                    "detail": "增强采集服务已配置，点击检测确认可用。",
-                    "setup_hint": "地址会自动兼容 host:port、http(s)://host:port 和以 /v1 结尾的写法。",
+                    "auth_configured": bool(api_token),
+                    "remote": is_remote,
+                    "detail": transport_error or "增强采集服务已配置，点击检测确认 API 可达。",
+                    "setup_hint": "远端 collector 应返回本次实时抓取的 HTML；NOAFF 会校验目标词、最终域名、HTTP 状态和 challenge。",
                     "candidate_urls": [configured],
-                    "next_action": "检测通过后，可在任务采集模式中选择外部兜底。",
+                    "next_action": "检测通过后仍需对具体任务执行库存检测；fixture/mock 结果不算 live 成功。",
                 }
             return {
                 "status": "not_configured",
                 "available": False,
+                "connection_only": True,
+                "live_html_verified": False,
                 "api_url": "",
                 "detail": "未配置增强采集服务地址。",
-                "setup_hint": "如果外部服务运行在本机，通常填写 http://127.0.0.1:8191；Docker 同网络可填写 http://flaresolverr:8191。",
+                "setup_hint": "本机可填 http://127.0.0.1:8191；其他网络请填 HTTPS 地址并配置 ENHANCED_COLLECTOR_API_TOKEN。",
                 "candidate_urls": list(self.CANDIDATE_URLS),
-                "next_action": "先启动外部采集服务，或继续使用本地采集/会话导入。",
+                "next_action": "先启动兼容 /v1 的 collector，再配置地址并检测连接。",
             }
 
         urls = self.candidate_urls() if probe_candidates else ([configured] if configured else [])
@@ -2489,6 +2541,8 @@ class EnhancedCollectorManager:
             return {
                 "status": "not_configured",
                 "available": False,
+                "connection_only": True,
+                "live_html_verified": False,
                 "api_url": "",
                 "detail": "未配置增强采集服务地址。",
                 "setup_hint": "如果外部服务运行在本机，通常填写 http://127.0.0.1:8191。",
@@ -2502,17 +2556,23 @@ class EnhancedCollectorManager:
             if not validate_http_url(api_url):
                 last_detail = f"增强采集地址无效：{api_url}"
                 continue
+            transport_error = enhanced_collector_transport_error(api_url, api_token)
+            if transport_error:
+                last_detail = transport_error
+                continue
             result = self._probe(api_url, timeout)
             if result["available"]:
-                result.setdefault("setup_hint", "外部采集服务已响应 sessions.list。")
+                result.setdefault("setup_hint", "外部采集服务已响应 sessions.list；本次只检测连接，没有抓取商品页。")
                 result.setdefault("candidate_urls", urls)
-                result.setdefault("next_action", "可用于手动检测、商品入库，或明确开启后用于定时监控。")
+                result.setdefault("next_action", "对具体任务执行库存检测；只有目标词命中且无 challenge 才接受 HTML。")
                 return result
             last_detail = result["detail"]
 
         return {
             "status": "unreachable",
             "available": False,
+            "connection_only": True,
+            "live_html_verified": False,
             "api_url": configured or urls[0],
             "detail": last_detail or "增强采集服务不可用。",
             "setup_hint": "确认服务已启动、端口可访问，并且地址不要写成浏览器页面地址。",
@@ -2521,11 +2581,14 @@ class EnhancedCollectorManager:
         }
 
     def _probe(self, api_url: str, timeout: int) -> dict[str, Any]:
+        headers = enhanced_collector_request_headers(self.settings.get("enhanced_collector_api_token"))
         try:
             response = self.session.post(
                 f"{api_url.rstrip('/')}/v1",
                 json={"cmd": "sessions.list"},
+                headers=headers,
                 timeout=timeout,
+                allow_redirects=False,
             )
         except requests.Timeout:
             return {
@@ -2543,7 +2606,7 @@ class EnhancedCollectorManager:
             }
 
         status_code = int(getattr(response, "status_code", 0) or 0)
-        if status_code >= 400:
+        if status_code >= 300:
             return {
                 "status": "http_error",
                 "available": False,
@@ -2559,18 +2622,24 @@ class EnhancedCollectorManager:
             return {
                 "status": "ok",
                 "available": True,
+                "connection_only": True,
+                "live_html_verified": False,
                 "api_url": api_url,
+                "auth_configured": bool(self.settings.get("enhanced_collector_api_token")),
                 "status_code": status_code,
-                "detail": "增强采集服务可用。",
+                "detail": "增强采集 API 连接正常；尚未验证任何目标页 HTML。",
             }
         text = str(getattr(response, "text", "") or "")
         if "flaresolverr" in text.lower() or "ready" in text.lower():
             return {
                 "status": "ok",
                 "available": True,
+                "connection_only": True,
+                "live_html_verified": False,
                 "api_url": api_url,
+                "auth_configured": bool(self.settings.get("enhanced_collector_api_token")),
                 "status_code": status_code,
-                "detail": "增强采集服务可用。",
+                "detail": "增强采集 API 连接正常；尚未验证任何目标页 HTML。",
             }
         return {
             "status": "bad_response",
@@ -2733,6 +2802,9 @@ def normalize_settings(raw: dict[str, str]) -> dict[str, Any]:
         "enhanced_collector_api_url": normalize_enhanced_collector_api_url(
             raw.get("enhanced_collector_api_url") or DEFAULT_ENHANCED_COLLECTOR_API_URL
         ),
+        "enhanced_collector_api_token": (
+            raw.get("enhanced_collector_api_token") or DEFAULT_ENHANCED_COLLECTOR_API_TOKEN
+        ).strip(),
         "enhanced_collector_timeout_seconds": max(
             5,
             min(
@@ -3841,8 +3913,10 @@ class FetcherCollectorAdapter(BaseCollector):
         )
 
 
-def sanitize_external_solver_detail(value: Any) -> str:
+def sanitize_external_solver_detail(value: Any, api_token: str = "") -> str:
     text = re.sub(r"\s+", " ", str(value or "")).strip()
+    if api_token:
+        text = text.replace(api_token, "<hidden-token>")
     if not text:
         return ""
     return text[:500]
@@ -3866,7 +3940,60 @@ def classify_external_solver_error(message: Any, status_code: int = 0) -> str:
         return "external_solver_upstream_error"
     if status_code >= 400:
         return "external_solver_http_error"
+    if status_code >= 300:
+        return "external_solver_http_error"
     return "external_solver_failed"
+
+
+def external_collector_provenance_error(data: dict[str, Any], request_id: str, has_solver_solution: bool) -> str:
+    provenance = data.get("provenance") if isinstance(data.get("provenance"), dict) else {}
+    source_kind = str(
+        provenance.get("kind")
+        or provenance.get("source")
+        or data.get("source")
+        or data.get("sourceKind")
+        or ""
+    ).strip().lower()
+    if source_kind in {"fixture", "mock", "test", "sample", "cached_fixture"} or data.get("fixture") is True:
+        return "远端采集器明确标记响应来自 fixture/mock，已拒绝作为实时 HTML。"
+    if has_solver_solution:
+        return ""
+
+    echoed_request_id = str(
+        provenance.get("request_id")
+        or provenance.get("requestId")
+        or data.get("request_id")
+        or data.get("requestId")
+        or ""
+    ).strip()
+    fetched_at_text = str(
+        provenance.get("fetched_at")
+        or provenance.get("fetchedAt")
+        or data.get("fetched_at")
+        or data.get("fetchedAt")
+        or ""
+    ).strip()
+    fetched_at = parse_iso_datetime(fetched_at_text)
+    if source_kind != "live":
+        return "通用远端采集响应缺少 source=live，无法排除 fixture 或缓存页面。"
+    if not echoed_request_id or not secrets.compare_digest(echoed_request_id, request_id):
+        return "通用远端采集响应未回显本次 X-NOAFF-Request-ID。"
+    if fetched_at is None:
+        return "通用远端采集响应缺少有效 fetchedAt。"
+    age_seconds = abs((now_utc() - fetched_at).total_seconds())
+    if age_seconds > MAX_ENHANCED_COLLECTOR_RESPONSE_AGE_SECONDS:
+        return f"通用远端采集响应已过期（{int(age_seconds)} 秒），拒绝用于库存判断。"
+    return ""
+
+
+def external_collector_final_url_matches(request_url: str, final_url: str) -> bool:
+    request_domain = fetch_domain_for_url(request_url)
+    final_domain = fetch_domain_for_url(final_url)
+    if not request_domain or not final_domain:
+        return False
+    normalized_request = request_domain.removeprefix("www.")
+    normalized_final = final_domain.removeprefix("www.")
+    return normalized_request == normalized_final
 
 
 class ExternalSolverCollector(BaseCollector):
@@ -3878,7 +4005,8 @@ class ExternalSolverCollector(BaseCollector):
     def collect(self, request_payload: CollectorRequest, settings_payload: dict[str, Any]) -> CollectorResult:
         attempt = FetchAttempt(backend=self.name, started_at=now_iso())
         api_url = normalize_enhanced_collector_api_url(settings_payload.get("enhanced_collector_api_url"))
-        if not settings_payload.get("enhanced_collector_enabled") and not api_url:
+        api_token = str(settings_payload.get("enhanced_collector_api_token") or "").strip()
+        if not settings_payload.get("enhanced_collector_enabled"):
             attempt.ended_at = now_iso()
             attempt.status = "failed"
             attempt.error_kind = "external_solver_disabled"
@@ -3930,6 +4058,20 @@ class ExternalSolverCollector(BaseCollector):
                 detail=attempt.detail,
                 attempts=[attempt],
             )
+        transport_error = enhanced_collector_transport_error(api_url, api_token)
+        if transport_error:
+            attempt.ended_at = now_iso()
+            attempt.status = "failed"
+            attempt.error_kind = "external_solver_unsafe_transport"
+            attempt.detail = transport_error
+            return CollectorResult(
+                ok=False,
+                final_url=request_payload.url,
+                backend=self.name,
+                error_kind=attempt.error_kind,
+                detail=attempt.detail,
+                attempts=[attempt],
+            )
 
         payload: dict[str, Any] = {
             "cmd": "request.get",
@@ -3949,8 +4091,16 @@ class ExternalSolverCollector(BaseCollector):
                 int(settings_payload.get("enhanced_collector_timeout_seconds") or request_payload.timeout_seconds or DEFAULT_TIMEOUT_SECONDS),
             ),
         )
+        request_id = secrets.token_urlsafe(18)
+        request_headers = enhanced_collector_request_headers(api_token, request_id)
         try:
-            response = self.session.post(f"{api_url}/v1", json=payload, timeout=timeout_seconds)
+            response = self.session.post(
+                f"{api_url}/v1",
+                json=payload,
+                headers=request_headers,
+                timeout=timeout_seconds,
+                allow_redirects=False,
+            )
         except requests.Timeout:
             attempt.ended_at = now_iso()
             attempt.status = "failed"
@@ -3968,7 +4118,7 @@ class ExternalSolverCollector(BaseCollector):
             attempt.ended_at = now_iso()
             attempt.status = "failed"
             attempt.error_kind = "external_solver_request_error"
-            attempt.detail = sanitize_external_solver_detail(exc)
+            attempt.detail = sanitize_external_solver_detail(exc, api_token)
             return CollectorResult(
                 ok=False,
                 final_url=request_payload.url,
@@ -3983,8 +4133,11 @@ class ExternalSolverCollector(BaseCollector):
             data = response.json()
         except ValueError:
             data = {}
-        if status_code >= 400:
-            detail = sanitize_external_solver_detail(data.get("message") if isinstance(data, dict) else getattr(response, "text", ""))
+        if status_code >= 300:
+            detail = sanitize_external_solver_detail(
+                data.get("message") if isinstance(data, dict) else getattr(response, "text", ""),
+                api_token,
+            )
             attempt.ended_at = now_iso()
             attempt.status = "failed"
             attempt.error_kind = classify_external_solver_error(detail, status_code)
@@ -4017,7 +4170,10 @@ class ExternalSolverCollector(BaseCollector):
 
         solver_status = str(data.get("status") or "").lower()
         if solver_status and solver_status not in {"ok", "success"}:
-            detail = sanitize_external_solver_detail(data.get("message") or data.get("error") or "增强采集服务返回失败。")
+            detail = sanitize_external_solver_detail(
+                data.get("message") or data.get("error") or "增强采集服务返回失败。",
+                api_token,
+            )
             attempt.ended_at = now_iso()
             attempt.status = "failed"
             attempt.error_kind = classify_external_solver_error(detail, status_code)
@@ -4034,6 +4190,22 @@ class ExternalSolverCollector(BaseCollector):
             )
 
         solution = data.get("solution") if isinstance(data.get("solution"), dict) else {}
+        provenance_error = external_collector_provenance_error(data, request_id, bool(solution))
+        if provenance_error:
+            attempt.ended_at = now_iso()
+            attempt.status = "failed"
+            attempt.error_kind = "external_solver_unverified_response"
+            attempt.detail = provenance_error
+            return CollectorResult(
+                ok=False,
+                final_url=request_payload.url,
+                status_code=status_code,
+                backend=self.name,
+                error_kind=attempt.error_kind,
+                detail=attempt.detail,
+                attempts=[attempt],
+            )
+
         html_text = str(solution.get("response") or data.get("html") or data.get("response") or "")
         final_url = str(solution.get("url") or data.get("url") or request_payload.url)
         target_status = int(solution.get("status") or data.get("statusCode") or 0) if str(solution.get("status") or data.get("statusCode") or "").isdigit() else 0
@@ -4042,6 +4214,21 @@ class ExternalSolverCollector(BaseCollector):
             attempt.status = "failed"
             attempt.error_kind = "empty_response"
             attempt.detail = "增强采集服务返回了空页面。"
+            return CollectorResult(
+                ok=False,
+                final_url=final_url,
+                status_code=target_status or status_code,
+                backend=self.name,
+                error_kind=attempt.error_kind,
+                detail=attempt.detail,
+                attempts=[attempt],
+            )
+        html_size = len(html_text.encode("utf-8"))
+        if html_size > MAX_ENHANCED_COLLECTOR_HTML_BYTES:
+            attempt.ended_at = now_iso()
+            attempt.status = "failed"
+            attempt.error_kind = "external_solver_response_too_large"
+            attempt.detail = f"增强采集服务返回 HTML 过大（{html_size} 字节）。"
             return CollectorResult(
                 ok=False,
                 final_url=final_url,
@@ -4068,11 +4255,59 @@ class ExternalSolverCollector(BaseCollector):
                 protected=True,
                 attempts=[attempt],
             )
+        if target_status >= 400:
+            attempt.ended_at = now_iso()
+            attempt.status = "failed"
+            attempt.error_kind = "external_solver_target_http_error"
+            attempt.detail = f"增强采集器取得的目标页返回 HTTP {target_status}。"
+            return CollectorResult(
+                ok=False,
+                final_url=final_url,
+                status_code=target_status,
+                backend=self.name,
+                error_kind=attempt.error_kind,
+                detail=attempt.detail,
+                attempts=[attempt],
+            )
+        if not external_collector_final_url_matches(request_payload.url, final_url):
+            attempt.ended_at = now_iso()
+            attempt.status = "failed"
+            attempt.error_kind = "external_solver_final_url_mismatch"
+            attempt.detail = "增强采集器最终页面域名与任务目标域名不一致。"
+            return CollectorResult(
+                ok=False,
+                final_url=final_url,
+                status_code=target_status or status_code,
+                backend=self.name,
+                error_kind=attempt.error_kind,
+                detail=attempt.detail,
+                attempts=[attempt],
+            )
+        target_keyword = str(request_payload.target_keyword or "").strip()
+        target_hit = bool(target_keyword) and find_html_text_position(html_text, target_keyword) >= 0
+        if target_keyword and not target_hit:
+            attempt.ended_at = now_iso()
+            attempt.status = "failed"
+            attempt.error_kind = "external_solver_target_missing"
+            attempt.detail = f"增强采集器返回正常 HTML，但未找到目标商品「{target_keyword}」。"
+            return CollectorResult(
+                ok=False,
+                final_url=final_url,
+                status_code=target_status or status_code,
+                backend=self.name,
+                error_kind=attempt.error_kind,
+                detail=attempt.detail,
+                attempts=[attempt],
+            )
 
         attempt.ended_at = now_iso()
         attempt.status = "success"
         attempt.final_url = final_url
-        attempt.detail = "增强采集服务返回 HTML。"
+        page_title = extract_page_title(html_text) or "(无标题)"
+        attempt.detail = (
+            f"远端 HTML 校验通过：length={html_size}，title={page_title[:120]}，"
+            f"target={'hit' if target_hit else 'not_configured'}，challenge=no。"
+        )
         return CollectorResult(
             ok=True,
             html=html_text,
@@ -4446,6 +4681,12 @@ def stock_check_diagnostic(
         "external_solver_upstream_error": ("外部兜底上游错误", "外部服务返回 5xx，先确认服务日志和运行状态。"),
         "external_solver_bad_response": ("外部兜底响应异常", "服务返回结构不是预期格式，确认使用兼容的 /v1 API。"),
         "external_solver_http_error": ("外部兜底 HTTP 错误", "检查外部服务状态码和访问路径。"),
+        "external_solver_unsafe_transport": ("远端采集配置不安全", "公网 collector 必须使用 HTTPS 并配置访问令牌。"),
+        "external_solver_unverified_response": ("远端响应无法验证", "确认 collector 返回实时来源、请求 ID 和 fetchedAt；fixture/mock 不会被接受。"),
+        "external_solver_response_too_large": ("远端页面过大", "检查 collector 是否返回了正确的商品 HTML，而不是下载文件或调试数据。"),
+        "external_solver_target_http_error": ("远端目标页 HTTP 错误", "collector 已响应，但目标商品页本身返回错误状态。"),
+        "external_solver_final_url_mismatch": ("远端页面域名不匹配", "检查 collector 是否被重定向到登录页、错误页或其他域名。"),
+        "external_solver_target_missing": ("远端页面缺少目标商品", "返回 HTML 未命中任务目标词，不能据此判断库存。"),
         "external_solver_failed": ("外部兜底失败", "查看详情后调整外部采集服务或改用会话导入。"),
     }
     title, advice = labels.get(kind, ("采集失败", "查看尝试链路后调整采集模式、目标关键词或备用数据源。"))
@@ -10108,6 +10349,12 @@ def make_app() -> Flask:
                     ),
                     "enhanced_collector_enabled": settings_payload["enhanced_collector_enabled"],
                     "enhanced_collector_api_url": settings_payload["enhanced_collector_api_url"],
+                    "enhanced_collector_api_token_masked": mask_secret(
+                        settings_payload["enhanced_collector_api_token"]
+                    ),
+                    "enhanced_collector_api_token_configured": bool(
+                        settings_payload["enhanced_collector_api_token"]
+                    ),
                     "enhanced_collector_timeout_seconds": settings_payload["enhanced_collector_timeout_seconds"],
                     "enhanced_collector_max_retries": settings_payload["enhanced_collector_max_retries"],
                     "enhanced_collector_use_for_monitor": settings_payload["enhanced_collector_use_for_monitor"],
@@ -11340,6 +11587,27 @@ def make_app() -> Flask:
                 return jsonify({"ok": False, "message": "增强采集服务地址必须是有效的 http(s) 地址。"}), 400
             updates["enhanced_collector_api_url"] = api_url
 
+        if "enhanced_collector_api_token" in payload:
+            updates["enhanced_collector_api_token"] = str(
+                payload.get("enhanced_collector_api_token") or ""
+            ).strip()
+
+        effective_collector_url = str(
+            updates.get("enhanced_collector_api_url", current_settings.get("enhanced_collector_api_url", ""))
+        )
+        effective_collector_token = str(
+            updates.get(
+                "enhanced_collector_api_token",
+                current_settings.get("enhanced_collector_api_token", ""),
+            )
+        )
+        collector_transport_error = enhanced_collector_transport_error(
+            effective_collector_url,
+            effective_collector_token,
+        )
+        if collector_transport_error:
+            return jsonify({"ok": False, "message": collector_transport_error}), 400
+
         if "firecrawl_proxy_mode" in payload:
             proxy_mode = str(payload.get("firecrawl_proxy_mode") or "").strip().lower()
             if proxy_mode not in FIRECRAWL_PROXY_MODES:
@@ -11478,6 +11746,16 @@ def make_app() -> Flask:
         if api_url and not validate_http_url(api_url):
             return jsonify({"ok": False, "message": "增强采集服务地址必须是有效的 http(s) 地址。"}), 400
         settings_payload["enhanced_collector_api_url"] = api_url
+        if "enhanced_collector_api_token" in payload:
+            settings_payload["enhanced_collector_api_token"] = str(
+                payload.get("enhanced_collector_api_token") or ""
+            ).strip()
+        transport_error = enhanced_collector_transport_error(
+            api_url,
+            str(settings_payload.get("enhanced_collector_api_token") or ""),
+        )
+        if transport_error:
+            return jsonify({"ok": False, "message": transport_error}), 400
 
         for key in (
             "enhanced_collector_enabled",

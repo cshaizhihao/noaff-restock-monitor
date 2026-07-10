@@ -176,26 +176,43 @@ Out of Stock, Sold Out, Unavailable, disabled, 缺货, 售罄, 无货
 | `webhook` | 外部系统写入库存 | 完全不抓目标站 |
 | `manual` | 后台手动标记库存 | 完全不抓目标站 |
 
-`external_solver` 只接入用户自己配置的外部服务地址。NOAFF 不内置挑战求解，也不会在没有显式配置时自动调用外部服务。
+`external_solver` 只接入用户自己配置的外部服务地址。它既兼容 FlareSolverr `/v1`，也支持部署在其他网络的通用远端 collector。NOAFF 不会在没有显式配置时自动调用外部服务。
 
 最小配置：
 
 ```env
-ENHANCED_COLLECTOR_ENABLED=false
-ENHANCED_COLLECTOR_API_URL=
-ENHANCED_COLLECTOR_USE_FOR_MONITOR=false
+ENHANCED_COLLECTOR_ENABLED=true
+ENHANCED_COLLECTOR_API_URL=https://collector.example.com
+ENHANCED_COLLECTOR_API_TOKEN=replace-with-a-long-random-token
+ENHANCED_COLLECTOR_USE_FOR_MONITOR=true
 ENHANCED_COLLECTOR_USE_FOR_CATALOG=true
 ```
 
-如果你自建了兼容 solver 服务，地址可以填写：
+本机或 Docker 私有网络仍可使用 HTTP，例如：
 
 ```env
 ENHANCED_COLLECTOR_API_URL=127.0.0.1:8191
 ```
 
-系统会自动补齐 `http://` 并去掉 `/v1` 这类 API 路径后缀。只有显式开启 `ENHANCED_COLLECTOR_ENABLED=true`，并允许对应场景使用时，后台才会调用它。
+系统会自动补齐本机地址的 `http://` 并去掉 `/v1` 后缀。公网远端地址必须使用 HTTPS 并配置 Bearer token；令牌只保存在后端，snapshot 和备份不会返回明文。只有显式开启 `ENHANCED_COLLECTOR_ENABLED=true`，并允许对应场景使用时，后台才会调用它。
 
-后台“外部兜底”页可以做一次连接检测；检测不会把密钥或敏感配置写入日志/snapshot。
+后台“外部兜底”页的检测只确认 `/v1` API 可达，始终显示为“连接检测”，不会当作真实商品 HTML 成功。具体任务必须再执行库存检测。
+
+通用远端 collector 接收与 FlareSolverr 相同的 `POST /v1`、`cmd=request.get` 请求，并从请求头读取 `Authorization: Bearer ...` 和 `X-NOAFF-Request-ID`。响应示例：
+
+```json
+{
+  "status": "ok",
+  "source": "live",
+  "requestId": "echo-X-NOAFF-Request-ID",
+  "fetchedAt": "2026-07-10T08:30:00+00:00",
+  "url": "https://www.dmit.io/cart.php?region=hong-kong&network=premium&generation=as3",
+  "statusCode": 200,
+  "html": "<html>...</html>"
+}
+```
+
+NOAFF 会拒绝 fixture/mock 标记、过期响应、请求 ID 不匹配、跨域跳转、目标页 HTTP 错误、超大 HTML、缺少目标商品词或仍含 Cloudflare challenge 的响应。FlareSolverr `solution.response` 也会执行相同的页面级校验。
 
 ## 商品入库
 
@@ -434,7 +451,7 @@ git diff --check
 
 当前基线：
 
-- 233 tests passing
+- 240 tests passing
 - Python compile check passing
 - `static/app.js` syntax check passing
 - `install.sh` bash syntax check passing

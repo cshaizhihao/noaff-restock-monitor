@@ -3275,6 +3275,7 @@ class PortalAppTestCase(unittest.TestCase):
             json={
                 "enhanced_collector_enabled": True,
                 "enhanced_collector_api_url": "http://127.0.0.1:8191/",
+                "enhanced_collector_api_token": "remote-collector-secret-token",
                 "enhanced_collector_timeout_seconds": 91,
                 "enhanced_collector_max_retries": 2,
                 "enhanced_collector_use_for_monitor": False,
@@ -3293,6 +3294,9 @@ class PortalAppTestCase(unittest.TestCase):
         settings = snapshot.get_json()["settings"]
         self.assertTrue(settings["enhanced_collector_enabled"])
         self.assertEqual(settings["enhanced_collector_api_url"], "http://127.0.0.1:8191")
+        self.assertTrue(settings["enhanced_collector_api_token_configured"])
+        self.assertNotEqual(settings["enhanced_collector_api_token_masked"], "remote-collector-secret-token")
+        self.assertNotIn("remote-collector-secret-token", json.dumps(snapshot.get_json()))
         self.assertEqual(settings["enhanced_collector_timeout_seconds"], 91)
         self.assertEqual(settings["enhanced_collector_max_retries"], 2)
         self.assertFalse(settings["enhanced_collector_use_for_monitor"])
@@ -3827,12 +3831,16 @@ class PortalAppTestCase(unittest.TestCase):
             def __init__(self) -> None:
                 self.url = ""
                 self.payload: dict[str, object] | None = None
+                self.headers: dict[str, str] | None = None
                 self.timeout = None
+                self.allow_redirects = None
 
-            def post(self, url, json=None, timeout=None):
+            def post(self, url, json=None, headers=None, timeout=None, allow_redirects=None):
                 self.url = url
                 self.payload = json
+                self.headers = headers
                 self.timeout = timeout
+                self.allow_redirects = allow_redirects
                 return FakeResponse()
 
         session = FakeSession()
@@ -3860,11 +3868,15 @@ class PortalAppTestCase(unittest.TestCase):
         self.assertEqual(session.payload["cmd"], "request.get")
         self.assertEqual(session.payload["url"], "https://example.com/products")
         self.assertEqual(session.payload["maxTimeout"], 25000)
+        self.assertEqual(session.headers["Cache-Control"], "no-store")
+        self.assertTrue(session.headers["X-NOAFF-Request-ID"])
+        self.assertNotIn("Authorization", session.headers)
         self.assertEqual(session.timeout, 30)
+        self.assertFalse(session.allow_redirects)
 
     def test_external_solver_collector_monitor_disabled_by_default(self) -> None:
         class FakeSession:
-            def post(self, url, json=None, timeout=None):
+            def post(self, url, json=None, headers=None, timeout=None, allow_redirects=None):
                 raise AssertionError("external solver should not be called")
 
         collector = app_module.ExternalSolverCollector(FakeSession())
@@ -3885,6 +3897,27 @@ class PortalAppTestCase(unittest.TestCase):
         self.assertEqual(result.error_kind, "external_solver_monitor_disabled")
         self.assertEqual(result.attempts[0].status, "failed")
 
+    def test_external_solver_collector_disabled_flag_blocks_configured_url(self) -> None:
+        class FakeSession:
+            def post(self, url, json=None, headers=None, timeout=None, allow_redirects=None):
+                raise AssertionError("disabled external collector should not be called")
+
+        result = app_module.ExternalSolverCollector(FakeSession()).collect(
+            app_module.CollectorRequest(
+                url="https://example.com/products",
+                strategy=app_module.COLLECTOR_EXTERNAL_SOLVER,
+                context="catalog",
+            ),
+            {
+                "enhanced_collector_enabled": False,
+                "enhanced_collector_api_url": "http://127.0.0.1:8191",
+                "enhanced_collector_use_for_catalog": True,
+            },
+        )
+
+        self.assertFalse(result.ok)
+        self.assertEqual(result.error_kind, "external_solver_disabled")
+
     def test_external_solver_collector_classifies_returned_challenge(self) -> None:
         class FakeResponse:
             status_code = 200
@@ -3900,7 +3933,7 @@ class PortalAppTestCase(unittest.TestCase):
                 }
 
         class FakeSession:
-            def post(self, url, json=None, timeout=None):
+            def post(self, url, json=None, headers=None, timeout=None, allow_redirects=None):
                 return FakeResponse()
 
         collector = app_module.ExternalSolverCollector(FakeSession())
@@ -3921,6 +3954,290 @@ class PortalAppTestCase(unittest.TestCase):
         self.assertTrue(result.protected)
         self.assertEqual(result.error_kind, "cloudflare_challenge")
         self.assertEqual(result.status_code, 403)
+
+    def test_enhanced_collector_remote_health_is_connection_only_and_authenticated(self) -> None:
+        class FakeResponse:
+            status_code = 200
+            text = ""
+
+            def json(self):
+                return {"status": "ok", "sessions": []}
+
+        class FakeSession:
+            def __init__(self) -> None:
+                self.calls: list[dict[str, object]] = []
+
+            def post(self, url, json=None, headers=None, timeout=None, allow_redirects=None):
+                self.calls.append(
+                    {
+                        "url": url,
+                        "json": json,
+                        "headers": headers,
+                        "timeout": timeout,
+                        "allow_redirects": allow_redirects,
+                    }
+                )
+                return FakeResponse()
+
+        session = FakeSession()
+        manager = app_module.EnhancedCollectorManager(
+            {
+                "enhanced_collector_enabled": True,
+                "enhanced_collector_api_url": "https://collector.example.net/v1/",
+                "enhanced_collector_api_token": "collector-token",
+                "enhanced_collector_timeout_seconds": 20,
+            },
+            session,
+        )
+
+        result = manager.health_check(probe_candidates=True)
+
+        self.assertEqual(manager.candidate_urls(), ["https://collector.example.net"])
+        self.assertTrue(result["available"])
+        self.assertTrue(result["connection_only"])
+        self.assertFalse(result["live_html_verified"])
+        self.assertIn("尚未验证", result["detail"])
+        self.assertIn("fixture/mock", manager.health_check(probe_candidates=False)["next_action"])
+        self.assertEqual(session.calls[0]["url"], "https://collector.example.net/v1")
+        self.assertEqual(session.calls[0]["headers"]["Authorization"], "Bearer collector-token")
+        self.assertFalse(session.calls[0]["allow_redirects"])
+
+    def test_external_solver_collector_rejects_unsafe_public_http_remote(self) -> None:
+        class FakeSession:
+            def post(self, url, json=None, headers=None, timeout=None, allow_redirects=None):
+                raise AssertionError("unsafe remote collector must not be called")
+
+        result = app_module.ExternalSolverCollector(FakeSession()).collect(
+            app_module.CollectorRequest(
+                url="https://example.com/products",
+                strategy=app_module.COLLECTOR_EXTERNAL_SOLVER,
+                target_keyword="Example VPS",
+                context="catalog",
+            ),
+            {
+                "enhanced_collector_enabled": True,
+                "enhanced_collector_api_url": "http://collector.example.net",
+                "enhanced_collector_api_token": "collector-token",
+                "enhanced_collector_use_for_catalog": True,
+            },
+        )
+
+        self.assertFalse(result.ok)
+        self.assertEqual(result.error_kind, "external_solver_unsafe_transport")
+        self.assertIn("HTTPS", result.detail)
+
+    def test_remote_collector_protocol_authenticates_and_validates_live_provenance(self) -> None:
+        class FakeResponse:
+            status_code = 200
+
+            def __init__(self, data: dict[str, object]) -> None:
+                self.data = data
+
+            def json(self):
+                return self.data
+
+        class FakeSession:
+            def __init__(self) -> None:
+                self.headers: dict[str, str] = {}
+
+            def post(self, url, json=None, headers=None, timeout=None, allow_redirects=None):
+                self.headers = dict(headers or {})
+                return FakeResponse(
+                    {
+                        "status": "ok",
+                        "source": "live",
+                        "requestId": self.headers["X-NOAFF-Request-ID"],
+                        "fetchedAt": app_module.now_iso(),
+                        "url": "https://example.com/products",
+                        "statusCode": 200,
+                        "html": "<html><title>Products</title><body>Example VPS <button>Order Now</button></body></html>",
+                    }
+                )
+
+        session = FakeSession()
+        result = app_module.ExternalSolverCollector(session).collect(
+            app_module.CollectorRequest(
+                url="https://example.com/products",
+                strategy=app_module.COLLECTOR_EXTERNAL_SOLVER,
+                target_keyword="Example VPS",
+                context="monitor",
+            ),
+            {
+                "enhanced_collector_enabled": True,
+                "enhanced_collector_api_url": "https://collector.example.net",
+                "enhanced_collector_api_token": "collector-token",
+                "enhanced_collector_use_for_monitor": True,
+            },
+        )
+
+        self.assertTrue(result.ok)
+        self.assertEqual(session.headers["Authorization"], "Bearer collector-token")
+        self.assertIn("length=", result.detail)
+        self.assertIn("title=Products", result.detail)
+        self.assertIn("target=hit", result.detail)
+        self.assertIn("challenge=no", result.detail)
+
+    def test_external_solver_collector_masks_token_echoed_by_remote_error(self) -> None:
+        class FakeResponse:
+            status_code = 401
+
+            def json(self):
+                return {"status": "error", "message": "invalid bearer collector-secret-token"}
+
+        class FakeSession:
+            def post(self, url, json=None, headers=None, timeout=None, allow_redirects=None):
+                return FakeResponse()
+
+        result = app_module.ExternalSolverCollector(FakeSession()).collect(
+            app_module.CollectorRequest(
+                url="https://example.com/products",
+                strategy=app_module.COLLECTOR_EXTERNAL_SOLVER,
+                target_keyword="Example VPS",
+                context="catalog",
+            ),
+            {
+                "enhanced_collector_enabled": True,
+                "enhanced_collector_api_url": "https://collector.example.net",
+                "enhanced_collector_api_token": "collector-secret-token",
+                "enhanced_collector_use_for_catalog": True,
+            },
+        )
+
+        self.assertFalse(result.ok)
+        self.assertEqual(result.error_kind, "external_solver_auth_error")
+        self.assertNotIn("collector-secret-token", result.detail)
+        self.assertIn("<hidden-token>", result.detail)
+
+    def test_external_solver_collector_rejects_fixture_and_unrelated_html(self) -> None:
+        class FakeResponse:
+            status_code = 200
+
+            def __init__(self, data: dict[str, object]) -> None:
+                self.data = data
+
+            def json(self):
+                return self.data
+
+        class FakeSession:
+            def __init__(self, response_data: dict[str, object]) -> None:
+                self.response_data = response_data
+
+            def post(self, url, json=None, headers=None, timeout=None, allow_redirects=None):
+                return FakeResponse(self.response_data)
+
+        base_solution = {
+            "status": "ok",
+            "solution": {
+                "url": "https://example.com/products",
+                "status": 200,
+                "response": "<html><title>Products</title><body>Other VPS <button>Order Now</button></body></html>",
+            },
+        }
+        settings = {
+            "enhanced_collector_enabled": True,
+            "enhanced_collector_api_url": "http://127.0.0.1:8191",
+            "enhanced_collector_use_for_catalog": True,
+        }
+        request_payload = app_module.CollectorRequest(
+            url="https://example.com/products",
+            strategy=app_module.COLLECTOR_EXTERNAL_SOLVER,
+            target_keyword="Example VPS",
+            context="catalog",
+        )
+
+        fixture_result = app_module.ExternalSolverCollector(
+            FakeSession({**base_solution, "source": "fixture"})
+        ).collect(request_payload, settings)
+        unrelated_result = app_module.ExternalSolverCollector(
+            FakeSession(base_solution)
+        ).collect(request_payload, settings)
+
+        self.assertFalse(fixture_result.ok)
+        self.assertEqual(fixture_result.error_kind, "external_solver_unverified_response")
+        self.assertIn("fixture/mock", fixture_result.detail)
+        self.assertFalse(unrelated_result.ok)
+        self.assertEqual(unrelated_result.error_kind, "external_solver_target_missing")
+
+    def test_external_solver_dmit_fixtures_parse_only_the_target_card(self) -> None:
+        target_pages = {
+            "https://www.dmit.io/cart.php?region=hong-kong&network=premium&generation=as3": """
+                <html><title>DMIT Cart</title><body><main>
+                  <article class="product-card">
+                    <h3>HKG.AS3.Pro.TINY</h3><p>$6.90 USD</p><a>Order Now</a>
+                  </article>
+                  <article class="product-card">
+                    <h3>HKG.AS3.Pro.MINI</h3><button disabled>Out of Stock</button>
+                  </article>
+                </main></body></html>
+            """,
+            "https://www.dmit.io/cart.php?region=los-angeles&network=premium&generation=as3": """
+                <html><title>DMIT Cart</title><body><main>
+                  <article class="product-card">
+                    <h3>LAX.AS3.Pro.STARTER</h3><a>Continue</a>
+                  </article>
+                  <article class="product-card selected">
+                    <h3>LAX.AS3.Pro.TINY</h3><p>$10.90 USD</p><button disabled>Out of Stock</button>
+                  </article>
+                  <footer><button>Continue</button></footer>
+                </main></body></html>
+            """,
+        }
+
+        class FakeResponse:
+            status_code = 200
+
+            def __init__(self, url: str, html_text: str) -> None:
+                self.url = url
+                self.html_text = html_text
+
+            def json(self):
+                return {
+                    "status": "ok",
+                    "solution": {"url": self.url, "status": 200, "response": self.html_text},
+                }
+
+        class FakeSession:
+            def post(self, url, json=None, headers=None, timeout=None, allow_redirects=None):
+                target_url = json["url"]
+                return FakeResponse(target_url, target_pages[target_url])
+
+        cases = (
+            (next(iter(target_pages)), "HKG.AS3.Pro.TINY", 1, "Order Now", "HKG.AS3.Pro.MINI"),
+            (list(target_pages)[1], "LAX.AS3.Pro.TINY", 0, "Out of Stock", "LAX.AS3.Pro.STARTER"),
+        )
+        collector = app_module.ExternalSolverCollector(FakeSession())
+        for target_url, target_keyword, expected_stock, expected_signal, other_product in cases:
+            with self.subTest(target_keyword=target_keyword):
+                collected = collector.collect(
+                    app_module.CollectorRequest(
+                        url=target_url,
+                        strategy=app_module.COLLECTOR_EXTERNAL_SOLVER,
+                        target_keyword=target_keyword,
+                        context="monitor",
+                    ),
+                    {
+                        "enhanced_collector_enabled": True,
+                        "enhanced_collector_api_url": "http://127.0.0.1:8191",
+                        "enhanced_collector_use_for_monitor": True,
+                    },
+                )
+                self.assertTrue(collected.ok)
+                self.assertIn("target=hit", collected.detail)
+                extracted = app_module.extract_stock_for_strategy(
+                    "generic_pricing_table",
+                    collected.html,
+                    target_keyword,
+                    {"fetch_strategy": "generic_pricing_table", "monitor_url": target_url},
+                    app_module.FetchResult(
+                        html=collected.html,
+                        final_url=collected.final_url,
+                        status_code=collected.status_code,
+                    ),
+                )
+                self.assertEqual(extracted.stock, expected_stock)
+                self.assertIn(target_keyword, extracted.fragment)
+                self.assertIn(expected_signal, extracted.fragment)
+                self.assertNotIn(other_product, extracted.fragment)
 
     def test_fetch_pipeline_uses_external_solver_collector_when_configured(self) -> None:
         class ExplodingFetcher:
